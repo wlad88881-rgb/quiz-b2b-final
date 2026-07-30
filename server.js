@@ -44,6 +44,53 @@ function getBaseUrl() {
   return `http://${getLocalIp()}:${PORT}`;
 }
 
+// ==================== КАЗАХСКИЕ ТЕСТЫ (ВШИТЫ В КОД) ====================
+const KZ_TESTS = [
+  {
+    "id": "1eaqcxg0hwsr",
+    "title": "Металтану",
+    "questions": [
+      {"id":"q0","text":"Құрамы бойынша болат дегеніміз не?","options":["Темірдің көміртегімен қоспасы (2,14%-ға дейін)","Қоспасыз таза темір","Мыс пен мырыш қоспасы","Алюминийдің кремниймен қоспасы"],"correct":0,"multi":false},
+      {"id":"q1","text":"Құрамы бойынша шойын дегеніміз не?","options":["Темірдің көміртегімен қоспасы (0,8%-дан аз)","Темірдің көміртегімен қоспасы (2,14%-дан көп)","Таза темір","Темірдің мыспен қоспасы"],"correct":1,"multi":false},
+      {"id":"q2","text":"Феррит — бұл:","options":["Көміртегінің α-темірдегі қатты ерітіндісі","Темірдің көміртегімен химиялық қосылысы","Көміртегінің γ-темірдегі ерітіндісі","Феррит пен цементит қоспасы"],"correct":0,"multi":false},
+      {"id":"q3","text":"Цементит — бұл:","options":["Көміртегінің темірдегі қатты ерітіндісі","Феррит пен перлиттің механикалық қоспасы","Fe3C химиялық қосылысы","Аустениттің бір түрі"],"correct":2,"multi":false},
+      {"id":"q4","text":"Перлит дегеніміз:","options":["Феррит пен цементиттің механикалық қоспасы","Таза көміртегі","Көміртегінің γ-темірдегі қатты ерітіндісі","Темірдің кремниймен химиялық қосылысы"],"correct":0,"multi":false},
+      {"id":"q5","text":"Аустенит — бұл:","options":["Көміртегінің γ-темірдегі қатты ерітіндісі","Феррит пен перлит қоспасы","Темірдің химиялық қосылысы","Көміртегінің α-темірдегі ерітіндісі"],"correct":0,"multi":false},
+      {"id":"q6","text":"Ледебурит көміртегі мөлшері шамамен қандай болғанда түзіледі?","options":["0,8%","2,14%","4,3%","6,67%"],"correct":2,"multi":false},
+      {"id":"q7","text":"Болаттағы қандай қоспа иілгіштікті төмендетеді және суыққа сынғыштық тудырады?","options":["Марганец","Кремний","Фосфор","Күкірт"],"correct":2,"multi":false},
+      {"id":"q8","text":"Қандай қоспа болаттың қызыл сынғыштығын тудырады?","options":["Күкірт","Фосфор","Марганец","Кремний"],"correct":0,"multi":false},
+      {"id":"q9","text":"Болаттағы марганец не үшін қолданылады?","options":["Тотықсыздандыру және күкіртті кетіру үшін","Сынғыштықты арттыру үшін","Қаттылықты төмендету үшін","Балқу температурасын төмендету үшін"],"correct":0,"multi":false},
+      {"id":"q10","text":"Көміртегі мөлшері 0,25%-дан аз болат қалай аталады?","options":["Жоғары көміртекті","Орта көміртекті","Төмен көміртекті","Легирленген"],"correct":2,"multi":false},
+      {"id":"q11","text":"Көміртегі мөлшері 0,6%-дан көп болат қалай аталады?","options":["Төмен көміртекті","Жоғары көміртекті","Орта көміртекті","Аспаптық төмен легирленген"],"correct":1,"multi":false},
+      {"id":"q12","text":"Легирленген болат — бұл құрамында бар болат:","options":["Тек көміртегі мен темір","Қасиеттерін өзгерту үшін арнайы енгізілген қоспалар","Тек күкірт пен фосфор қоспалары","Тек хром"],"correct":1,"multi":false},
+      {"id":"q13","text":"Болат маркасындағы «Х» әрпі нені білдіреді?","options":["Хром","Хлор","Бұрандалы қадам","Суыққа төзімділік"],"correct":0,"multi":false},
+      {"id":"q14","text":"Болат маркасындағы «Н» әрпі нені білдіреді?","options":["Натрий","Никель","Азот","Бетондау"],"correct":1,"multi":false},
+      {"id":"q15","text":"Болат маркасындағы «Г» әрпі нені білдіреді?","options":["Германий","Гальваника","Марганец","Графит"],"correct":2,"multi":false},
+      {"id":"q16","text":"Легирленген болат маркасындағы әріптен кейінгі сан нені көрсетеді?","options":["Балқыту нөмірі","Элементтің шамамен % мөлшері","МЕМСТ шығарылған жылы","Беріктік класы"],"correct":1,"multi":false},
+      {"id":"q17","text":"45 болат маркасы нені білдіреді?","options":["0,45% көміртегі","4,5% көміртегі","45% легирлеуші элементтер","45 топтама нөмірі"],"correct":0,"multi":false},
+      {"id":"q18","text":"Қола — бұл қорытпа:","options":["Мыстың қалайымен немесе мырыштан басқа элементтермен","Мыстың мырышпен","Темірдің көміртегімен","Алюминийдің магниймен"],"correct":0,"multi":false},
+      {"id":"q19","text":"Дюралюминий негізіндегі қорытпаларға жатады:","options":["Мыс","Темір","Алюминий","Титан"],"correct":2,"multi":false}
+    ],
+    "createdAt":1785228090312
+  },
+  {
+    "id": "nxa9levbivx0",
+    "title": "Механизациялау",
+    "questions": [
+      {"id":"q0","text":"Көтергіштің шағын механизация құралы ретіндегі негізгі параметрі қандай?","options":["Жүк көтерімділігі","Қозғалтқыш қуаты","Жылдамдықтар диапазоны","Салмағы","Жүкті көтеру жылдамдығы"],"correct":0,"multi":false},
+      {"id":"q1","text":"Жөндеу жұмыстарын механизациялау дегеніміз не?","options":["Барлық өндірістік процестерді толық автоматтандыру","Тек қол құралын пайдалану","Жөндеуді басқару үшін компьютерлік бағдарламаларды қолдану","Қол еңбегін механизмдер мен машиналармен ауыстыру немесе толықтыру"],"correct":3,"multi":false},
+      {"id":"q2","text":"Жөндеуде экзоскелеттерді қолдану қандай артықшылықтар береді? (бірнеше жауап)","options":["Жарақаттануды азайту","Өнімділіктің өсуі","Операторлардың төзімділігін арттыру","Шаршатпай тасымалданатын жүк салмағын арттыру"],"correct":[0,1,2,3],"multi":true},
+      {"id":"q3","text":"Механикаландырылған құралдың жылжымалы түйіндерін терең майлау қаншалықты жиі жүргізілуі керек?","options":["Күн сайын","Апта сайын","4 айда бір реттен сирек емес","Жылына бір рет","2 жылда бір рет"],"correct":2,"multi":false},
+      {"id":"q4","text":"Біліктегі 0,08 мм керіліспен отырған мойынтіректің ішкі сақинасын бөлшектеуге арналған гидравликалық тартқышты таңдағанда, механик 15 тс тарту күшіне бағдарланады. Алайда 12 тс күш салғанда сақина жылжымайды. Қандай операция бөлшектерді зақымдамай қажетті күшті төмендете алады?","options":["Сақинаны индуктормен 120°C-қа дейін қыздыру","Гидравликалық жүйедегі қысымды максималдыға дейін арттыру","Білікті сұйық азотпен салқындату","Сақина мен білікті бір уақытта қыздыру"],"correct":0,"multi":false},
+      {"id":"q5","text":"Жөндеу шеберханасында салмағы 1,2 т болатын түйінді көтеру үшін бір рельсті жолдағы электр тельфері пайдаланылады. Көтеру кезінде түйін 30 см амплитудамен тербеле бастайды. Оператор көтеруді тоқтатып, жүкті тұрақтандыруды шешеді. Тербелістерді сөндірудің ең қауіпсіз және тиімді әрекеті қандай?","options":["Тельферді қарама-қарсы бағытта күрт қосу","Резонансты бұзу үшін көтеру жылдамдығын арттыру","Көтеруді тоқтатып, жүкті тербелістер толық басылғанша салмақта бекіту","Жүктің екі жағынан төменгі нүктеде бекітілген тартпаларды (арқандарды) пайдалану"],"correct":3,"multi":false},
+      {"id":"q6","text":"Мойынтіректерді суық отырғызуға арналған гидравликалық пресс 50 тс күш жасайды. Диаметрі 120 мм, керілісі 0,06 мм мойынтіректі басқанда, жүйедегі қысым 28 МПа-ға жетті, бірақ мойынтірек тірекке 5 мм жетпей тоқтап қалды. Отырғызуды аяқтау үшін қандай шешім дұрыс болады?","options":["Мойынтіректі шығарып алып, отырғызу орнын сызаттар мен қылшықтарға тексеру, қажет болғанда тазалап, басуды қайталау","Мойынтіректі сұйық азотта салқындатып, шығармай қайталау","Мойынтірек орнында тұрғанда корпусты оттықпен 200°C-қа дейін қыздыру","Қысымды 35 МПа-ға дейін жеткізу"],"correct":0,"multi":false},
+      {"id":"q7","text":"Жүк көтерімділігі 100 т гидравликалық домкратты бөлшектегенде, жүйедегі майдың қара түсті және өзіне тән күйік иісі бар екені анықталды. Бұл не туралы куәландырады?","options":["Майдың табиғи ескіруі","Майдың металл тозу өнімдерімен ластануы","Майдың рұқсат етілген температурадан жоғары қызуы (деструкция)","Басқа маркалы маймен араласуы"],"correct":2,"multi":false},
+      {"id":"q8","text":"Екі строптың көмегімен салмағы 3 тонна болатын станинаны көтергенде, строптар арасындағы бұрыш 120°-ты құрайды. Тік көтерумен салыстырғанда әрбір строптағы күш қалай өзгереді?","options":["1,2 есе артады","1,5 есе азаяды","1,7 есе артады","2 есе артады"],"correct":3,"multi":false}
+    ],
+    "createdAt":1785135535667
+  }
+];
+
 // ==================== B2B: АВТОРИЗАЦИЯ И ТАРИФЫ ====================
 
 function hashPassword(password) {
@@ -181,6 +228,66 @@ app.delete('/api/tests/:id', checkAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ==================== ИМПОРТ И ШАБЛОНЫ ====================
+
+app.get('/api/import-template', checkAuth, (req, res) => {
+  const headers = ['Вопрос', 'Вариант 1', 'Вариант 2', 'Вариант 3', 'Вариант 4', 'Вариант 5', 'Правильные (номера через запятую)'];
+  const example1 = ['Какая муфта применяется во избежание поломок деталей механизма из-за перегрузок?', 'Компенсирующая муфта', 'Жёсткая муфта', 'Предохранительная муфта', 'Обгонная муфта', '', '3'];
+  const example2 = ['Выберите чётные числа', '1', '2', '3', '4', '', '2,4'];
+  const ws = XLSX.utils.aoa_to_sheet([headers, example1, example2]);
+  ws['!cols'] = [{ wch: 45 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 30 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Вопросы');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', 'attachment; filename="shablon_voprosov.xlsx"');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
+});
+
+app.post('/api/import-questions', checkAuth, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
+  let rows;
+  try {
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  } catch (e) {
+    return res.status(400).json({ error: 'Не удалось прочитать файл. Убедитесь, что это .xlsx или .xls' });
+  }
+  if (rows.length < 2) {
+    return res.status(400).json({ error: 'В файле нет вопросов. Заполните строки под заголовком.' });
+  }
+  const questions = [];
+  const skipped = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.every(c => String(c).trim() === '')) continue;
+    const text = String(row[0] || '').trim();
+    const options = [];
+    for (let c = 1; c <= 5; c++) {
+      const val = String(row[c] || '').trim();
+      if (val) options.push(val);
+    }
+    const correctRaw = String(row[6] || '').trim();
+    if (!text || options.length < 2 || !correctRaw) {
+      skipped.push({ row: i + 1, reason: 'нет текста вопроса, вариантов (мин. 2) или правильного ответа' });
+      continue;
+    }
+    const correctNums = correctRaw.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+    const correctIdxs = correctNums.map(n => n - 1).filter(idx => idx >= 0 && idx < options.length);
+    if (correctIdxs.length === 0) {
+      skipped.push({ row: i + 1, reason: 'номер правильного ответа не соответствует вариантам' });
+      continue;
+    }
+    const multi = correctIdxs.length > 1;
+    questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi });
+  }
+  if (questions.length === 0) {
+    return res.status(400).json({ error: 'Не удалось распознать ни одного вопроса. Проверьте формат файла (скачайте шаблон).', skipped });
+  }
+  res.json({ questions, skipped });
+});
+
 // ==================== СТАТИСТИКА ====================
 
 app.get('/api/tests/:id/stats', checkAuth, (req, res) => {
@@ -226,7 +333,7 @@ app.get('/api/tests/:id/stats', checkAuth, (req, res) => {
   res.json({ test: { id: test.id, title: test.title }, sessionStats, questionStats });
 });
 
-// ==================== QR-КОД (ОТДЕЛЬНЫЙ МАРШРУТ ДЛЯ КАРТИНКИ) ====================
+// ==================== QR-КОД ====================
 app.get('/api/sessions/:code/qr', async (req, res) => {
   const data = db.load();
   const session = data.sessions[req.params.code];
@@ -240,7 +347,7 @@ app.get('/api/sessions/:code/qr', async (req, res) => {
 // ==================== СЕССИИ ====================
 
 app.post('/api/sessions', checkAuth, async (req, res) => {
-  const { testId } = req.body;
+  const { testId, timeLimit } = req.body;
   const data = db.load();
   const test = data.tests[testId];
   if (!test || test.companyId !== req.companyId) return res.status(404).json({ error: 'Тест не найден' });
@@ -251,7 +358,7 @@ app.post('/api/sessions', checkAuth, async (req, res) => {
     companyId: req.companyId,
     testId,
     testTitle: test.title,
-    timeLimit: req.body.timeLimit || null,
+    timeLimit: timeLimit || null,
     startedAt: Date.now(),
     ended: false,
     participants: {}
@@ -259,7 +366,7 @@ app.post('/api/sessions', checkAuth, async (req, res) => {
   await db.update((d) => { d.sessions[code] = session; });
   const url = `${getBaseUrl()}/s/${code}`;
   const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
-  res.json({ session, url, qrDataUrl });
+  res.json({ session, url, qrDataUrl, timeLimit: session.timeLimit });
 });
 
 app.post('/api/sessions/:code/join', async (req, res) => {
@@ -369,66 +476,6 @@ app.get('/api/sessions/:code/export', checkAuth, (req, res) => {
   res.setHeader('Content-Disposition', `attachment; filename="results_${req.params.code}.xlsx"`);
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.send(buf);
-});
-
-// ==================== ИМПОРТ И ШАБЛОНЫ ====================
-
-app.get('/api/import-template', checkAuth, (req, res) => {
-  const headers = ['Вопрос', 'Вариант 1', 'Вариант 2', 'Вариант 3', 'Вариант 4', 'Вариант 5', 'Правильные (номера через запятую)'];
-  const example1 = ['Какая муфта применяется во избежание поломок деталей механизма из-за перегрузок?', 'Компенсирующая муфта', 'Жёсткая муфта', 'Предохранительная муфта', 'Обгонная муфта', '', '3'];
-  const example2 = ['Выберите чётные числа', '1', '2', '3', '4', '', '2,4'];
-  const ws = XLSX.utils.aoa_to_sheet([headers, example1, example2]);
-  ws['!cols'] = [{ wch: 45 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 30 }];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Вопросы');
-  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-  res.setHeader('Content-Disposition', 'attachment; filename="shablon_voprosov.xlsx"');
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.send(buf);
-});
-
-app.post('/api/import-questions', checkAuth, upload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
-  let rows;
-  try {
-    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-  } catch (e) {
-    return res.status(400).json({ error: 'Не удалось прочитать файл. Убедитесь, что это .xlsx или .xls' });
-  }
-  if (rows.length < 2) {
-    return res.status(400).json({ error: 'В файле нет вопросов. Заполните строки под заголовком.' });
-  }
-  const questions = [];
-  const skipped = [];
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (!row || row.every(c => String(c).trim() === '')) continue;
-    const text = String(row[0] || '').trim();
-    const options = [];
-    for (let c = 1; c <= 5; c++) {
-      const val = String(row[c] || '').trim();
-      if (val) options.push(val);
-    }
-    const correctRaw = String(row[6] || '').trim();
-    if (!text || options.length < 2 || !correctRaw) {
-      skipped.push({ row: i + 1, reason: 'нет текста вопроса, вариантов (мин. 2) или правильного ответа' });
-      continue;
-    }
-    const correctNums = correctRaw.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
-    const correctIdxs = correctNums.map(n => n - 1).filter(idx => idx >= 0 && idx < options.length);
-    if (correctIdxs.length === 0) {
-      skipped.push({ row: i + 1, reason: 'номер правильного ответа не соответствует вариантам' });
-      continue;
-    }
-    const multi = correctIdxs.length > 1;
-    questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi });
-  }
-  if (questions.length === 0) {
-    return res.status(400).json({ error: 'Не удалось распознать ни одного вопроса. Проверьте формат файла (скачайте шаблон).', skipped });
-  }
-  res.json({ questions, skipped });
 });
 
 // ==================== ЛАБОРАТОРИИ ====================
