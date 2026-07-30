@@ -6,8 +6,8 @@
   <title>B2B Тестирование</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, sans-serif; }
-    body { background: #f5f7fa; display: flex; justify-content: center; padding: 20px; }
-    .app-wrapper { max-width: 900px; width: 100%; background: #ffffff; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); padding: 30px; }
+    body { background: #f5f7fa; display: flex; justify-content: center; padding: 20px; min-height: 100vh; }
+    .app-wrapper { max-width: 900px; width: 100%; background: #ffffff; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); padding: 30px; height: fit-content; }
     
     .top-bar { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 16px; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
     .user-info { display: flex; align-items: center; gap: 12px; }
@@ -36,13 +36,16 @@
     
     .code-big { font-size: 32px; font-weight: 800; letter-spacing: 4px; color: #F07C00; margin: 8px 0; }
     #qr-img { width: 120px; height: 120px; border: 1px solid #eee; border-radius: 8px; }
+    #session-link { font-size: 12px; word-break: break-all; color: #F07C00; text-decoration: underline; }
     .error { color: #d64545; margin-top: 6px; font-size: 14px; }
     
     #results-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
     #results-table th, #results-table td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
     #results-table th { font-weight: 600; background: #f8f9fa; }
 
-    input[type="text"], textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 10px; }
+    input[type="text"], input[type="email"], input[type="password"], textarea { 
+      width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 10px; font-size: 15px; 
+    }
     .question-block { background: #fafbfc; border: 1px solid #eee; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
     .option-row { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
     .option-row input[type="text"] { flex: 1; margin-bottom: 0; }
@@ -96,6 +99,9 @@
         <div id="tests-list"></div>
       </div>
       <div id="tab-labs" class="hidden">
+        <div class="row" style="margin-bottom:16px;">
+          <button class="btn" onclick="showLabEditor()">+ Новый тренажёр</button>
+        </div>
         <h2 style="font-size:18px; margin-bottom:12px;">Мои тренажёры</h2>
         <div id="labs-list"></div>
       </div>
@@ -134,7 +140,7 @@
           <div style="text-align:center;">
             <img id="qr-img" src="" alt="QR">
             <div class="muted" style="font-size:11px;">Ссылка</div>
-            <div id="session-link" style="font-size:12px; word-break:break-all; color:#F07C00;"></div>
+            <a id="session-link" href="#" target="_blank"></a>
           </div>
           <button class="btn outline small" onclick="exportResults()">📥 Excel</button>
         </div>
@@ -388,8 +394,9 @@
     document.getElementById('session-title').textContent = session.testTitle;
     document.getElementById('session-code').textContent = session.code;
     document.getElementById('qr-img').src = qrDataUrl;
-    document.getElementById('session-link').textContent = url;
-    document.getElementById('session-link').href = url;
+    const linkEl = document.getElementById('session-link');
+    linkEl.textContent = url;
+    linkEl.href = url;
     document.getElementById('no-participants').classList.remove('hidden');
     document.getElementById('results-table').classList.add('hidden');
   }
