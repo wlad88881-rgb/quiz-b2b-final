@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>B2B Тестирование</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: #f5f7fa; margin: 0; padding: 20px; }
+    .container { max-width: 1100px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 2px 12px rgba(0,0,0,0.05); }
+    .card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; margin-bottom: 12px; background: #fafafa; }
+    .brand-header { background: #2C3E50; padding: 14px 20px; display: flex; align-items: center; gap: 12px; border-bottom: 3px solid #F07C00; }
+    .brand-mark { width: 38px; height: 38px; border-radius: 8px; background: #F07C00; color: white; font-weight: 800; font-size: 15px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .brand-text { line-height: 1.25; }
+    .brand-title { color: white; font-weight: 700; font-size: 15px; }
+    .brand-subtitle { color: #42BFCB; font-size: 12px; font-weight: 600; letter-spacing: 0.3px; }
+    .auth-screen { max-width: 500px; margin: 40px auto; }
+    .auth-screen .card { padding: 30px; }
+    .auth-switch { text-align: center; margin-top: 16px; font-size: 14px; }
+    .auth-switch a { color: #F07C00; cursor: pointer; font-weight: 600; text-decoration: underline; }
+    .auth-screen input { width: 100%; padding: 12px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 15px; }
+    .auth-screen .error { color: #d64545; margin-top: 8px; display: none; text-align: center; }
+    .auth-screen h2 { text-align: center; margin-bottom: 20px; }
+    .plan-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 700; background: #e6f4ea; color: #2e9e4f; }
+    .plan-badge.pro { background: #fdeaea; color: #d64545; }
+    .btn { display: inline-block; background: #F07C00; color: white; border: none; padding: 10px 18px; border-radius: 8px; font-size: 15px; cursor: pointer; }
+    .btn:hover { opacity: 0.9; }
+    .btn.outline { background: white; color: #2C3E50; border: 1px solid #e0e0e0; }
+    .btn.danger { background: #d64545; }
+    .btn.small { padding: 6px 12px; font-size: 13px; }
+    .muted { color: #6b7c8f; font-size: 14px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .row.between { justify-content: space-between; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 2px solid #e0e0e0; padding-bottom: 12px; }
+    .tab-btn { background: none; border: none; padding: 10px 16px; font-size: 16px; cursor: pointer; border-radius: 6px; color: #555; }
+    .tab-btn.active { background: #2C3E50; color: #fff; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .badge.live { background: #e6f4ea; color: #2e9e4f; }
+    .badge.ended { background: #fdeaea; color: #d64545; }
+    .code-big { font-size: 40px; font-weight: 800; letter-spacing: 6px; color: #F07C00; margin: 10px 0; }
+    .error { color: #d64545; font-size: 14px; margin-top: 8px; }
+    #results-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    #results-table th, #results-table td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
+    #results-table th { font-weight: 600; background: #f8f9fa; }
+    #stats-chart { width: 100%; height: 160px; margin-top: 20px; }
+    #stats-chart-empty { text-align: center; padding: 20px; color: #888; }
+    #stats-sessions-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    #stats-sessions-table th, #stats-sessions-table td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
+    #stats-sessions-table th { font-weight: 600; background: #f8f9fa; }
+    .question-block { border: 1px solid #ddd; padding: 16px; margin-bottom: 12px; border-radius: 8px; background: #fff; }
+    .option-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+  </style>
+</head>
+<body>
+
+<header class="brand-header">
+  <div class="brand-mark">B2B</div>
+  <div class="brand-text">
+    <div class="brand-title">Платформа для тестирования</div>
+    <div class="brand-subtitle">Управление тестированием для компаний</div>
+  </div>
+</header>
+
+<div class="container">
+  
+  <!-- Экран входа / Регистрации -->
+  <div id="auth-screen" class="auth-screen">
+    <div class="card">
+      <h2 id="auth-title">Вход в систему</h2>
+      <div id="auth-error" class="error">Ошибка</div>
+      
+      <input type="email" id="auth-email" placeholder="Email">
+      <input type="password" id="auth-password" placeholder="Пароль">
+      <input type="text" id="auth-name" placeholder="Название компании" style="display:none;">
+      
+      <button class="btn" onclick="submitAuth()" id="auth-btn" style="width:100%;">Войти</button>
+      
+      <div class="auth-switch" id="auth-switch">
+        Нет аккаунта? <a onclick="toggleAuthMode()">Зарегистрироваться</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Основной экран -->
+  <div id="screen-main" style="display:none;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+      <div>
+        <span style="font-weight:700; font-size:18px;" id="company-display">Компания</span>
+        <span class="plan-badge" id="plan-badge">Free</span>
+      </div>
+      <button class="btn outline small" onclick="logout()">Выход</button>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" id="tab-btn-tests" onclick="switchTab('tests')">📚 Тесты</button>
+      <button class="tab-btn" id="tab-btn-labs" onclick="switchTab('labs')">🧪 Тренажёры</button>
+      <button class="tab-btn" id="tab-btn-stats" onclick="switchTab('stats')">📊 Статистика</button>
+    </div>
+
+    <div id="screen-list">
+      <div id="tab-tests" style="display:block">
+        <div class="row" style="margin-bottom:16px;">
+          <button class="btn" onclick="showEditor()">+ Новый тест</button>
+        </div>
+        <h2>Мои тесты</h2>
+        <div id="tests-list"></div>
+      </div>
+      <div id="tab-labs" style="display:none">
+        <div class="row" style="margin-bottom:16px;">
+          <button class="btn" onclick="showLabEditor()">+ Новый тренажёр</button>
+        </div>
+        <h2>Мои тренажёры</h2>
+        <div id="labs-list"></div>
+      </div>
+      <div id="tab-stats" style="display:none">
+        <h2>Статистика</h2>
+        <div id="stats-tests-list"></div>
+      </div>
+    </div>
+
+    <!-- Редактор теста -->
+    <div id="screen-editor" style="display:none;">
+      <div class="row between" style="margin-bottom:16px;">
+        <h2 id="editor-title" style="margin:0;">Новый тест</h2>
+        <button class="btn outline small" onclick="showList()">Отмена</button>
+      </div>
+      <input type="text" id="test-title" placeholder="Название теста">
+      <div id="questions-container"></div>
+      <button class="btn" onclick="saveTest()" style="margin-top:12px;">Сохранить тест</button>
+      <div id="save-error" class="error"></div>
+    </div>
+
+    <!-- Редактор тренажёра -->
+    <div id="screen-lab-editor" style="display:none;">
+      <div class="row between" style="margin-bottom:16px;">
+        <h2 id="lab-editor-title" style="margin:0;">Новый тренажёр</h2>
+        <button class="btn outline small" onclick="showList(); switchTab('labs')">Отмена</button>
+      </div>
+      <input type="text" id="lab-title-input" placeholder="Название тренажёра">
+      <textarea id="lab-intro-input" rows="3" placeholder="Вводный текст для ученика"></textarea>
+      <div id="faults-container"></div>
+      <button class="btn" onclick="saveLab()" style="margin-top:12px;">Сохранить тренажёр</button>
+      <div id="lab-save-error" class="error"></div>
+    </div>
+
+    <!-- Экран сессии -->
+    <div id="screen-session" style="display:none;">
+      <div class="row between" style="margin-bottom:16px;">
+        <div class="row">
+          <button class="btn outline small" onclick="showList()">← Назад к тестам</button>
+          <h2 id="session-title" style="margin:0; margin-left:16px;">Сессия</h2>
+        </div>
+        <div class="row">
+          <span id="session-status" class="badge live">Идёт тестирование</span>
+          <button class="btn danger" id="end-session-btn" onclick="endSession()">Завершить сессию</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row between">
+          <div>
+            <div class="muted">Код для учеников</div>
+            <div class="code-big" id="session-code"></div>
+          </div>
+          <div class="qr-box">
+            <img id="qr-img" style="width:140px;height:140px; border-radius:12px;">
+            <div class="muted" style="font-size:11px;">Ссылка</div>
+            <div id="session-link" style="font-size:12px;word-break:break-all;max-width:200px;"></div>
+          </div>
+          <div>
+            <button class="btn outline small" onclick="exportResults()">📥 Экспорт Excel</button>
+          </div>
+        </div>
+      </div>
+      <div id="no-participants" class="muted" style="text-align:center;padding:40px;">Пока никто не присоединился.</div>
+      <table id="results-table" style="display:none; margin-top:20px;">
+        <thead><tr><th>Участник</th><th>Статус</th><th>Результат</th></tr></thead>
+        <tbody id="results-body"></tbody>
+      </table>
+    </div>
+
+    <!-- Экран статистики -->
+    <div id="screen-stats" style="display:none;">
+      <div class="row between" style="margin-bottom:16px;">
+        <h2 id="stats-test-title" style="margin:0;">Статистика</h2>
+        <button class="btn outline small" onclick="showList(); switchTab('stats')">← Назад</button>
+      </div>
+      <h3>Сессии</h3>
+      <div id="stats-no-sessions" class="muted" style="display:none;padding:20px;">По этому тесту ещё нет завершённых сессий.</div>
+      <table id="stats-sessions-table">
+        <thead><tr><th>Дата</th><th>Участников</th><th>Завершили</th><th>Средний балл</th></tr></thead>
+        <tbody id="stats-sessions-body"></tbody>
+      </table>
+      <h3>График успеваемости</h3>
+      <canvas id="stats-chart" style="display:none;"></canvas>
+      <div id="stats-chart-empty" style="display:none;">Нужно минимум 2 завершённые сессии для графика.</div>
+      <h3>Вопросы</h3>
+      <div id="stats-questions-list"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  let isRegisterMode = false;
+  let currentCompanyId = null;
+  let currentPlan = 'free';
+  let socket = null;
+
+  // --- АВТОРИЗАЦИЯ ---
+  function toggleAuthMode() {
+    isRegisterMode = !isRegisterMode;
+    document.getElementById('auth-title').textContent = isRegisterMode ? 'Регистрация компании' : 'Вход в систему';
+    document.getElementById('auth-btn').textContent = isRegisterMode ? 'Зарегистрироваться' : 'Войти';
+    document.getElementById('auth-switch').innerHTML = isRegisterMode 
+      ? 'Есть аккаунт? <a onclick="toggleAuthMode()">Войти</a>'
+      : 'Нет аккаунта? <a onclick="toggleAuthMode()">Зарегистрироваться</a>';
+    document.getElementById('auth-name').style.display = isRegisterMode ? 'block' : 'none';
+    document.getElementById('auth-error').style.display = 'none';
+  }
+
+  async function submitAuth() {
+    const email = document.getElementById('auth-email').value.trim();
+    const password = document.getElementById('auth-password').value.trim();
+    const name = document.getElementById('auth-name').value.trim();
+    const errorEl = document.getElementById('auth-error');
+    errorEl.style.display = 'none';
+
+    if (!email || !password) {
+      errorEl.textContent = 'Заполните email и пароль';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    const endpoint = isRegisterMode ? '/api/register' : '/api/login';
+    const body = isRegisterMode ? { email, password, name } : { email, password };
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      errorEl.textContent = data.error || 'Ошибка';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    currentCompanyId = data.companyId;
+    localStorage.setItem('b2bCompanyId', data.companyId);
+    localStorage.setItem('b2bEmail', data.email);
+    localStorage.setItem('b2bPlan', data.plan);
+
+    if (isRegisterMode) {
+      alert('Компания зарегистрирована! Теперь войдите в систему.');
+      toggleAuthMode();
+      return;
+    }
+    enterApp();
+  }
+
+  function enterApp() {
+    document.getElementById('auth-screen').style.display = 'none';
+    document.getElementById('screen-main').style.display = 'block';
+    document.getElementById('company-display').textContent = localStorage.getItem('b2bEmail') || 'Компания';
+    
+    currentPlan = localStorage.getItem('b2bPlan') || 'free';
+    const badge = document.getElementById('plan-badge');
+    badge.textContent = currentPlan === 'pro' ? 'Pro' : 'Free';
+    badge.className = 'plan-badge' + (currentPlan === 'pro' ? ' pro' : '');
+    
+    loadTestsList();
+  }
+
+  function logout() {
+    localStorage.removeItem('b2bCompanyId');
+    localStorage.removeItem('b2bEmail');
+    localStorage.removeItem('b2bPlan');
+    location.reload();
+  }
+
+  // Автоматический вход при загрузке
+  document.addEventListener('DOMContentLoaded', async () => {
+    const savedId = localStorage.getItem('b2bCompanyId');
+    if (savedId) {
+      const res = await fetch('/api/me', {
+        headers: { 'x-company-id': savedId }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        localStorage.setItem('b2bPlan', data.plan);
+        enterApp();
+        return;
+      }
+    }
+    document.getElementById('auth-screen').style.display = 'block';
+  });
+
+  // --- СПИСОК ТЕСТОВ ---
+  function showList() {
+    document.getElementById('screen-list').style.display = 'block';
+    document.getElementById('screen-editor').style.display = 'none';
+    document.getElementById('screen-lab-editor').style.display = 'none';
+    document.getElementById('screen-session').style.display = 'none';
+    document.getElementById('screen-stats').style.display = 'none';
+    loadTestsList();
+  }
+
+  async function loadTestsList() {
+    const companyId = localStorage.getItem('b2bCompanyId');
+    const res = await fetch('/api/tests', {
+      headers: { 'x-company-id': companyId }
+    });
+    if (!res.ok) return;
+    const tests = await res.json();
+    const container = document.getElementById('tests-list');
+    if (tests.length === 0) {
+      container.innerHTML = '<p class="muted">Тестов пока нет — создайте первый.</p>';
+    } else {
+      container.innerHTML = tests.map(t => `
+        <div class="card row between">
+          <div>
+            <strong>${escapeHtml(t.title)}</strong>
+            <div class="muted">${t.questions.length} вопрос(ов)</div>
+          </div>
+          <div class="row">
+            <button class="btn small" onclick="startSession('${t.id}')">Начать сессию</button>
+            <button class="btn outline small" onclick="showTestStats('${t.id}')">История</button>
+            <button class="btn outline small" onclick="editTest('${t.id}')">Изменить</button>
+            <button class="btn danger small" onclick="deleteTest('${t.id}')">Удалить</button>
+          </div>
+        </div>
+      `).join('');
+    }
+  }
+
+  // --- РЕДАКТОР ТЕСТА ---
+  function showEditor() {
+    document.getElementById('screen-list').style.display = 'none';
+    document.getElementById('screen-editor').style.display = 'block';
+    document.getElementById('editor-title').textContent = 'Новый тест';
+    document.getElementById('test-title').value = '';
+    document.getElementById('questions-container').innerHTML = '';
+    addQuestion();
+  }
+
+  function addQuestion() {
+    const wrap = document.createElement('div');
+    wrap.className = 'question-block';
+    wrap.innerHTML = `
+      <label>Вопрос</label>
+      <input type="text" class="q-text" placeholder="Текст вопроса">
+      <label>Варианты ответа</label>
+      <div class="options-container"></div>
+      <button class="btn outline small" onclick="addOption(this)">+ Вариант</button>
+    `;
+    document.getElementById('questions-container').appendChild(wrap);
+    addOption(wrap.querySelector('.options-container'));
+  }
+
+  function addOption(container) {
+    const div = document.createElement('div');
+    div.className = 'option-row';
+    div.innerHTML = `
+      <input type="text" class="opt-text" placeholder="Вариант">
+      <button class="btn outline small" onclick="this.parentElement.remove()">✕</button>
+    `;
+    container.appendChild(div);
+  }
+
+  async function saveTest() {
+    const title = document.getElementById('test-title').value.trim();
+    const companyId = localStorage.getItem('b2bCompanyId');
+    const blocks = document.querySelectorAll('.question-block');
+    const questions = [];
+    for (const block of blocks) {
+      const text = block.querySelector('.q-text').value.trim();
+      const options = [];
+      block.querySelectorAll('.opt-text').forEach(inp => {
+        const val = inp.value.trim();
+        if (val) options.push(val);
+      });
+      if (!text || options.length < 2) continue;
+      questions.push({ text, options, correct: 0, multi: false });
+    }
+    if (!title || questions.length === 0) return;
+
+    const res = await fetch('/api/tests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-company-id': companyId },
+      body: JSON.stringify({ title, questions })
+    });
+    if (res.ok) showList();
+  }
+
+  // --- СЕССИЯ ---
+  async function startSession(testId) {
+    const companyId = localStorage.getItem('b2bCompanyId');
+    const res = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-company-id': companyId },
+      body: JSON.stringify({ testId })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || 'Ошибка');
+      return;
+    }
+    openSession(data.session);
+  }
+
+  function openSession(session) {
+    document.getElementById('screen-list').style.display = 'none';
+    document.getElementById('screen-session').style.display = 'block';
+    document.getElementById('session-title').textContent = session.testTitle;
+    document.getElementById('session-code').textContent = session.code;
+    document.getElementById('session-status').className = 'badge live';
+    document.getElementById('session-status').textContent = 'Идёт тестирование';
+  }
+
+  // УТИЛИТЫ
+  function escapeHtml(s) {
+    return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // Заглушки для остальных функций
+  function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.id === 'tab-btn-' + tab));
+    ['tests', 'labs', 'stats'].forEach(t => {
+      document.getElementById('tab-' + t).style.display = t === tab ? 'block' : 'none';
+    });
+  }
+  function showTestStats() {}
+  function deleteTest() {}
+  function editTest() {}
+  function exportResults() {}
+  function endSession() {}
+  function showLabEditor() {}
+  function saveLab() {}
+</script>
+</body>
+</html>
