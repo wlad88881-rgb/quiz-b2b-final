@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Прохождение теста</title>
+<style>
+  :root {
+    --navy: #2C3E50;
+    --orange: #F07C00;
+    --gray: #F4F4F4;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  html, body { height: 100%; }
+  body {
+    background: var(--gray);
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    padding: 16px;
+  }
+  .wrap {
+    max-width: 560px;
+    width: 100%;
+    background: #fff;
+    border-radius: 18px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    padding: 24px;
+    margin-top: 20px;
+  }
+  .hidden { display: none !important; }
+  h1 { font-size: 20px; color: var(--navy); margin-bottom: 6px; }
+  .sub { color: #888; font-size: 14px; margin-bottom: 18px; }
+  .muted { color: #888; font-size: 13px; }
+
+  .lang-switch { display: flex; gap: 6px; justify-content: flex-end; margin-bottom: 14px; }
+  .lang-btn {
+    border: 1px solid #ddd; background: #fff; color: #555; padding: 5px 12px;
+    border-radius: 20px; font-size: 13px; cursor: pointer; font-weight: 600;
+  }
+  .lang-btn.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+  input[type="text"] {
+    width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 10px;
+    font-size: 16px; margin-bottom: 12px;
+  }
+  .btn {
+    display: inline-block; background: var(--orange); color: #fff; border: none;
+    padding: 12px 20px; border-radius: 10px; font-size: 15px; font-weight: 600;
+    cursor: pointer; width: 100%;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn.outline { background: transparent; border: 1px solid #ddd; color: var(--navy); }
+  .btn-row { display: flex; gap: 10px; margin-top: 14px; }
+  .btn-row .btn { width: auto; flex: 1; }
+
+  .error-box { background: #fdecea; color: #d64545; padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+  .info-box { background: #eef4fb; color: #2C3E50; padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+
+  .meta-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .pill { background: var(--gray); color: var(--navy); font-size: 13px; padding: 6px 12px; border-radius: 20px; font-weight: 600; }
+
+  .progress-bar { height: 6px; background: #eee; border-radius: 3px; overflow: hidden; margin-bottom: 18px; }
+  .progress-fill { height: 100%; background: var(--orange); width: 0%; transition: width 0.25s; }
+
+  .timer {
+    position: sticky; top: 0; text-align: center; font-weight: 800; font-size: 22px;
+    color: var(--navy); background: #fff; padding: 6px 0 12px; z-index: 5;
+  }
+  .timer.warn { color: #d64545; }
+
+  .q-index { font-size: 13px; color: var(--orange); font-weight: 700; margin-bottom: 6px; letter-spacing: 0.5px; }
+  .q-text { font-size: 18px; color: var(--navy); font-weight: 600; margin-bottom: 16px; line-height: 1.4; }
+  .q-hint { font-size: 12px; color: #999; margin-bottom: 10px; }
+
+  .option {
+    display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px;
+    border: 1.5px solid #e5e5e5; border-radius: 10px; margin-bottom: 10px; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .option:hover { border-color: #ccc; }
+  .option.selected { border-color: var(--orange); background: #fff6ec; }
+  .option input { margin-top: 3px; flex-shrink: 0; width: 18px; height: 18px; cursor: pointer; }
+  .option .opt-text { font-size: 15px; color: #333; line-height: 1.4; }
+
+  .dots { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0; }
+  .dot {
+    width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; cursor: pointer; border: 1.5px solid #e5e5e5; color: #999; background: #fff;
+  }
+  .dot.answered { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .dot.current { border-color: var(--orange); box-shadow: 0 0 0 2px rgba(240,124,0,0.25); }
+
+  .score-circle {
+    width: 130px; height: 130px; border-radius: 50%; border: 8px solid var(--orange);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    margin: 10px auto 20px;
+  }
+  .score-circle .pct { font-size: 30px; font-weight: 800; color: var(--navy); }
+  .score-circle .frac { font-size: 13px; color: #888; }
+
+  .review-item { border: 1px solid #eee; border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+  .review-item .rq { font-size: 14px; font-weight: 600; color: var(--navy); margin-bottom: 8px; }
+  .review-item .ropt { font-size: 13.5px; padding: 6px 10px; border-radius: 6px; margin-bottom: 4px; }
+  .review-item .ropt.correct { background: #e6f4ea; color: #2e9e4f; }
+  .review-item .ropt.wrong { background: #fdecea; color: #d64545; }
+  .review-item .badge-status { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; float: right; }
+  .review-item .badge-status.ok { background: #e6f4ea; color: #2e9e4f; }
+  .review-item .badge-status.no { background: #fdecea; color: #d64545; }
+
+  .center { text-align: center; }
+  .spinner {
+    width: 34px; height: 34px; border: 3px solid #eee; border-top-color: var(--orange);
+    border-radius: 50%; animation: spin 0.8s linear infinite; margin: 30px auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div id="screen-loading" class="center">
+    <div class="spinner"></div>
+    <div class="muted" id="loading-text">Загрузка...</div>
+  </div>
+
+  <div id="screen-error" class="hidden">
+    <h1 data-i18n="oops">Не получилось</h1>
+    <div class="error-box" id="error-text"></div>
+  </div>
+
+  <div id="screen-join" class="hidden">
+    <div class="lang-switch">
+      <button class="lang-btn" id="lang-ru-1" onclick="setLang('ru')">RU</button>
+      <button class="lang-btn" id="lang-kk-1" onclick="setLang('kk')">KZ</button>
+    </div>
+    <h1 id="join-title"></h1>
+    <div class="meta-row">
+      <span class="pill" id="join-qcount"></span>
+      <span class="pill hidden" id="join-timelimit"></span>
+    </div>
+    <input type="text" id="student-name" data-i18n-ph="namePh" maxlength="60">
+    <div class="error-box hidden" id="join-error"></div>
+    <button class="btn" id="join-btn" onclick="joinTest()" data-i18n="startBtn"></button>
+  </div>
+
+  <div id="screen-quiz" class="hidden">
+    <div class="lang-switch">
+      <button class="lang-btn" id="lang-ru-2" onclick="setLang('ru')">RU</button>
+      <button class="lang-btn" id="lang-kk-2" onclick="setLang('kk')">KZ</button>
+    </div>
+    <div class="timer hidden" id="timer-box">--:--</div>
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+    <div class="q-index" id="q-index"></div>
+    <div class="q-text" id="q-text"></div>
+    <div class="q-hint" id="q-hint"></div>
+    <div id="options-container"></div>
+    <div class="dots" id="dots"></div>
+    <div class="btn-row">
+      <button class="btn outline" id="prev-btn" onclick="goPrev()" data-i18n="prevBtn"></button>
+      <button class="btn" id="next-btn" onclick="goNext()" data-i18n="nextBtn"></button>
+    </div>
+    <button class="btn" id="submit-btn" onclick="submitTest(false)" style="margin-top:10px; background:var(--navy);" data-i18n="submitBtn"></button>
+  </div>
+
+  <div id="screen-result" class="hidden">
+    <h1 data-i18n="resultTitle" style="text-align:center;"></h1>
+    <div class="info-box hidden" id="auto-submit-note" data-i18n="autoSubmitNote"></div>
+    <div class="score-circle">
+      <div class="pct" id="score-pct">0%</div>
+      <div class="frac" id="score-frac">0/0</div>
+    </div>
+    <h2 style="font-size:15px; color: var(--navy); margin: 18px 0 10px;" data-i18n="reviewTitle"></h2>
+    <div id="review-container"></div>
+  </div>
+
+</div>
+
+<script>
+  const CODE = location.pathname.split('/').filter(Boolean).pop();
+
+  const UI = {
+    ru: {
+      oops: 'Не получилось',
+      loading: 'Загрузка...',
+      namePh: 'Введите ваше имя',
+      startBtn: 'Начать тест',
+      prevBtn: '← Назад',
+      nextBtn: 'Далее →',
+      submitBtn: 'Завершить тест',
+      resultTitle: 'Результат',
+      reviewTitle: 'Разбор ответов',
+      autoSubmitNote: 'Тест был автоматически отправлен по истечении времени.',
+      questionsWord: 'вопросов',
+      timeLimitWord: 'Лимит: {m} мин',
+      selectOne: 'Выберите один вариант ответа',
+      selectMulti: 'Можно выбрать несколько вариантов',
+      timeUp: 'Время вышло',
+      enterName: 'Введите имя',
+      correctLabel: 'Верно',
+      wrongLabel: 'Неверно',
+      yourAnswer: 'Ваш ответ',
+      correctAnswer: 'Правильный ответ',
+      notAnswered: 'нет ответа',
+      testEnded: 'Тестирование завершено преподавателем.',
+      notFound: 'Сессия не найдена. Проверьте код или QR-код.',
+      alreadyDone: 'Вы уже сдали этот тест.',
+      translateFail: 'Перевод сейчас недоступен, показан русский текст.'
+    },
+    kk: {
+      oops: 'Сәтсіз аяқталды',
+      loading: 'Жүктелуде...',
+      namePh: 'Атыңызды енгізіңіз',
+      startBtn: 'Тестті бастау',
+      prevBtn: '← Артқа',
+      nextBtn: 'Келесі →',
+      submitBtn: 'Тестті аяқтау',
+      resultTitle: 'Нәтиже',
+      reviewTitle: 'Жауаптарды талдау',
+      autoSubmitNote: 'Уақыт аяқталғандықтан тест автоматты түрде жіберілді.',
+      questionsWord: 'сұрақ',
+      timeLimitWord: 'Уақыт шегі: {m} мин',
+      selectOne: 'Бір жауап нұсқасын таңдаңыз',
+      selectMulti: 'Бірнеше нұсқаны таңдауға болады',
+      timeUp: 'Уақыт аяқталды',
+      enterName: 'Атыңызды енгізіңіз',
+      correctLabel: 'Дұрыс',
+      wrongLabel: 'Қате',
+      yourAnswer: 'Сіздің жауабыңыз',
+      correctAnswer: 'Дұрыс жауап',
+      notAnswered: 'жауап жоқ',
+      testEnded: 'Тестілеу оқытушы тарапынан аяқталды.',
+      notFound: 'Сессия табылмады. Кодты немесе QR-кодты тексеріңіз.',
+      alreadyDone: 'Сіз бұл тестті тапсырып қойдыңыз.',
+      translateFail: 'Аударма қазір қолжетімсіз, орыс тіліндегі мәтін көрсетілді.'
+    }
+  };
+
+  const state = {
+    lang: 'ru',
+    participantId: null,
+    testTitle: '',
+    timeLimit: null,       // минуты
+    questions: [],
+    answers: {},            // qId -> idx | [idx,...]
+    currentIndex: 0,
+    deadline: null,
+    timerInterval: null,
+    translated: null,       // { title, questions: [{text, options[]}] } на kk
+    translating: false
+  };
+
+  function t(key) { return UI[state.lang][key] || UI.ru[key] || key; }
+
+  function applyStaticUi() {
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    });
+    const nameInput = document.getElementById('student-name');
+    if (nameInput) nameInput.placeholder = t('namePh');
+    ['lang-ru-1','lang-ru-2'].forEach(id => document.getElementById(id).classList.toggle('active', state.lang === 'ru'));
+    ['lang-kk-1','lang-kk-2'].forEach(id => document.getElementById(id).classList.toggle('active', state.lang === 'kk'));
+  }
+
+  function showScreen(id) {
+    ['screen-loading','screen-error','screen-join','screen-quiz','screen-result'].forEach(s => {
+      document.getElementById(s).classList.toggle('hidden', s !== id);
+    });
+  }
+
+  function showError(msg) {
+    document.getElementById('error-text').textContent = msg;
+    showScreen('screen-error');
+  }
+
+  async function init() {
+    applyStaticUi();
+    try {
+      const res = await fetch(`/api/sessions/${CODE}/info`);
+      const data = await res.json();
+      if (!res.ok) {
+        showError(res.status === 404 ? t('notFound') : (data.error || t('notFound')));
+        return;
+      }
+      if (data.ended) {
+        showError(t('testEnded'));
+        return;
+      }
+      state.testTitle = data.testTitle;
+      state.timeLimit = data.timeLimit;
+      document.getElementById('join-title').textContent = data.testTitle;
+      document.getElementById('join-qcount').textContent = `${data.questionCount} ${t('questionsWord')}`;
+      if (data.timeLimit) {
+        const pill = document.getElementById('join-timelimit');
+        pill.textContent = t('timeLimitWord').replace('{m}', data.timeLimit);
+        pill.classList.remove('hidden');
+      }
+      showScreen('screen-join');
+    } catch (e) {
+      showError(t('notFound'));
+    }
+  }
+
+  function setLang(lang) {
+    state.lang = lang;
+    applyStaticUi();
+    // обновляем метки на экране входа (число вопросов / лимит времени) в новом языке
+    if (!document.getElementById('screen-join').classList.contains('hidden')) {
+      document.getElementById('join-qcount').textContent = `${state.questions.length || document.getElementById('join-qcount').textContent.split(' ')[0]} ${t('questionsWord')}`;
+      if (state.timeLimit) {
+        document.getElementById('join-timelimit').textContent = t('timeLimitWord').replace('{m}', state.timeLimit);
+      }
+      document.getElementById('join-title').textContent = displayTitle();
+    }
+    if (lang === 'kk' && state.questions.length && !state.translated && !state.translating) {
+      translateAll();
+    }
+    if (!document.getElementById('screen-quiz').classList.contains('hidden')) {
+      renderQuestion();
+    }
+    if (!document.getElementById('screen-result').classList.contains('hidden')) {
+      renderResultTexts();
+    }
+  }
+
+  function displayTitle() {
+    if (state.lang === 'kk' && state.translated) return state.translated.title;
+    return state.testTitle;
+  }
+
+  async function translateAll() {
+    state.translating = true;
+    const texts = [state.testTitle];
+    state.questions.forEach(q => {
+      texts.push(q.text);
+      q.options.forEach(o => texts.push(o));
+    });
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texts, target: 'kk' })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'translate error');
+      let ptr = 0;
+      const title = data.translations[ptr++];
+      const questions = state.questions.map(q => {
+        const text = data.translations[ptr++];
+        const options = q.options.map(() => data.translations[ptr++]);
+        return { text, options };
+      });
+      state.translated = { title, questions };
+    } catch (e) {
+      console.warn('[translate] fail', e);
+      state.translated = null;
+    } finally {
+      state.translating = false;
+      if (!document.getElementById('screen-quiz').classList.contains('hidden')) renderQuestion();
+      if (!document.getElementById('screen-join').classList.contains('hidden')) {
+        document.getElementById('join-title').textContent = displayTitle();
+      }
+    }
+  }
+
+  async function joinTest() {
+    const nameInput = document.getElementById('student-name');
+    const name = nameInput.value.trim();
+    const errEl = document.getElementById('join-error');
+    errEl.classList.add('hidden');
+    if (!name) {
+      errEl.textContent = t('enterName');
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const btn = document.getElementById('join-btn');
+    btn.disabled = true;
+    try {
+      const res = await fetch(`/api/sessions/${CODE}/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        errEl.textContent = data.error || t('notFound');
+        errEl.classList.remove('hidden');
+        btn.disabled = false;
+        return;
+      }
+      state.participantId = data.participantId;
+      state.testTitle = data.testTitle;
+      state.timeLimit = data.timeLimit;
+      state.questions = data.questions;
+      state.currentIndex = 0;
+      state.answers = {};
+      showScreen('screen-quiz');
+      if (state.timeLimit) {
+        state.deadline = Date.now() + state.timeLimit * 60 * 1000;
+        document.getElementById('timer-box').classList.remove('hidden');
+        startTimer();
+      }
+      if (state.lang === 'kk') translateAll();
+      renderQuestion();
+    } catch (e) {
+      errEl.textContent = t('notFound');
+      errEl.classList.remove('hidden');
+      btn.disabled = false;
+    }
+  }
+
+  function startTimer() {
+    updateTimer();
+    state.timerInterval = setInterval(updateTimer, 1000);
+  }
+
+  function updateTimer() {
+    const box = document.getElementById('timer-box');
+    const remainingMs = state.deadline - Date.now();
+    if (remainingMs <= 0) {
+      box.textContent = '00:00';
+      clearInterval(state.timerInterval);
+      submitTest(true);
+      return;
+    }
+    const totalSec = Math.floor(remainingMs / 1000);
+    const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
+    const ss = String(totalSec % 60).padStart(2, '0');
+    box.textContent = `${mm}:${ss}`;
+    box.classList.toggle('warn', totalSec <= 60);
+  }
+
+  function currentQuestionView(idx) {
+    const q = state.questions[idx];
+    if (state.lang === 'kk' && state.translated) {
+      const tq = state.translated.questions[idx];
+      return { id: q.id, text: tq.text, options: tq.options, multi: q.multi };
+    }
+    return { id: q.id, text: q.text, options: q.options, multi: q.multi };
+  }
+
+  function renderQuestion() {
+    const idx = state.currentIndex;
+    const total = state.questions.length;
+    const q = currentQuestionView(idx);
+
+    document.getElementById('q-index').textContent = `${idx + 1} / ${total}`;
+    document.getElementById('q-text').textContent = q.text;
+    document.getElementById('q-hint').textContent = q.multi ? t('selectMulti') : t('selectOne');
+
+    const container = document.getElementById('options-container');
+    container.innerHTML = '';
+    const given = state.answers[q.id];
+    q.options.forEach((optText, i) => {
+      const isSelected = q.multi ? (Array.isArray(given) && given.includes(i)) : (given === i);
+      const div = document.createElement('div');
+      div.className = 'option' + (isSelected ? ' selected' : '');
+      div.onclick = () => selectOption(q, i);
+      div.innerHTML = `
+        <input type="${q.multi ? 'checkbox' : 'radio'}" ${isSelected ? 'checked' : ''} readonly>
+        <div class="opt-text"></div>
+      `;
+      div.querySelector('.opt-text').textContent = optText;
+      container.appendChild(div);
+    });
+
+    // точки-навигация
+    const dots = document.getElementById('dots');
+    dots.innerHTML = '';
+    state.questions.forEach((qq, i) => {
+      const answered = state.answers[qq.id] !== undefined &&
+        (Array.isArray(state.answers[qq.id]) ? state.answers[qq.id].length > 0 : true);
+      const d = document.createElement('div');
+      d.className = 'dot' + (answered ? ' answered' : '') + (i === idx ? ' current' : '');
+      d.textContent = i + 1;
+      d.onclick = () => { state.currentIndex = i; renderQuestion(); };
+      dots.appendChild(d);
+    });
+
+    const answeredCount = state.questions.filter(qq => {
+      const a = state.answers[qq.id];
+      return a !== undefined && (Array.isArray(a) ? a.length > 0 : true);
+    }).length;
+    document.getElementById('progress-fill').style.width = Math.round((answeredCount / total) * 100) + '%';
+
+    document.getElementById('prev-btn').style.visibility = idx === 0 ? 'hidden' : 'visible';
+    const isLast = idx === total - 1;
+    document.getElementById('next-btn').classList.toggle('hidden', isLast);
+    document.getElementById('submit-btn').classList.toggle('hidden', !isLast);
+  }
+
+  function selectOption(q, i) {
+    if (q.multi) {
+      const arr = Array.isArray(state.answers[q.id]) ? state.answers[q.id].slice() : [];
+      const pos = arr.indexOf(i);
+      if (pos >= 0) arr.splice(pos, 1); else arr.push(i);
+      state.answers[q.id] = arr;
+    } else {
+      state.answers[q.id] = i;
+    }
+    renderQuestion();
+  }
+
+  function goNext() {
+    if (state.currentIndex < state.questions.length - 1) {
+      state.currentIndex++;
+      renderQuestion();
+    }
+  }
+  function goPrev() {
+    if (state.currentIndex > 0) {
+      state.currentIndex--;
+      renderQuestion();
+    }
+  }
+
+  let lastResult = null;
+
+  async function submitTest(auto) {
+    if (state.timerInterval) clearInterval(state.timerInterval);
+    document.getElementById('submit-btn').disabled = true;
+    try {
+      const res = await fetch(`/api/sessions/${CODE}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participantId: state.participantId, answers: state.answers })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showError(data.error || t('notFound'));
+        return;
+      }
+      lastResult = data;
+      lastResult.auto = auto;
+      showResult();
+    } catch (e) {
+      showError(t('notFound'));
+    }
+  }
+
+  function showResult() {
+    showScreen('screen-result');
+    document.getElementById('auto-submit-note').classList.toggle('hidden', !lastResult.auto);
+    renderResultTexts();
+  }
+
+  function reviewOptionText(reviewItem, i) {
+    if (state.lang === 'kk' && state.translated) {
+      const idx = state.questions.findIndex(q => q.text === reviewItem.text);
+      if (idx >= 0 && state.translated.questions[idx]) {
+        return state.translated.questions[idx].options[i];
+      }
+    }
+    return reviewItem.options[i];
+  }
+  function reviewQuestionText(reviewItem) {
+    if (state.lang === 'kk' && state.translated) {
+      const idx = state.questions.findIndex(q => q.text === reviewItem.text);
+      if (idx >= 0 && state.translated.questions[idx]) return state.translated.questions[idx].text;
+    }
+    return reviewItem.text;
+  }
+
+  function renderResultTexts() {
+    if (!lastResult) return;
+    const pct = lastResult.total ? Math.round((lastResult.score / lastResult.total) * 100) : 0;
+    document.getElementById('score-pct').textContent = pct + '%';
+    document.getElementById('score-frac').textContent = `${lastResult.score}/${lastResult.total}`;
+
+    const container = document.getElementById('review-container');
+    container.innerHTML = '';
+    lastResult.review.forEach((r, ridx) => {
+      const div = document.createElement('div');
+      div.className = 'review-item';
+      const statusClass = r.isCorrect ? 'ok' : 'no';
+      const statusText = r.isCorrect ? t('correctLabel') : t('wrongLabel');
+      const qText = reviewQuestionText(r);
+
+      let givenLabel;
+      if (r.multi) {
+        const arr = Array.isArray(r.given) ? r.given : [];
+        givenLabel = arr.length ? arr.map(i => reviewOptionText(r, i)).join(', ') : t('notAnswered');
+      } else {
+        givenLabel = (r.given !== undefined && r.given !== null) ? reviewOptionText(r, r.given) : t('notAnswered');
+      }
+      let correctLabel;
+      if (r.multi) {
+        const arr = Array.isArray(r.correct) ? r.correct : [];
+        correctLabel = arr.map(i => reviewOptionText(r, i)).join(', ');
+      } else {
+        correctLabel = reviewOptionText(r, r.correct);
+      }
+
+      div.innerHTML = `
+        <span class="badge-status ${statusClass}">${statusText}</span>
+        <div class="rq">${ridx + 1}. ${escapeHtml(qText)}</div>
+        <div class="ropt ${r.isCorrect ? 'correct' : 'wrong'}">${t('yourAnswer')}: ${escapeHtml(givenLabel)}</div>
+        ${!r.isCorrect ? `<div class="ropt correct">${t('correctAnswer')}: ${escapeHtml(correctLabel)}</div>` : ''}
+      `;
+      container.appendChild(div);
+    });
+  }
+
+  function escapeHtml(s) {
+    return (s || '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  init();
+</script>
+</body>
+</html>

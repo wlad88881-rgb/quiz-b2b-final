@@ -93,7 +93,7 @@
           <button class="btn" onclick="showEditor()">+ Новый тест</button>
           <input type="file" id="import-file" accept=".xlsx,.xls" style="display:none;" onchange="importFromExcel()">
           <button class="btn outline" onclick="document.getElementById('import-file').click()">Импорт Excel</button>
-          <button class="btn outline" onclick="window.location.href='/api/import-template'">Шаблон Excel</button>
+          <button class="btn outline" onclick="downloadTemplate()">Шаблон Excel</button>
         </div>
         <h2 style="font-size:18px; margin-bottom:12px;">Мои тесты</h2>
         <div id="tests-list"></div>
@@ -152,8 +152,21 @@
       </table>
     </div>
   </div>
+  <!-- Модальное окно запуска сессии -->
+  <div id="session-start-modal" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,0.4); display:flex; align-items:center; justify-content:center; z-index:50;">
+    <div style="width:320px; background:#fff; border-radius:14px; padding:20px;">
+      <h3 style="margin-bottom:10px; color:#2C3E50;">Начать сессию</h3>
+      <label class="muted" style="display:block; margin-bottom:6px;">Лимит времени на тест, минут (оставьте пустым — без ограничения)</label>
+      <input type="text" id="session-time-limit" placeholder="например, 20" inputmode="numeric">
+      <div class="row" style="margin-top:6px;">
+        <button class="btn outline" style="flex:1;" onclick="closeSessionModal()">Отмена</button>
+        <button class="btn" style="flex:1;" onclick="confirmStartSession()">Начать</button>
+      </div>
+    </div>
+  </div>
 </div>
 
+<script src="/socket.io/socket.io.js"></script>
 <script>
   // АВТОРИЗАЦИЯ
   let isRegisterMode = false;
@@ -316,9 +329,9 @@
     `;
     document.getElementById('questions-container').appendChild(wrap);
     if (existing && existing.correct !== undefined) {
-      const correctIdx = Array.isArray(existing.correct) ? existing.correct[0] : existing.correct;
-      const cb = wrap.querySelectorAll('.opt-correct')[correctIdx];
-      if (cb) cb.checked = true;
+      const correctIdxs = Array.isArray(existing.correct) ? existing.correct : [existing.correct];
+      const checkboxes = wrap.querySelectorAll('.opt-correct');
+      correctIdxs.forEach(idx => { if (checkboxes[idx]) checkboxes[idx].checked = true; });
     }
   }
 
@@ -358,7 +371,8 @@
         errorEl.textContent = 'В каждом вопросе должен быть текст, минимум 2 варианта и отмечен правильный.';
         return;
       }
-      questions.push({ text, options, correct: correctIdxs[0] || 0, multi: false });
+      const multi = correctIdxs.length > 1;
+      questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi });
     }
 
     const payload = { title, questions };
@@ -372,13 +386,87 @@
     if (res.ok) showList();
   }
 
+  function downloadTemplate() {
+    const companyId = localStorage.getItem('b2bCompanyId');
+    window.location.href = '/api/import-template?companyId=' + encodeURIComponent(companyId);
+  }
+
+  // ИМПОРТ ИЗ EXCEL
+  async function importFromExcel() {
+    const fileInput = document.getElementById('import-file');
+    const file = fileInput.files[0];
+    if (!file) return;
+    const companyId = localStorage.getItem('b2bCompanyId');
+    const formData = new FormData();
+    formData.append('file', file);
+    let res, data;
+    try {
+      res = await fetch('/api/import-questions', {
+        method: 'POST',
+        headers: { 'x-company-id': companyId },
+        body: formData
+      });
+      data = await res.json();
+    } catch (e) {
+      alert('Не удалось загрузить файл. Проверьте соединение и попробуйте снова.');
+      fileInput.value = '';
+      return;
+    }
+    fileInput.value = '';
+    if (!res.ok) {
+      alert(data.error || 'Ошибка импорта файла');
+      return;
+    }
+    editingTestId = null;
+    document.getElementById('editor-title').textContent = 'Новый тест (импорт из Excel)';
+    document.getElementById('test-title').value = file.name.replace(/\.(xlsx|xls)$/i, '');
+    document.getElementById('questions-container').innerHTML = '';
+    document.getElementById('save-error').textContent = '';
+    data.questions.forEach(q => addQuestion({ text: q.text, options: q.options, correct: q.correct, multi: q.multi }));
+    document.getElementById('screen-list').classList.add('hidden');
+    document.getElementById('screen-editor').classList.remove('hidden');
+    if (data.skipped && data.skipped.length) {
+      console.warn('Пропущенные строки при импорте:', data.skipped);
+      alert(`Импортировано вопросов: ${data.questions.length}. Пропущено строк: ${data.skipped.length} (несоответствие формату — см. консоль браузера). Проверьте и сохраните тест.`);
+    } else {
+      alert(`Импортировано вопросов: ${data.questions.length}. Проверьте и сохраните тест.`);
+    }
+  }
+
   // СЕССИЯ
-  async function startSession(testId) {
+  let pendingTestId = null;
+  let currentSessionCode = null;
+  let socket = null;
+
+  function startSession(testId) {
+    pendingTestId = testId;
+    document.getElementById('session-time-limit').value = '';
+    document.getElementById('session-start-modal').classList.remove('hidden');
+  }
+
+  function closeSessionModal() {
+    document.getElementById('session-start-modal').classList.add('hidden');
+    pendingTestId = null;
+  }
+
+  async function confirmStartSession() {
+    const raw = document.getElementById('session-time-limit').value.trim();
+    let timeLimit = null;
+    if (raw) {
+      const n = parseInt(raw, 10);
+      if (isNaN(n) || n <= 0) {
+        alert('Введите положительное число минут или оставьте поле пустым');
+        return;
+      }
+      timeLimit = n;
+    }
+    const testId = pendingTestId;
+    closeSessionModal();
     const companyId = localStorage.getItem('b2bCompanyId');
     const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-company-id': companyId },
-      body: JSON.stringify({ testId })
+      body: JSON.stringify({ testId, timeLimit })
     });
     const data = await res.json();
     if (!res.ok) {
@@ -386,6 +474,29 @@
       return;
     }
     openSession(data.session, data.url, data.qrDataUrl);
+  }
+
+  function ensureSocket() {
+    if (socket) return socket;
+    socket = io();
+    socket.on('participant:joined', (p) => { if (p) upsertParticipantRow(p); });
+    socket.on('participant:finished', (p) => { if (p) upsertParticipantRow(p); });
+    socket.on('connect', () => { if (currentSessionCode) socket.emit('teacher:watch', currentSessionCode); });
+    return socket;
+  }
+
+  function upsertParticipantRow(p) {
+    document.getElementById('no-participants').classList.add('hidden');
+    document.getElementById('results-table').classList.remove('hidden');
+    let row = document.getElementById('prow-' + p.id);
+    if (!row) {
+      row = document.createElement('tr');
+      row.id = 'prow-' + p.id;
+      document.getElementById('results-body').appendChild(row);
+    }
+    const statusText = p.finished ? 'Завершил' : 'Проходит тест';
+    const resultText = (p.finished && p.total) ? `${p.score}/${p.total} (${Math.round(p.score / p.total * 100)}%)` : '—';
+    row.innerHTML = `<td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td>`;
   }
 
   function openSession(session, url, qrDataUrl) {
@@ -399,6 +510,14 @@
     linkEl.href = url;
     document.getElementById('no-participants').classList.remove('hidden');
     document.getElementById('results-table').classList.add('hidden');
+    document.getElementById('results-body').innerHTML = '';
+    document.getElementById('session-status').textContent = 'Идёт тестирование';
+    document.getElementById('session-status').classList.add('live');
+    document.getElementById('end-session-btn').disabled = false;
+
+    currentSessionCode = session.code;
+    const s = ensureSocket();
+    s.emit('teacher:watch', currentSessionCode);
   }
 
   function deleteTest(id) {
@@ -408,8 +527,26 @@
       .then(() => loadTestsList());
   }
 
-  function endSession() { alert('Завершение в разработке.'); }
-  function exportResults() { alert('Экспорт в разработке.'); }
+  async function endSession() {
+    if (!currentSessionCode) return;
+    if (!confirm('Завершить тестирование? Студенты больше не смогут отправлять ответы.')) return;
+    const companyId = localStorage.getItem('b2bCompanyId');
+    await fetch('/api/sessions/' + currentSessionCode + '/end', {
+      method: 'POST',
+      headers: { 'x-company-id': companyId }
+    });
+    document.getElementById('session-status').textContent = 'Завершено';
+    document.getElementById('session-status').classList.remove('live');
+    document.getElementById('end-session-btn').disabled = true;
+  }
+
+  function exportResults() {
+    if (!currentSessionCode) return;
+    const companyId = localStorage.getItem('b2bCompanyId');
+    window.location.href = '/api/sessions/' + currentSessionCode + '/export?companyId=' + encodeURIComponent(companyId);
+  }
+
+  function showLabEditor() { alert('Раздел «Тренажёры» находится в разработке.'); }
 
   function escapeHtml(s) {
     return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

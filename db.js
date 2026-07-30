@@ -15,13 +15,17 @@ function load() {
         companies: {},
         tests: {},
         sessions: {},
-        labs: {}
+        labs: {},
+        translations: {}
       };
       fs.writeFileSync(FILE_PATH, JSON.stringify(defaultData, null, 2));
       return defaultData;
     }
     const raw = fs.readFileSync(FILE_PATH, 'utf8');
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (!parsed.translations) parsed.translations = {};
+    if (!parsed.labs) parsed.labs = {};
+    return parsed;
   } catch (e) {
     console.error('[db] Ошибка загрузки:', e);
     return {};
