@@ -5,208 +5,250 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>B2B Тестирование</title>
   <style>
-    * { box-sizing: border-box; }
-    body { font-family: system-ui, sans-serif; background: #f5f7fa; margin: 0; padding: 20px; }
-    .container { max-width: 1100px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 2px 12px rgba(0,0,0,0.05); }
-    .card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; margin-bottom: 12px; background: #fafafa; }
-    .brand-header { background: #2C3E50; padding: 14px 20px; display: flex; align-items: center; gap: 12px; border-bottom: 3px solid #F07C00; }
-    .brand-mark { width: 38px; height: 38px; border-radius: 8px; background: #F07C00; color: white; font-weight: 800; font-size: 15px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    .brand-text { line-height: 1.25; }
-    .brand-title { color: white; font-weight: 700; font-size: 15px; }
-    .brand-subtitle { color: #42BFCB; font-size: 12px; font-weight: 600; letter-spacing: 0.3px; }
-    .auth-screen { max-width: 500px; margin: 40px auto; }
-    .auth-screen .card { padding: 30px; }
-    .auth-switch { text-align: center; margin-top: 16px; font-size: 14px; }
-    .auth-switch a { color: #F07C00; cursor: pointer; font-weight: 600; text-decoration: underline; }
-    .auth-screen input { width: 100%; padding: 12px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 15px; }
-    .auth-screen .error { color: #d64545; margin-top: 8px; display: none; text-align: center; }
-    .auth-screen h2 { text-align: center; margin-bottom: 20px; }
-    .plan-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 700; background: #e6f4ea; color: #2e9e4f; }
-    .plan-badge.pro { background: #fdeaea; color: #d64545; }
-    .btn { display: inline-block; background: #F07C00; color: white; border: none; padding: 10px 18px; border-radius: 8px; font-size: 15px; cursor: pointer; }
-    .btn:hover { opacity: 0.9; }
-    .btn.outline { background: white; color: #2C3E50; border: 1px solid #e0e0e0; }
-    .btn.danger { background: #d64545; }
-    .btn.small { padding: 6px 12px; font-size: 13px; }
-    .muted { color: #6b7c8f; font-size: 14px; }
-    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
+    body { background: #f4f6fa; color: #1a1a2e; display: flex; justify-content: center; padding: 20px; }
+    .app-wrapper { max-width: 1100px; width: 100%; background: #ffffff; border-radius: 24px; box-shadow: 0 20px 50px rgba(0,0,0,0.08); padding: 32px 40px; min-height: 90vh; }
+    
+    .top-bar { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eef2f6; padding-bottom: 16px; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+    .user-info { display: flex; align-items: center; gap: 16px; }
+    .user-avatar { width: 40px; height: 40px; background: linear-gradient(135deg, #F07C00, #FFC671); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 18px; }
+    .user-details { display: flex; flex-direction: column; }
+    .user-email { font-weight: 600; font-size: 15px; color: #2C3E50; }
+    .user-plan { font-size: 12px; background: #e6f4ea; color: #2e9e4f; padding: 2px 10px; border-radius: 12px; font-weight: 600; width: fit-content; }
+    
+    .lang-switch { display: flex; gap: 4px; background: #f0f2f5; border-radius: 8px; padding: 4px; }
+    .lang-btn { border: none; background: transparent; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; color: #6b7c8f; transition: 0.2s; }
+    .lang-btn.active { background: #ffffff; color: #2C3E50; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+
+    .tabs { display: flex; gap: 24px; margin-bottom: 28px; border-bottom: 2px solid #eef2f6; padding-bottom: 12px; }
+    .tab-btn { background: none; border: none; font-size: 15px; font-weight: 600; color: #6b7c8f; cursor: pointer; padding: 0 4px 12px 4px; position: relative; transition: 0.2s; }
+    .tab-btn.active { color: #F07C00; }
+    .tab-btn.active::after { content: ''; position: absolute; bottom: -14px; left: 0; right: 0; height: 3px; background: #F07C00; border-radius: 4px; }
+
+    .card { background: #ffffff; border: 1px solid #eef2f6; border-radius: 16px; padding: 20px 24px; margin-bottom: 16px; transition: 0.2s; box-shadow: 0 2px 8px rgba(0,0,0,0.02); }
+    .card:hover { border-color: #d0d7de; box-shadow: 0 4px 12px rgba(0,0,0,0.04); }
+    
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
     .row.between { justify-content: space-between; }
-    .tabs { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 2px solid #e0e0e0; padding-bottom: 12px; }
-    .tab-btn { background: none; border: none; padding: 10px 16px; font-size: 16px; cursor: pointer; border-radius: 6px; color: #555; }
-    .tab-btn.active { background: #2C3E50; color: #fff; }
-    .badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .muted { color: #6b7c8f; font-size: 14px; }
+    
+    .btn { display: inline-flex; align-items: center; gap: 8px; background: #F07C00; color: white; border: none; padding: 10px 20px; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; transition: 0.2s; }
+    .btn:hover { background: #d66d00; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(240, 124, 0, 0.3); }
+    .btn.outline { background: transparent; color: #2C3E50; border: 1px solid #eef2f6; }
+    .btn.outline:hover { background: #f8f9fa; border-color: #d0d7de; transform: none; box-shadow: none; }
+    .btn.danger { background: #d64545; }
+    .btn.danger:hover { background: #b83838; box-shadow: 0 4px 12px rgba(214, 69, 69, 0.3); }
+    .btn.small { padding: 6px 14px; font-size: 13px; }
+
+    .session-card { background: #fafbfc; border: 1px dashed #d0d7de; border-radius: 16px; padding: 24px; text-align: center; }
+    .code-big { font-size: 48px; font-weight: 800; letter-spacing: 8px; color: #F07C00; margin: 12px 0; }
+    .qr-box { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    .qr-box img { border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); background: #fff; padding: 8px; }
+    #qr-img { width: 150px; height: 150px; object-fit: contain; }
+    
+    #no-participants { padding: 40px 0; text-align: center; color: #6b7c8f; }
+    #results-table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    #results-table th { text-align: left; padding: 12px 8px; border-bottom: 2px solid #eef2f6; color: #6b7c8f; font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+    #results-table td { padding: 12px 8px; border-bottom: 1px solid #eef2f6; }
+    
+    .badge { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; }
     .badge.live { background: #e6f4ea; color: #2e9e4f; }
     .badge.ended { background: #fdeaea; color: #d64545; }
-    .code-big { font-size: 40px; font-weight: 800; letter-spacing: 6px; color: #F07C00; margin: 10px 0; }
+
+    /* Утилиты */
+    .hidden { display: none !important; }
     .error { color: #d64545; font-size: 14px; margin-top: 8px; }
-    #results-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-    #results-table th, #results-table td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
-    #results-table th { font-weight: 600; background: #f8f9fa; }
-    #stats-chart { width: 100%; height: 160px; margin-top: 20px; }
-    #stats-chart-empty { text-align: center; padding: 20px; color: #888; }
-    #stats-sessions-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-    #stats-sessions-table th, #stats-sessions-table td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
-    #stats-sessions-table th { font-weight: 600; background: #f8f9fa; }
-    .question-block { border: 1px solid #ddd; padding: 16px; margin-bottom: 12px; border-radius: 8px; background: #fff; }
-    .option-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
   </style>
 </head>
 <body>
 
-<header class="brand-header">
-  <div class="brand-mark">B2B</div>
-  <div class="brand-text">
-    <div class="brand-title">Платформа для тестирования</div>
-    <div class="brand-subtitle">Управление тестированием для компаний</div>
-  </div>
-</header>
+<div class="app-wrapper">
 
-<div class="container">
-  
-  <!-- Экран входа / Регистрации -->
-  <div id="auth-screen" class="auth-screen">
-    <div class="card">
-      <h2 id="auth-title">Вход в систему</h2>
-      <div id="auth-error" class="error">Ошибка</div>
-      
-      <input type="email" id="auth-email" placeholder="Email">
-      <input type="password" id="auth-password" placeholder="Пароль">
-      <input type="text" id="auth-name" placeholder="Название компании" style="display:none;">
-      
+  <!-- Верхняя панель -->
+  <div class="top-bar">
+    <div class="user-info">
+      <div class="user-avatar">B</div>
+      <div class="user-details">
+        <span class="user-email" id="company-display">Компания</span>
+        <span class="user-plan" id="plan-badge">Free</span>
+      </div>
+    </div>
+    <div style="display:flex; gap:16px; align-items:center;">
+      <div class="lang-switch">
+        <button class="lang-btn active" onclick="setLang('ru')">RU</button>
+        <button class="lang-btn" onclick="setLang('kz')">KZ</button>
+      </div>
+      <button class="btn outline small" onclick="logout()">Выход</button>
+    </div>
+  </div>
+
+  <!-- Экран входа (скрыт) -->
+  <div id="auth-screen" class="hidden">
+    <div style="max-width: 400px; margin: 60px auto; text-align: center;">
+      <h2 id="auth-title" style="margin-bottom: 20px;">Вход в систему</h2>
+      <div id="auth-error" class="error" style="display:none;"></div>
+      <input type="email" id="auth-email" placeholder="Email" style="width:100%; padding:12px; margin-bottom:12px; border:1px solid #eef2f6; border-radius:10px;">
+      <input type="password" id="auth-password" placeholder="Пароль" style="width:100%; padding:12px; margin-bottom:12px; border:1px solid #eef2f6; border-radius:10px;">
+      <input type="text" id="auth-name" placeholder="Название компании" style="width:100%; padding:12px; margin-bottom:12px; border:1px solid #eef2f6; border-radius:10px; display:none;">
       <button class="btn" onclick="submitAuth()" id="auth-btn" style="width:100%;">Войти</button>
-      
-      <div class="auth-switch" id="auth-switch">
-        Нет аккаунта? <a onclick="toggleAuthMode()">Зарегистрироваться</a>
+      <div style="margin-top:12px; font-size:14px;">
+        <span id="auth-switch">Нет аккаунта? <a onclick="toggleAuthMode()" style="color:#F07C00; cursor:pointer; font-weight:600;">Зарегистрироваться</a></span>
       </div>
     </div>
   </div>
 
   <!-- Основной экран -->
-  <div id="screen-main" style="display:none;">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-      <div>
-        <span style="font-weight:700; font-size:18px;" id="company-display">Компания</span>
-        <span class="plan-badge" id="plan-badge">Free</span>
-      </div>
-      <button class="btn outline small" onclick="logout()">Выход</button>
-    </div>
-
+  <div id="screen-main" class="hidden">
+    
     <div class="tabs">
-      <button class="tab-btn active" id="tab-btn-tests" onclick="switchTab('tests')">📚 Тесты</button>
-      <button class="tab-btn" id="tab-btn-labs" onclick="switchTab('labs')">🧪 Тренажёры</button>
-      <button class="tab-btn" id="tab-btn-stats" onclick="switchTab('stats')">📊 Статистика</button>
+      <button class="tab-btn active" id="tab-btn-tests" onclick="switchTab('tests')">📚 <span id="lbl-tests">Тесты</span></button>
+      <button class="tab-btn" id="tab-btn-labs" onclick="switchTab('labs')">🧪 <span id="lbl-labs">Тренажёры</span></button>
+      <button class="tab-btn" id="tab-btn-stats" onclick="switchTab('stats')">📊 <span id="lbl-stats">Статистика</span></button>
     </div>
 
     <div id="screen-list">
-      <div id="tab-tests" style="display:block">
-        <div class="row" style="margin-bottom:16px;">
-          <button class="btn" onclick="showEditor()">+ Новый тест</button>
+      <div id="tab-tests">
+        <div class="row" style="margin-bottom:20px; gap:10px;">
+          <button class="btn" onclick="showEditor()"><span id="lbl-new-test">+ Новый тест</span></button>
+          <input type="file" id="import-file" accept=".xlsx,.xls" style="display:none;" onchange="importFromExcel()">
+          <button class="btn outline" onclick="document.getElementById('import-file').click()"><span id="lbl-import">Импорт Excel</span></button>
+          <button class="btn outline" onclick="window.location.href='/api/import-template'"><span id="lbl-template">Шаблон Excel</span></button>
         </div>
-        <h2>Мои тесты</h2>
+        <h2 id="lbl-my-tests" style="font-size:18px; margin-bottom:16px;">Мои тесты</h2>
         <div id="tests-list"></div>
       </div>
-      <div id="tab-labs" style="display:none">
-        <div class="row" style="margin-bottom:16px;">
-          <button class="btn" onclick="showLabEditor()">+ Новый тренажёр</button>
+
+      <div id="tab-labs" class="hidden">
+        <div class="row" style="margin-bottom:20px;">
+          <button class="btn" onclick="showLabEditor()"><span id="lbl-new-lab">+ Новый тренажёр</span></button>
         </div>
-        <h2>Мои тренажёры</h2>
+        <h2 id="lbl-my-labs" style="font-size:18px; margin-bottom:16px;">Мои тренажёры</h2>
         <div id="labs-list"></div>
       </div>
-      <div id="tab-stats" style="display:none">
-        <h2>Статистика</h2>
+
+      <div id="tab-stats" class="hidden">
+        <h2 id="lbl-stats-title" style="font-size:18px; margin-bottom:16px;">Статистика</h2>
         <div id="stats-tests-list"></div>
       </div>
     </div>
 
     <!-- Редактор теста -->
-    <div id="screen-editor" style="display:none;">
+    <div id="screen-editor" class="hidden">
       <div class="row between" style="margin-bottom:16px;">
-        <h2 id="editor-title" style="margin:0;">Новый тест</h2>
-        <button class="btn outline small" onclick="showList()">Отмена</button>
+        <h2 id="editor-title" style="font-size:20px;">Новый тест</h2>
+        <button class="btn outline small" onclick="showList()"><span id="lbl-cancel">Отмена</span></button>
       </div>
-      <input type="text" id="test-title" placeholder="Название теста">
+      <input type="text" id="test-title" placeholder="Название теста" style="width:100%; padding:12px; border:1px solid #eef2f6; border-radius:10px; margin-bottom:16px;">
       <div id="questions-container"></div>
-      <button class="btn" onclick="saveTest()" style="margin-top:12px;">Сохранить тест</button>
+      <button class="btn" onclick="saveTest()" style="margin-top:12px;"><span id="lbl-save">Сохранить тест</span></button>
       <div id="save-error" class="error"></div>
     </div>
 
     <!-- Редактор тренажёра -->
-    <div id="screen-lab-editor" style="display:none;">
+    <div id="screen-lab-editor" class="hidden">
       <div class="row between" style="margin-bottom:16px;">
-        <h2 id="lab-editor-title" style="margin:0;">Новый тренажёр</h2>
-        <button class="btn outline small" onclick="showList(); switchTab('labs')">Отмена</button>
+        <h2 id="lab-editor-title" style="font-size:20px;">Новый тренажёр</h2>
+        <button class="btn outline small" onclick="showList(); switchTab('labs')"><span id="lbl-cancel">Отмена</span></button>
       </div>
-      <input type="text" id="lab-title-input" placeholder="Название тренажёра">
-      <textarea id="lab-intro-input" rows="3" placeholder="Вводный текст для ученика"></textarea>
+      <input type="text" id="lab-title-input" placeholder="Название тренажёра" style="width:100%; padding:12px; border:1px solid #eef2f6; border-radius:10px; margin-bottom:12px;">
+      <textarea id="lab-intro-input" rows="3" placeholder="Вводный текст" style="width:100%; padding:12px; border:1px solid #eef2f6; border-radius:10px; margin-bottom:16px;"></textarea>
       <div id="faults-container"></div>
-      <button class="btn" onclick="saveLab()" style="margin-top:12px;">Сохранить тренажёр</button>
+      <button class="btn" onclick="saveLab()"><span id="lbl-save-lab">Сохранить тренажёр</span></button>
       <div id="lab-save-error" class="error"></div>
     </div>
 
     <!-- Экран сессии -->
-    <div id="screen-session" style="display:none;">
+    <div id="screen-session" class="hidden">
       <div class="row between" style="margin-bottom:16px;">
         <div class="row">
-          <button class="btn outline small" onclick="showList()">← Назад к тестам</button>
-          <h2 id="session-title" style="margin:0; margin-left:16px;">Сессия</h2>
+          <button class="btn outline small" onclick="showList()">← <span id="lbl-back">Назад</span></button>
+          <h2 id="session-title" style="font-size:20px; margin:0;">Сессия</h2>
         </div>
         <div class="row">
           <span id="session-status" class="badge live">Идёт тестирование</span>
-          <button class="btn danger" id="end-session-btn" onclick="endSession()">Завершить сессию</button>
+          <button class="btn danger" id="end-session-btn" onclick="endSession()"><span id="lbl-end">Завершить</span></button>
         </div>
       </div>
-      <div class="card">
-        <div class="row between">
-          <div>
-            <div class="muted">Код для учеников</div>
+      <div class="card session-card">
+        <div class="row between" style="align-items: flex-start;">
+          <div style="text-align:left;">
+            <div class="muted" style="font-size:13px;">Код для учеников</div>
             <div class="code-big" id="session-code"></div>
           </div>
           <div class="qr-box">
-            <img id="qr-img" style="width:140px;height:140px; border-radius:12px;">
+            <img id="qr-img" src="" alt="QR">
             <div class="muted" style="font-size:11px;">Ссылка</div>
-            <div id="session-link" style="font-size:12px;word-break:break-all;max-width:200px;"></div>
+            <div id="session-link" style="font-size:12px;word-break:break-all; max-width:200px; color:#F07C00;"></div>
           </div>
           <div>
             <button class="btn outline small" onclick="exportResults()">📥 Экспорт Excel</button>
           </div>
         </div>
       </div>
-      <div id="no-participants" class="muted" style="text-align:center;padding:40px;">Пока никто не присоединился.</div>
-      <table id="results-table" style="display:none; margin-top:20px;">
+      <div id="no-participants" class="muted">Пока никто не присоединился.</div>
+      <table id="results-table" class="hidden">
         <thead><tr><th>Участник</th><th>Статус</th><th>Результат</th></tr></thead>
         <tbody id="results-body"></tbody>
       </table>
     </div>
 
     <!-- Экран статистики -->
-    <div id="screen-stats" style="display:none;">
+    <div id="screen-stats" class="hidden">
       <div class="row between" style="margin-bottom:16px;">
-        <h2 id="stats-test-title" style="margin:0;">Статистика</h2>
-        <button class="btn outline small" onclick="showList(); switchTab('stats')">← Назад</button>
+        <h2 id="stats-test-title" style="font-size:20px;">Статистика</h2>
+        <button class="btn outline small" onclick="showList(); switchTab('stats')">← <span id="lbl-back">Назад</span></button>
       </div>
-      <h3>Сессии</h3>
-      <div id="stats-no-sessions" class="muted" style="display:none;padding:20px;">По этому тесту ещё нет завершённых сессий.</div>
-      <table id="stats-sessions-table">
-        <thead><tr><th>Дата</th><th>Участников</th><th>Завершили</th><th>Средний балл</th></tr></thead>
-        <tbody id="stats-sessions-body"></tbody>
-      </table>
-      <h3>График успеваемости</h3>
-      <canvas id="stats-chart" style="display:none;"></canvas>
-      <div id="stats-chart-empty" style="display:none;">Нужно минимум 2 завершённые сессии для графика.</div>
-      <h3>Вопросы</h3>
-      <div id="stats-questions-list"></div>
+      <div id="stats-no-sessions" class="muted" style="display:block; padding:20px 0;">Нет завершённых сессий.</div>
+      <div id="stats-content" class="hidden">
+        <h3 style="font-size:15px; margin-bottom:12px;">Сессии</h3>
+        <table id="stats-sessions-table" style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+          <thead><tr><th style="text-align:left; padding:8px 0; border-bottom:1px solid #eef2f6;">Дата</th><th style="text-align:left; padding:8px 0; border-bottom:1px solid #eef2f6;">Участников</th><th style="text-align:left; padding:8px 0; border-bottom:1px solid #eef2f6;">Средний балл</th></tr></thead>
+          <tbody id="stats-sessions-body"></tbody>
+        </table>
+        <canvas id="stats-chart" class="hidden" style="width:100%; height:150px; margin:16px 0;"></canvas>
+        <div id="stats-questions-list"></div>
+      </div>
     </div>
+
   </div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
-<script>
-  let isRegisterMode = false;
-  let currentCompanyId = null;
-  let currentPlan = 'free';
-  let socket = null;
 
-  // --- АВТОРИЗАЦИЯ ---
+<script>
+  // ===== ПЕРЕВОДЫ =====
+  const LANG = {
+    ru: {
+      tests: 'Тесты', labs: 'Тренажёры', stats: 'Статистика',
+      newTest: '+ Новый тест', import: 'Импорт Excel', template: 'Шаблон Excel',
+      myTests: 'Мои тесты', myLabs: 'Мои тренажёры', statsTitle: 'Статистика',
+      cancel: 'Отмена', save: 'Сохранить тест', saveLab: 'Сохранить тренажёр',
+      back: 'Назад', end: 'Завершить'
+    },
+    kz: {
+      tests: 'Тесттер', labs: 'Жаттықтырғыштар', stats: 'Статистика',
+      newTest: '+ Жаңа тест', import: 'Excel-ден импорт', template: 'Excel үлгісі',
+      myTests: 'Менің тесттерім', myLabs: 'Менің жаттықтырғыштарым', statsTitle: 'Статистика',
+      cancel: 'Болдырмау', save: 'Тестті сақтау', saveLab: 'Жаттықтырғышты сақтау',
+      back: 'Артқа', end: 'Аяқтау'
+    }
+  };
+  let currentLang = 'ru';
+  function t(key) { return LANG[currentLang][key] || key; }
+
+  function setLang(lang) {
+    currentLang = lang;
+    document.querySelectorAll('.lang-btn').forEach(b => b.classList.toggle('active', b.textContent.toLowerCase() === lang));
+    document.querySelectorAll('[id^="lbl-"]').forEach(el => {
+      const key = el.id.replace('lbl-', '');
+      if (t(key)) el.textContent = t(key);
+    });
+  }
+
+  // ===== АВТОРИЗАЦИЯ =====
+  let isRegisterMode = false;
+
   function toggleAuthMode() {
     isRegisterMode = !isRegisterMode;
     document.getElementById('auth-title').textContent = isRegisterMode ? 'Регистрация компании' : 'Вход в систему';
@@ -247,13 +289,12 @@
       return;
     }
 
-    currentCompanyId = data.companyId;
     localStorage.setItem('b2bCompanyId', data.companyId);
     localStorage.setItem('b2bEmail', data.email);
     localStorage.setItem('b2bPlan', data.plan);
 
     if (isRegisterMode) {
-      alert('Компания зарегистрирована! Теперь войдите в систему.');
+      alert('Компания зарегистрирована! Теперь войдите.');
       toggleAuthMode();
       return;
     }
@@ -261,26 +302,20 @@
   }
 
   function enterApp() {
-    document.getElementById('auth-screen').style.display = 'none';
-    document.getElementById('screen-main').style.display = 'block';
+    document.getElementById('auth-screen').classList.add('hidden');
+    document.getElementById('screen-main').classList.remove('hidden');
     document.getElementById('company-display').textContent = localStorage.getItem('b2bEmail') || 'Компания';
-    
-    currentPlan = localStorage.getItem('b2bPlan') || 'free';
     const badge = document.getElementById('plan-badge');
-    badge.textContent = currentPlan === 'pro' ? 'Pro' : 'Free';
-    badge.className = 'plan-badge' + (currentPlan === 'pro' ? ' pro' : '');
-    
+    badge.textContent = localStorage.getItem('b2bPlan') === 'pro' ? 'Pro' : 'Free';
+    setLang('ru'); // Инициализация переводов
     loadTestsList();
   }
 
   function logout() {
-    localStorage.removeItem('b2bCompanyId');
-    localStorage.removeItem('b2bEmail');
-    localStorage.removeItem('b2bPlan');
+    localStorage.clear();
     location.reload();
   }
 
-  // Автоматический вход при загрузке
   document.addEventListener('DOMContentLoaded', async () => {
     const savedId = localStorage.getItem('b2bCompanyId');
     if (savedId) {
@@ -294,29 +329,26 @@
         return;
       }
     }
-    document.getElementById('auth-screen').style.display = 'block';
+    document.getElementById('auth-screen').classList.remove('hidden');
   });
 
-  // --- СПИСОК ТЕСТОВ ---
+  // ===== ОСНОВНЫЕ ФУНКЦИИ =====
   function showList() {
-    document.getElementById('screen-list').style.display = 'block';
-    document.getElementById('screen-editor').style.display = 'none';
-    document.getElementById('screen-lab-editor').style.display = 'none';
-    document.getElementById('screen-session').style.display = 'none';
-    document.getElementById('screen-stats').style.display = 'none';
+    ['screen-list', 'screen-editor', 'screen-lab-editor', 'screen-session', 'screen-stats'].forEach(id => {
+      document.getElementById(id).classList.add('hidden');
+    });
+    document.getElementById('screen-list').classList.remove('hidden');
     loadTestsList();
   }
 
   async function loadTestsList() {
     const companyId = localStorage.getItem('b2bCompanyId');
-    const res = await fetch('/api/tests', {
-      headers: { 'x-company-id': companyId }
-    });
+    const res = await fetch('/api/tests', { headers: { 'x-company-id': companyId } });
     if (!res.ok) return;
     const tests = await res.json();
     const container = document.getElementById('tests-list');
     if (tests.length === 0) {
-      container.innerHTML = '<p class="muted">Тестов пока нет — создайте первый.</p>';
+      container.innerHTML = '<div class="muted" style="padding:40px 0; text-align:center;">Тестов пока нет. Создайте первый!</div>';
     } else {
       container.innerHTML = tests.map(t => `
         <div class="card row between">
@@ -326,45 +358,78 @@
           </div>
           <div class="row">
             <button class="btn small" onclick="startSession('${t.id}')">Начать сессию</button>
-            <button class="btn outline small" onclick="showTestStats('${t.id}')">История</button>
-            <button class="btn outline small" onclick="editTest('${t.id}')">Изменить</button>
-            <button class="btn danger small" onclick="deleteTest('${t.id}')">Удалить</button>
+            <button class="btn outline small" onclick="deleteTest('${t.id}')">Удалить</button>
           </div>
         </div>
       `).join('');
     }
   }
 
-  // --- РЕДАКТОР ТЕСТА ---
+  // ===== ИМПОРТ EXCEL =====
+  async function importFromExcel() {
+    const fileInput = document.getElementById('import-file');
+    const file = fileInput.files[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    const companyId = localStorage.getItem('b2bCompanyId');
+    const res = await fetch('/api/import-questions', {
+      method: 'POST',
+      headers: { 'x-company-id': companyId },
+      body: formData
+    });
+    const data = await res.json();
+    if (res.ok && data.questions) {
+      data.questions.forEach(q => addQuestion(q));
+      alert(`Импортировано вопросов: ${data.questions.length}`);
+    } else {
+      alert(data.error || 'Ошибка импорта');
+    }
+    fileInput.value = '';
+  }
+
+  // ===== РЕДАКТОР ТЕСТА =====
   function showEditor() {
-    document.getElementById('screen-list').style.display = 'none';
-    document.getElementById('screen-editor').style.display = 'block';
+    ['screen-list', 'screen-editor', 'screen-lab-editor', 'screen-session', 'screen-stats'].forEach(id => {
+      document.getElementById(id).classList.add('hidden');
+    });
+    document.getElementById('screen-editor').classList.remove('hidden');
     document.getElementById('editor-title').textContent = 'Новый тест';
     document.getElementById('test-title').value = '';
     document.getElementById('questions-container').innerHTML = '';
     addQuestion();
   }
 
-  function addQuestion() {
+  function addQuestion(existing) {
     const wrap = document.createElement('div');
-    wrap.className = 'question-block';
+    wrap.className = 'card';
+    wrap.style.padding = '16px';
     wrap.innerHTML = `
-      <label>Вопрос</label>
-      <input type="text" class="q-text" placeholder="Текст вопроса">
-      <label>Варианты ответа</label>
+      <div class="row between">
+        <label style="font-weight:600;">Вопрос</label>
+        <button class="btn outline small" onclick="this.closest('.card').remove()">✕</button>
+      </div>
+      <input type="text" class="q-text" value="${existing ? escapeHtml(existing.text) : ''}" placeholder="Текст вопроса" style="width:100%; padding:8px; border:1px solid #eef2f6; border-radius:8px; margin-top:8px;">
+      <label style="font-weight:600; margin-top:12px; display:block;">Варианты ответа</label>
       <div class="options-container"></div>
-      <button class="btn outline small" onclick="addOption(this)">+ Вариант</button>
+      <button class="btn outline small" style="margin-top:8px;" onclick="addOption(this.closest('.card').querySelector('.options-container'))">+ Вариант</button>
     `;
     document.getElementById('questions-container').appendChild(wrap);
-    addOption(wrap.querySelector('.options-container'));
+    if (existing && existing.options) {
+      existing.options.forEach(opt => addOption(wrap.querySelector('.options-container'), opt));
+    } else {
+      addOption(wrap.querySelector('.options-container'));
+      addOption(wrap.querySelector('.options-container'));
+    }
   }
 
-  function addOption(container) {
+  function addOption(container, value) {
     const div = document.createElement('div');
-    div.className = 'option-row';
+    div.className = 'row';
+    div.style.marginTop = '6px';
     div.innerHTML = `
-      <input type="text" class="opt-text" placeholder="Вариант">
-      <button class="btn outline small" onclick="this.parentElement.remove()">✕</button>
+      <input type="text" class="opt-text" value="${escapeHtml(value || '')}" placeholder="Вариант ответа" style="flex:1; padding:8px; border:1px solid #eef2f6; border-radius:8px;">
+      <button class="btn outline small" onclick="this.closest('.row').remove()">✕</button>
     `;
     container.appendChild(div);
   }
@@ -372,7 +437,7 @@
   async function saveTest() {
     const title = document.getElementById('test-title').value.trim();
     const companyId = localStorage.getItem('b2bCompanyId');
-    const blocks = document.querySelectorAll('.question-block');
+    const blocks = document.querySelectorAll('#questions-container .card');
     const questions = [];
     for (const block of blocks) {
       const text = block.querySelector('.q-text').value.trim();
@@ -384,8 +449,10 @@
       if (!text || options.length < 2) continue;
       questions.push({ text, options, correct: 0, multi: false });
     }
-    if (!title || questions.length === 0) return;
-
+    if (!title || questions.length === 0) {
+      document.getElementById('save-error').textContent = 'Заполните название и хотя бы один вопрос с 2+ вариантами.';
+      return;
+    }
     const res = await fetch('/api/tests', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-company-id': companyId },
@@ -394,7 +461,7 @@
     if (res.ok) showList();
   }
 
-  // --- СЕССИЯ ---
+  // ===== СЕССИЯ =====
   async function startSession(testId) {
     const companyId = localStorage.getItem('b2bCompanyId');
     const res = await fetch('/api/sessions', {
@@ -411,33 +478,37 @@
   }
 
   function openSession(session) {
-    document.getElementById('screen-list').style.display = 'none';
-    document.getElementById('screen-session').style.display = 'block';
+    ['screen-list', 'screen-editor', 'screen-lab-editor', 'screen-session', 'screen-stats'].forEach(id => {
+      document.getElementById(id).classList.add('hidden');
+    });
+    document.getElementById('screen-session').classList.remove('hidden');
     document.getElementById('session-title').textContent = session.testTitle;
     document.getElementById('session-code').textContent = session.code;
     document.getElementById('session-status').className = 'badge live';
     document.getElementById('session-status').textContent = 'Идёт тестирование';
+    document.getElementById('qr-img').src = `/api/sessions/${session.code}/qr`;
+    document.getElementById('session-link').textContent = window.location.origin + '/s/' + session.code;
+    document.getElementById('session-link').href = window.location.origin + '/s/' + session.code;
+    document.getElementById('no-participants').classList.remove('hidden');
+    document.getElementById('results-table').classList.add('hidden');
+    document.getElementById('results-body').innerHTML = '';
   }
 
-  // УТИЛИТЫ
-  function escapeHtml(s) {
-    return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  }
-
-  // Заглушки для остальных функций
+  // ===== УТИЛИТЫ =====
   function switchTab(tab) {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.id === 'tab-btn-' + tab));
     ['tests', 'labs', 'stats'].forEach(t => {
-      document.getElementById('tab-' + t).style.display = t === tab ? 'block' : 'none';
+      document.getElementById('tab-' + t).classList.toggle('hidden', t !== tab);
     });
   }
-  function showTestStats() {}
-  function deleteTest() {}
-  function editTest() {}
-  function exportResults() {}
-  function endSession() {}
-  function showLabEditor() {}
-  function saveLab() {}
+  function escapeHtml(s) {
+    return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function deleteTest(id) { if(confirm('Удалить тест?')) fetch('/api/tests/'+id, {method:'DELETE', headers:{'x-company-id': localStorage.getItem('b2bCompanyId')}}).then(()=>loadTestsList()); }
+  function endSession() { alert('Завершение сессии пока в разработке.'); }
+  function exportResults() { alert('Экспорт в разработке.'); }
+  function showLabEditor() { alert('Редактор тренажёров пока в разработке.'); }
+  function saveLab() { alert('Сохранение тренажёра пока в разработке.'); }
 </script>
 </body>
 </html>
