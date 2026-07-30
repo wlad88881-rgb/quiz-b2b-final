@@ -9,6 +9,7 @@ const { customAlphabet } = require('nanoid');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
 const db = require('./db');
+const { SEED_LABS } = require('./labs-content');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -498,3 +499,315 @@ function caseForClient(lab, assignment) {
   return {
     title: v.title,
     vibration: v.vibration,
+    temp: v.temp,
+    sound: v.sound,
+    options: shuffleArr(buildOptionsPool(lab))
+  };
+}
+
+app.get('/api/labs', checkAuth, (req, res) => {
+  const data = db.load();
+  const list = Object.values(data.labs).map(l => ({
+    id: l.id,
+    title: l.title,
+    intro: l.intro,
+    faultCount: l.faults.length
+  }));
+  res.json(list);
+});
+
+app.get('/api/labs/:id', checkAuth, (req, res) => {
+  const data = db.load();
+  const lab = data.labs[req.params.id];
+  if (!lab) return res.status(404).json({ error: 'Тренажёр не найден' });
+  res.json(lab);
+});
+
+function validateLabPayload(body) {
+  const { title, faults } = body;
+  if (!title || !title.trim()) return 'Введите название тренажёра';
+  if (!Array.isArray(faults) || faults.length === 0) return 'Добавьте хотя бы одну неисправность';
+  for (const f of faults) {
+    if (!f.label || !f.label.trim()) return 'У каждой неисправности должно быть название диагноза';
+    if (!f.explain || !f.explain.trim()) return 'У каждой неисправности должно быть объяснение';
+    if (!Array.isArray(f.variations) || f.variations.length === 0) {
+      return `У неисправности «${f.label}» должна быть хотя бы одна вариация показаний`;
+    }
+    for (const v of f.variations) {
+      if (!v.title || !v.vibration || !v.vibration.value || !v.temp || !v.temp.value || !v.sound || !v.sound.type) {
+        return `Заполните все поля показаний в вариациях для «${f.label}»`;
+      }
+    }
+  }
+  return null;
+}
+
+app.post('/api/labs', checkAuth, async (req, res) => {
+  const err = validateLabPayload(req.body);
+  if (err) return res.status(400).json({ error: err });
+  const id = participantId();
+  const lab = {
+    id,
+    companyId: req.companyId,
+    title: req.body.title.trim(),
+    intro: (req.body.intro || '').trim(),
+    faults: req.body.faults.map((f, fi) => ({
+      id: f.id || ('f' + fi + '_' + id),
+      label: f.label.trim(),
+      explain: f.explain.trim(),
+      variations: f.variations.map(v => ({
+        title: v.title.trim(),
+        vibration: { value: v.vibration.value.trim(), desc: (v.vibration.desc || '').trim() },
+        temp: { value: v.temp.value.trim(), desc: (v.temp.desc || '').trim() },
+        sound: { type: v.sound.type, desc: (v.sound.desc || '').trim() }
+      }))
+    })),
+    createdAt: Date.now(),
+    custom: true
+  };
+  await db.update((d) => { d.labs[id] = lab; });
+  res.json(lab);
+});
+
+app.put('/api/labs/:id', checkAuth, async (req, res) => {
+  const err = validateLabPayload(req.body);
+  if (err) return res.status(400).json({ error: err });
+  const result = await db.update((d) => {
+    const existing = d.labs[req.params.id];
+    if (!existing || existing.companyId !== req.companyId) return null;
+    existing.title = req.body.title.trim();
+    existing.intro = (req.body.intro || '').trim();
+    existing.faults = req.body.faults.map((f, fi) => ({
+      id: f.id || ('f' + fi + '_' + req.params.id),
+      label: f.label.trim(),
+      explain: f.explain.trim(),
+      variations: f.variations.map(v => ({
+        title: v.title.trim(),
+        vibration: { value: v.vibration.value.trim(), desc: (v.vibration.desc || '').trim() },
+        temp: { value: v.temp.value.trim(), desc: (v.temp.desc || '').trim() },
+        sound: { type: v.sound.type, desc: (v.sound.desc || '').trim() }
+      }))
+    }));
+    return existing;
+  });
+  if (!result) return res.status(404).json({ error: 'Тренажёр не найден' });
+  res.json(result);
+});
+
+app.delete('/api/labs/:id', checkAuth, async (req, res) => {
+  await db.update((d) => {
+    const lab = d.labs[req.params.id];
+    if (lab && lab.companyId === req.companyId) {
+      delete d.labs[req.params.id];
+    }
+  });
+  res.json({ ok: true });
+});
+
+app.post('/api/lab-sessions', checkAuth, checkPlanLimits, async (req, res) => {
+  const { labId } = req.body;
+  const data = db.load();
+  const lab = data.labs[labId];
+  if (!lab || lab.companyId !== req.companyId) return res.status(404).json({ error: 'Тренажёр не найден' });
+  let code;
+  do { code = nanoid(); } while (data.sessions[code]);
+  const session = {
+    code,
+    companyId: req.companyId,
+    type: 'lab',
+    labId,
+    testTitle: lab.title,
+    startedAt: Date.now(),
+    ended: false,
+    participants: {}
+  };
+  await db.update((d) => { d.sessions[code] = session; });
+  const url = `${getBaseUrl()}/l/${code}`;
+  const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
+  res.json({ session, url, qrDataUrl });
+});
+
+app.get('/api/lab-sessions/:code', checkAuth, (req, res) => {
+  const data = db.load();
+  const session = data.sessions[req.params.code];
+  if (!session || session.companyId !== req.companyId || session.type !== 'lab') {
+    return res.status(404).json({ error: 'Сессия не найдена' });
+  }
+  res.json(session);
+});
+
+app.get('/api/lab-sessions/:code/info', checkAuth, (req, res) => {
+  const data = db.load();
+  const session = data.sessions[req.params.code];
+  if (!session || session.companyId !== req.companyId || session.type !== 'lab') return res.status(404).json({ error: 'Сессия не найдена' });
+  if (session.ended) return res.status(410).json({ error: 'Тренажёр завершён' });
+  const lab = data.labs[session.labId];
+  res.json({ testTitle: session.testTitle, intro: lab ? lab.intro : '' });
+});
+
+app.post('/api/lab-sessions/:code/join', async (req, res) => {
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Введите имя' });
+  const data = db.load();
+  const session = data.sessions[req.params.code];
+  if (!session || session.type !== 'lab') return res.status(404).json({ error: 'Сессия не найдена' });
+  if (session.ended) return res.status(410).json({ error: 'Тренажёр завершён' });
+  const lab = data.labs[session.labId];
+  if (!lab) return res.status(404).json({ error: 'Тренажёр не найден' });
+  const pid = participantId();
+  const caseAssignment = assignCases(lab);
+  const participant = {
+    id: pid,
+    name: name.trim(),
+    joinedAt: Date.now(),
+    caseAssignment,
+    finished: false,
+    score: null,
+    total: null
+  };
+  await db.update((d) => { d.sessions[req.params.code].participants[pid] = participant; });
+  io.to('session:' + req.params.code).emit('participant:joined', participant);
+  res.json({
+    participantId: pid,
+    testTitle: lab.title,
+    cases: caseAssignment.map(a => caseForClient(lab, a))
+  });
+});
+
+app.post('/api/lab-sessions/:code/submit', async (req, res) => {
+  const { participantId: pid, answers } = req.body;
+  const data = db.load();
+  const session = data.sessions[req.params.code];
+  if (!session || session.type !== 'lab') return res.status(404).json({ error: 'Сессия не найдена' });
+  const participant = session.participants[pid];
+  if (!participant) return res.status(404).json({ error: 'Участник не найден' });
+  if (participant.finished) return res.status(400).json({ error: 'Тренажёр уже сдан' });
+  const lab = data.labs[session.labId];
+  let score = 0;
+  const total = participant.caseAssignment.length;
+  const review = [];
+  participant.caseAssignment.forEach((assignment, i) => {
+    const fault = lab.faults.find(f => f.id === assignment.faultId);
+    const v = fault.variations[assignment.variationIndex];
+    const given = answers ? answers[i] : undefined;
+    const isCorrect = given === assignment.faultId;
+    if (isCorrect) score++;
+    review.push({
+      title: v.title,
+      vibration: v.vibration,
+      temp: v.temp,
+      sound: v.sound,
+      options: buildOptionsPool(lab),
+      given,
+      correct: assignment.faultId,
+      correctLabel: fault.label,
+      isCorrect,
+      explain: fault.explain
+    });
+  });
+  const result = await db.update((d) => {
+    const p = d.sessions[req.params.code].participants[pid];
+    p.finished = true;
+    p.finishedAt = Date.now();
+    p.score = score;
+    p.total = total;
+    p.review = review;
+    return p;
+  });
+  io.to('session:' + req.params.code).emit('participant:finished', result);
+  res.json({ score, total, review });
+});
+
+app.post('/api/lab-sessions/:code/end', checkAuth, async (req, res) => {
+  await db.update((d) => {
+    const s = d.sessions[req.params.code];
+    if (s && s.companyId === req.companyId) {
+      s.ended = true;
+    }
+  });
+  io.to('session:' + req.params.code).emit('session:ended');
+  res.json({ ok: true });
+});
+
+app.get('/api/lab-sessions/:code/export', checkAuth, (req, res) => {
+  const data = db.load();
+  const session = data.sessions[req.params.code];
+  if (!session || session.companyId !== req.companyId || session.type !== 'lab') return res.status(404).send('Сессия не найдена');
+  const lab = data.labs[session.labId];
+  const rows = Object.values(session.participants).map(p => {
+    const row = {
+      'Имя': p.name,
+      'Баллы': p.score !== null ? p.score : '—',
+      'Всего случаев': p.total !== null ? p.total : '—',
+      'Процент': p.total ? Math.round((p.score / p.total) * 100) + '%' : '—',
+      'Статус': p.finished ? 'Завершил' : 'В процессе'
+    };
+    if (p.review) {
+      p.review.forEach((c, i) => {
+        row[`Случай ${i + 1}: ${c.title}`] = c.isCorrect ? 'Верно' : `Неверно (${c.correctLabel})`;
+      });
+    }
+    return row;
+  });
+  const faultStats = {};
+  if (lab) lab.faults.forEach(f => { faultStats[f.label] = { wrong: 0, total: 0 }; });
+  Object.values(session.participants).forEach(p => {
+    if (!p.review) return;
+    p.review.forEach(c => {
+      if (!faultStats[c.correctLabel]) faultStats[c.correctLabel] = { wrong: 0, total: 0 };
+      faultStats[c.correctLabel].total++;
+      if (!c.isCorrect) faultStats[c.correctLabel].wrong++;
+    });
+  });
+  const summaryRows = Object.entries(faultStats).map(([label, s]) => ({
+    'Тип неисправности': label,
+    'Ошибок': s.wrong,
+    'Всего показов': s.total,
+    'Доля ошибок': s.total ? Math.round((s.wrong / s.total) * 100) + '%' : '—'
+  }));
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, ws, 'Результаты');
+  const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Проблемные типы');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', `attachment; filename="lab_results_${req.params.code}.xlsx"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
+});
+
+app.get('/l/:code', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'lab-student.html'));
+});
+
+app.get('/s/:code', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'student.html'));
+});
+
+io.on('connection', (socket) => {
+  socket.on('teacher:watch', (code) => {
+    socket.join('session:' + code);
+  });
+});
+
+async function seedLabs() {
+  await db.update((d) => {
+    if (!d.labs) d.labs = {};
+    SEED_LABS.forEach(l => { d.labs[l.id] = l; });
+  });
+  console.log(`[labs] Синхронизировано тренажёров: ${SEED_LABS.length}`);
+}
+
+async function start() {
+  await db.initCache();
+  await seedLabs();
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log('');
+    console.log('=== Приложение для тестирования запущено ===');
+    console.log(`Панель преподавателя: http://localhost:${PORT}`);
+    console.log(`Публичный адрес (для QR): ${getBaseUrl()}`);
+    console.log('==============================================');
+  });
+}
+
+start();
