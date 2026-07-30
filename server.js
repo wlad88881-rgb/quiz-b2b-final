@@ -798,7 +798,16 @@ async function seedLabs() {
   console.log(`[labs] Синхронизировано тренажёров: ${SEED_LABS.length}`);
 }
 
-async function start() {
+// ==================== QR-КОД И ЭКСПОРТ ====================
+app.get('/api/sessions/:code/qr', async (req, res) => {
+  const data = db.load();
+  const session = data.sessions[req.params.code];
+  if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
+  const url = `${getBaseUrl()}/s/${req.params.code}`;
+  const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
+  res.setHeader('Content-Type', 'image/png');
+  res.send(Buffer.from(qrDataUrl.split(',')[1], 'base64'));
+});async function start() {
   await db.initCache();
   await seedLabs();
   server.listen(PORT, '0.0.0.0', () => {
