@@ -241,31 +241,6 @@ app.post('/api/import-questions', checkAuth, upload.single('file'), (req, res) =
   res.json({ questions, skipped });
 });
 
-// ==================== СЕССИИ ====================
-
-app.post('/api/sessions', checkAuth, async (req, res) => {
-  const { testId } = req.body;
-  const data = db.load();
-  const test = data.tests[testId];
-  if (!test || test.companyId !== req.companyId) return res.status(404).json({ error: 'Тест не найден' });
-  let code;
-  do { code = nanoid(); } while (data.sessions[code]);
-  const session = {
-    code,
-    companyId: req.companyId,
-    testId,
-    testTitle: test.title,
-    timeLimit: req.body.timeLimit || null,
-    startedAt: Date.now(),
-    ended: false,
-    participants: {}
-  };
-  await db.update((d) => { d.sessions[code] = session; });
-  const url = `${getBaseUrl()}/s/${code}`;
-  const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
-  res.json({ session, url, qrDataUrl });
-});
-
 // ==================== СТАТИСТИКА ====================
 
 app.get('/api/tests/:id/stats', checkAuth, (req, res) => {
@@ -311,7 +286,7 @@ app.get('/api/tests/:id/stats', checkAuth, (req, res) => {
   res.json({ test: { id: test.id, title: test.title }, sessionStats, questionStats });
 });
 
-// ==================== QR-КОД (ОТДЕЛЬНЫЙ МАРШРУТ) ====================
+// ==================== QR-КОД (ОТДЕЛЬНЫЙ МАРШРУТ ДЛЯ КАРТИНКИ) ====================
 app.get('/api/sessions/:code/qr', async (req, res) => {
   const data = db.load();
   const session = data.sessions[req.params.code];
@@ -320,6 +295,140 @@ app.get('/api/sessions/:code/qr', async (req, res) => {
   const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
   res.setHeader('Content-Type', 'image/png');
   res.send(Buffer.from(qrDataUrl.split(',')[1], 'base64'));
+});
+
+// ==================== СЕССИИ ====================
+
+app.post('/api/sessions', checkAuth, async (req, res) => {
+  const { testId } = req.body;
+  const data = db.load();
+  const test = data.tests[testId];
+  if (!test || test.companyId !== req.companyId) return res.status(404).json({ error: 'Тест не найден' });
+  let code;
+  do { code = nanoid(); } while (data.sessions[code]);
+  const session = {
+    code,
+    companyId: req.companyId,
+    testId,
+    testTitle: test.title,
+    timeLimit: req.body.timeLimit || null,
+    startedAt: Date.now(),
+    ended: false,
+    participants: {}
+  };
+  await db.update((d) => { d.sessions[code] = session; });
+  const url = `${getBaseUrl()}/s/${code}`;
+  const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
+  res.json({ session, url, qrDataUrl });
+});
+
+app.post('/api/sessions/:code/join', async (req, res) => {
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Введите имя' });
+  const data = db.load();
+  const session = data.sessions[req.params.code];
+  if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
+  if (session.ended) return res.status(410).json({ error: 'Тестирование завершено' });
+  const pid = participantId();
+  const participant = {
+    id: pid,
+    name: name.trim(),
+    joinedAt: Date.now(),
+    answers: {},
+    finished: false,
+    score: null,
+    total: null
+  };
+  await db.update((d) => { d.sessions[req.params.code].participants[pid] = participant; });
+  io.to('session:' + req.params.code).emit('participant:joined', participant);
+  res.json({ participantId: pid });
+});
+
+app.post('/api/sessions/:code/submit', async (req, res) => {
+  const { participantId: pid, answers } = req.body;
+  const data = db.load();
+  const session = data.sessions[req.params.code];
+  if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
+  const participant = session.participants[pid];
+  if (!participant) return res.status(404).json({ error: 'Участник не найден' });
+  if (participant.finished) return res.status(400).json({ error: 'Тест уже сдан' });
+  const test = data.tests[session.testId];
+  let score = 0;
+  const total = test.questions.length;
+  const detail = {};
+  for (const q of test.questions) {
+    const given = answers[q.id];
+    let isCorrect = false;
+    if (q.multi) {
+      const correctSet = JSON.stringify([...q.correct].sort());
+      const givenSet = JSON.stringify([...(given || [])].sort());
+      isCorrect = correctSet === givenSet;
+    } else {
+      isCorrect = given === q.correct;
+    }
+    if (isCorrect) score++;
+    detail[q.id] = { given, correct: q.correct, isCorrect };
+  }
+  const result = await db.update((d) => {
+    const p = d.sessions[req.params.code].participants[pid];
+    p.answers = detail;
+    p.finished = true;
+    p.finishedAt = Date.now();
+    p.score = score;
+    p.total = total;
+    return p;
+  });
+  const review = test.questions.map(q => ({
+    text: q.text,
+    options: q.options,
+    multi: q.multi,
+    given: detail[q.id].given,
+    correct: detail[q.id].correct,
+    isCorrect: detail[q.id].isCorrect
+  }));
+  io.to('session:' + req.params.code).emit('participant:finished', result);
+  res.json({ score, total, review });
+});
+
+app.post('/api/sessions/:code/end', checkAuth, async (req, res) => {
+  await db.update((d) => {
+    const s = d.sessions[req.params.code];
+    if (s && s.companyId === req.companyId) {
+      s.ended = true;
+    }
+  });
+  io.to('session:' + req.params.code).emit('session:ended');
+  res.json({ ok: true });
+});
+
+app.get('/api/sessions/:code/export', checkAuth, (req, res) => {
+  const data = db.load();
+  const session = data.sessions[req.params.code];
+  if (!session || session.companyId !== req.companyId) return res.status(404).send('Сессия не найдена');
+  const test = data.tests[session.testId];
+  const rows = Object.values(session.participants).map(p => {
+    const row = {
+      'Имя': p.name,
+      'Баллы': p.score !== null ? p.score : '—',
+      'Всего вопросов': p.total !== null ? p.total : '—',
+      'Процент': p.total ? Math.round((p.score / p.total) * 100) + '%' : '—',
+      'Статус': p.finished ? 'Завершил' : 'В процессе'
+    };
+    if (test) {
+      test.questions.forEach((q, i) => {
+        const d = p.answers[q.id];
+        row[`В${i + 1}: ${q.text}`] = d ? (d.isCorrect ? 'Верно' : 'Неверно') : '—';
+      });
+    }
+    return row;
+  });
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, ws, 'Результаты');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', `attachment; filename="results_${req.params.code}.xlsx"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
 });
 
 // ==================== ЛАБОРАТОРИИ ====================
