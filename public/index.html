@@ -39,13 +39,16 @@
     #session-link { font-size: 12px; word-break: break-all; color: #F07C00; text-decoration: underline; }
     .error { color: #d64545; margin-top: 6px; font-size: 14px; }
     
-    #results-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-    #results-table th, #results-table td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
-    #results-table th { font-weight: 600; background: #f8f9fa; }
+    #results-table, #stats-sessions-table, #stats-questions-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13.5px; }
+    #results-table th, #results-table td,
+    #stats-sessions-table th, #stats-sessions-table td,
+    #stats-questions-table th, #stats-questions-table td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
+    #results-table th, #stats-sessions-table th, #stats-questions-table th { font-weight: 600; background: #f8f9fa; }
 
-    input[type="text"], input[type="email"], input[type="password"], textarea { 
-      width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 10px; font-size: 15px; 
+    input[type="text"], input[type="email"], input[type="password"], textarea, select { 
+      width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 10px; font-size: 15px; font-family: inherit;
     }
+    textarea { resize: vertical; }
     .question-block { background: #fafbfc; border: 1px solid #eee; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
     .option-row { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
     .option-row input[type="text"] { flex: 1; margin-bottom: 0; }
@@ -60,8 +63,17 @@
     <div class="user-info">
       <div class="user-email" id="company-display">Компания</div>
       <span class="user-plan" id="plan-badge">Free</span>
+      <span class="muted" id="usage-badge" style="font-size:12px;"></span>
     </div>
     <button class="btn outline small" onclick="logout()">Выход</button>
+  </div>
+
+  <!-- Экран блокировки / окончания пробного периода -->
+  <div id="blocked-screen" class="hidden" style="text-align:center; padding:50px 20px;">
+    <div style="font-size:40px; margin-bottom:10px;">🔒</div>
+    <h2 style="color:#2C3E50; margin-bottom:12px;">Доступ ограничен</h2>
+    <p class="muted" id="blocked-message" style="max-width:420px; margin:0 auto 20px; line-height:1.5;"></p>
+    <button class="btn outline" onclick="logout()">Выйти</button>
   </div>
 
   <!-- Экран входа -->
@@ -104,6 +116,30 @@
         </div>
         <h2 style="font-size:18px; margin-bottom:12px;">Мои тренажёры</h2>
         <div id="labs-list"></div>
+      </div>
+      <div id="tab-stats" class="hidden">
+        <h2 style="font-size:18px; margin-bottom:12px;">Статистика по тестам</h2>
+        <div id="stats-tests-list"></div>
+        <div id="stats-detail" class="hidden">
+          <div class="row between" style="margin-bottom:12px;">
+            <button class="btn outline small" onclick="showStatsList()">← К списку тестов</button>
+            <button class="btn danger small" onclick="clearTestHistory()">Очистить историю</button>
+          </div>
+          <h3 id="stats-test-title" style="color:#2C3E50; margin-bottom:14px;"></h3>
+
+          <div class="muted" style="font-weight:600; margin-bottom:6px;">Сессии</div>
+          <table id="stats-sessions-table" style="margin-bottom:20px;">
+            <thead><tr><th>Код</th><th>Дата</th><th>Участников</th><th>Завершили</th><th>Средний балл</th><th>Статус</th></tr></thead>
+            <tbody id="stats-sessions-body"></tbody>
+          </table>
+          <div class="muted" id="stats-sessions-empty" style="padding:16px 0; text-align:center;"></div>
+
+          <div class="muted" style="font-weight:600; margin-bottom:6px;">Вопросы по проценту ошибок (сначала самые сложные)</div>
+          <table id="stats-questions-table">
+            <thead><tr><th>Вопрос</th><th>Верно / Всего</th><th>% ошибок</th></tr></thead>
+            <tbody id="stats-questions-body"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -200,11 +236,12 @@
     });
     const data = await res.json();
     if (!res.ok) {
-      errorEl.textContent = data.error || 'Ошибка';
+      errorEl.textContent = (data.error === 'BLOCKED' || data.error === 'TRIAL_ENDED') ? (data.message || 'Ошибка') : (data.error || 'Ошибка');
       errorEl.style.display = 'block';
       return;
     }
     localStorage.setItem('b2bCompanyId', data.companyId);
+    localStorage.setItem('b2bToken', data.token);
     localStorage.setItem('b2bEmail', data.email);
     localStorage.setItem('b2bPlan', data.plan);
     if (isRegisterMode) {
@@ -216,9 +253,11 @@
   }
 
   function enterApp() {
+    document.getElementById('blocked-screen').classList.add('hidden');
     document.getElementById('auth-screen').classList.add('hidden');
     document.getElementById('screen-main').classList.remove('hidden');
     document.getElementById('company-display').textContent = localStorage.getItem('b2bEmail') || 'Компания';
+    refreshMe();
     loadTestsList();
   }
 
@@ -227,14 +266,60 @@
     location.reload();
   }
 
+  function showBlockedScreen(message) {
+    document.getElementById('auth-screen').classList.add('hidden');
+    document.getElementById('screen-main').classList.add('hidden');
+    document.getElementById('blocked-message').textContent = message || 'Доступ временно недоступен.';
+    document.getElementById('blocked-screen').classList.remove('hidden');
+  }
+
+  // Обёртка над fetch: подставляет токен компании и централизованно обрабатывает
+  // блокировку/окончание пробного периода (ошибки BLOCKED / TRIAL_ENDED).
+  async function authFetch(url, options) {
+    const token = localStorage.getItem('b2bToken');
+    const opts = options || {};
+    opts.headers = Object.assign({}, opts.headers, { 'x-company-id': token });
+    const res = await fetch(url, opts);
+    if (res.status === 403) {
+      let data = {};
+      try { data = await res.clone().json(); } catch (e) {}
+      if (data.error === 'BLOCKED' || data.error === 'TRIAL_ENDED') {
+        showBlockedScreen(data.message);
+      }
+    }
+    return res;
+  }
+
+  async function refreshMe() {
+    const res = await authFetch('/api/me');
+    if (!res.ok) return;
+    const data = await res.json();
+    localStorage.setItem('b2bPlan', data.plan);
+    const planBadge = document.getElementById('plan-badge');
+    planBadge.textContent = data.plan === 'free' ? 'Пробный тариф' : 'Полный доступ';
+    planBadge.style.background = data.plan === 'free' ? '#fff3e0' : '#e6f4ea';
+    planBadge.style.color = data.plan === 'free' ? '#F07C00' : '#2e9e4f';
+    const usageBadge = document.getElementById('usage-badge');
+    if (data.plan === 'free') {
+      usageBadge.textContent = `Прохождений: ${data.usage.submissions}/${data.usage.submissionsLimit}`;
+    } else {
+      usageBadge.textContent = '';
+    }
+  }
+
   document.addEventListener('DOMContentLoaded', async () => {
-    const savedId = localStorage.getItem('b2bCompanyId');
-    if (savedId) {
-      const res = await fetch('/api/me', { headers: { 'x-company-id': savedId } });
+    const savedToken = localStorage.getItem('b2bToken');
+    if (savedToken) {
+      const res = await fetch('/api/me', { headers: { 'x-company-id': savedToken } });
       if (res.ok) {
         const data = await res.json();
         localStorage.setItem('b2bPlan', data.plan);
         enterApp();
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && (data.error === 'BLOCKED' || data.error === 'TRIAL_ENDED')) {
+        showBlockedScreen(data.message);
         return;
       }
     }
@@ -250,8 +335,7 @@
   }
 
   async function loadTestsList() {
-    const companyId = localStorage.getItem('b2bCompanyId');
-    const res = await fetch('/api/tests', { headers: { 'x-company-id': companyId } });
+    const res = await authFetch('/api/tests');
     if (!res.ok) return;
     const tests = await res.json();
     const container = document.getElementById('tests-list');
@@ -278,6 +362,9 @@
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.id === 'tab-btn-' + tab));
     document.getElementById('tab-tests').classList.toggle('hidden', tab !== 'tests');
     document.getElementById('tab-labs').classList.toggle('hidden', tab !== 'labs');
+    document.getElementById('tab-stats').classList.toggle('hidden', tab !== 'stats');
+    if (tab === 'labs') loadLabsList();
+    if (tab === 'stats') showStatsList();
   }
 
   // РЕДАКТОР
@@ -295,8 +382,7 @@
   }
 
   async function editTest(id) {
-    const companyId = localStorage.getItem('b2bCompanyId');
-    const res = await fetch('/api/tests/' + id, { headers: { 'x-company-id': companyId } });
+    const res = await authFetch('/api/tests/' + id);
     const test = await res.json();
     editingTestId = id;
     document.getElementById('editor-title').textContent = 'Редактирование';
@@ -349,7 +435,6 @@
 
   async function saveTest() {
     const title = document.getElementById('test-title').value.trim();
-    const companyId = localStorage.getItem('b2bCompanyId');
     const errorEl = document.getElementById('save-error');
     errorEl.textContent = '';
     if (!title) { errorEl.textContent = 'Введите название'; return; }
@@ -378,17 +463,21 @@
     const payload = { title, questions };
     const url = editingTestId ? '/api/tests/' + editingTestId : '/api/tests';
     const method = editingTestId ? 'PUT' : 'POST';
-    const res = await fetch(url, {
+    const res = await authFetch(url, {
       method,
-      headers: { 'Content-Type': 'application/json', 'x-company-id': companyId },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    if (res.ok) showList();
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) { showList(); return; }
+    if (res.status !== 403 || (data.error !== 'BLOCKED' && data.error !== 'TRIAL_ENDED')) {
+      errorEl.textContent = data.error || 'Ошибка сохранения теста';
+    }
   }
 
   function downloadTemplate() {
-    const companyId = localStorage.getItem('b2bCompanyId');
-    window.location.href = '/api/import-template?companyId=' + encodeURIComponent(companyId);
+    const token = localStorage.getItem('b2bToken');
+    window.location.href = '/api/import-template?companyId=' + encodeURIComponent(token);
   }
 
   // ИМПОРТ ИЗ EXCEL
@@ -396,14 +485,12 @@
     const fileInput = document.getElementById('import-file');
     const file = fileInput.files[0];
     if (!file) return;
-    const companyId = localStorage.getItem('b2bCompanyId');
     const formData = new FormData();
     formData.append('file', file);
     let res, data;
     try {
-      res = await fetch('/api/import-questions', {
+      res = await authFetch('/api/import-questions', {
         method: 'POST',
-        headers: { 'x-company-id': companyId },
         body: formData
       });
       data = await res.json();
@@ -436,6 +523,7 @@
   // СЕССИЯ
   let pendingTestId = null;
   let currentSessionCode = null;
+  let currentSessionType = 'test'; // 'test' | 'lab'
   let socket = null;
 
   function startSession(testId) {
@@ -462,17 +550,17 @@
     }
     const testId = pendingTestId;
     closeSessionModal();
-    const companyId = localStorage.getItem('b2bCompanyId');
-    const res = await fetch('/api/sessions', {
+    const res = await authFetch('/api/sessions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-company-id': companyId },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ testId, timeLimit })
     });
     const data = await res.json();
     if (!res.ok) {
-      alert(data.error || 'Ошибка');
+      if (res.status !== 403 || (data.error !== 'BLOCKED' && data.error !== 'TRIAL_ENDED')) alert(data.error || 'Ошибка');
       return;
     }
+    currentSessionType = 'test';
     openSession(data.session, data.url, data.qrDataUrl);
   }
 
@@ -522,19 +610,14 @@
 
   function deleteTest(id) {
     if (!confirm('Удалить тест?')) return;
-    const companyId = localStorage.getItem('b2bCompanyId');
-    fetch('/api/tests/' + id, { method: 'DELETE', headers: { 'x-company-id': companyId } })
-      .then(() => loadTestsList());
+    authFetch('/api/tests/' + id, { method: 'DELETE' }).then(() => loadTestsList());
   }
 
   async function endSession() {
     if (!currentSessionCode) return;
-    if (!confirm('Завершить тестирование? Студенты больше не смогут отправлять ответы.')) return;
-    const companyId = localStorage.getItem('b2bCompanyId');
-    await fetch('/api/sessions/' + currentSessionCode + '/end', {
-      method: 'POST',
-      headers: { 'x-company-id': companyId }
-    });
+    if (!confirm('Завершить тестирование? Участники больше не смогут отправлять ответы.')) return;
+    const endpoint = currentSessionType === 'lab' ? '/api/lab-sessions/' : '/api/sessions/';
+    await authFetch(endpoint + currentSessionCode + '/end', { method: 'POST' });
     document.getElementById('session-status').textContent = 'Завершено';
     document.getElementById('session-status').classList.remove('live');
     document.getElementById('end-session-btn').disabled = true;
@@ -542,14 +625,287 @@
 
   function exportResults() {
     if (!currentSessionCode) return;
-    const companyId = localStorage.getItem('b2bCompanyId');
-    window.location.href = '/api/sessions/' + currentSessionCode + '/export?companyId=' + encodeURIComponent(companyId);
+    const token = localStorage.getItem('b2bToken');
+    const endpoint = currentSessionType === 'lab' ? '/api/lab-sessions/' : '/api/sessions/';
+    window.location.href = endpoint + currentSessionCode + '/export?companyId=' + encodeURIComponent(token);
   }
 
-  function showLabEditor() { alert('Раздел «Тренажёры» находится в разработке.'); }
-
   function escapeHtml(s) {
-    return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    return (s || '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ==================== ТРЕНАЖЁРЫ ====================
+
+  const SOUND_TYPES = [
+    { value: 'grinding', label: 'Скрежещущий, с потрескиванием' },
+    { value: 'clicking', label: 'Периодические щелчки' },
+    { value: 'hum_axial', label: 'Гул с пульсацией (осевой)' },
+    { value: 'knocking', label: 'Глухой стук' },
+    { value: 'rattling', label: 'Дребезжание' },
+    { value: 'whistling', label: 'Свист' },
+    { value: 'squealing', label: 'Визг' },
+    { value: 'buzzing', label: 'Жужжание' }
+  ];
+
+  async function loadLabsList() {
+    const res = await authFetch('/api/labs');
+    if (!res.ok) return;
+    const labs = await res.json();
+    const container = document.getElementById('labs-list');
+    if (labs.length === 0) {
+      container.innerHTML = '<div class="muted" style="padding:30px 0; text-align:center;">Тренажёров пока нет.</div>';
+      return;
+    }
+    container.innerHTML = labs.map(l => `
+      <div class="card row between">
+        <div>
+          <strong>${escapeHtml(l.title)}</strong>${l.shared ? ' <span class="badge live" style="background:#eef4fb;color:#2C3E50;">общий</span>' : ''}
+          <div class="muted">${l.faultCount} неисправност${l.faultCount === 1 ? 'ь' : (l.faultCount < 5 ? 'и' : 'ей')}</div>
+        </div>
+        <div class="row">
+          <button class="btn small" onclick="startLabSession('${l.id}')">Начать сессию</button>
+          ${l.shared ? '' : `<button class="btn outline small" onclick="editLab('${l.id}')">Изменить</button>
+          <button class="btn danger small" onclick="deleteLab('${l.id}')">Удалить</button>`}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  let editingLabId = null;
+
+  function showLabEditor() {
+    editingLabId = null;
+    renderLabEditor({ title: '', intro: '', faults: [] });
+  }
+
+  async function editLab(id) {
+    const res = await authFetch('/api/labs/' + id);
+    if (!res.ok) return;
+    const lab = await res.json();
+    editingLabId = id;
+    renderLabEditor(lab);
+  }
+
+  function renderLabEditor(lab) {
+    document.getElementById('screen-list').classList.add('hidden');
+    document.getElementById('screen-editor').classList.add('hidden');
+    document.getElementById('screen-session').classList.add('hidden');
+    let editor = document.getElementById('screen-lab-editor');
+    if (!editor) {
+      editor = document.createElement('div');
+      editor.id = 'screen-lab-editor';
+      document.getElementById('screen-main').appendChild(editor);
+    }
+    editor.innerHTML = `
+      <div class="row between" style="margin-bottom:12px;">
+        <h2 style="margin:0;">${editingLabId ? 'Редактирование тренажёра' : 'Новый тренажёр'}</h2>
+        <button class="btn outline small" onclick="closeLabEditor()">Отмена</button>
+      </div>
+      <input type="text" id="lab-title" placeholder="Название тренажёра" value="${escapeHtml(lab.title || '')}">
+      <textarea id="lab-intro" placeholder="Краткое вступление для студента (необязательно)" style="min-height:60px;">${escapeHtml(lab.intro || '')}</textarea>
+      <div id="faults-container"></div>
+      <button class="btn outline small" onclick="addFault()">+ Неисправность</button>
+      <button class="btn" style="margin-top:14px;" onclick="saveLab()">Сохранить тренажёр</button>
+      <div id="lab-save-error" class="error"></div>
+    `;
+    editor.classList.remove('hidden');
+    const faultsContainer = editor.querySelector('#faults-container');
+    faultsContainer.innerHTML = '';
+    (lab.faults || []).forEach(f => addFault(f));
+    if (!lab.faults || lab.faults.length === 0) addFault();
+  }
+
+  function closeLabEditor() {
+    const editor = document.getElementById('screen-lab-editor');
+    if (editor) editor.classList.add('hidden');
+    document.getElementById('screen-list').classList.remove('hidden');
+    switchTab('labs');
+  }
+
+  function addFault(existing) {
+    const wrap = document.createElement('div');
+    wrap.className = 'question-block';
+    wrap.innerHTML = `
+      <div class="row between">
+        <label style="font-weight:700; color:#2C3E50;">Неисправность</label>
+        <button class="btn outline small" onclick="this.closest('.question-block').remove()">✕</button>
+      </div>
+      <input type="text" class="fault-label" placeholder="Название диагноза (например, «Недостаток смазки»)" value="${existing ? escapeHtml(existing.label) : ''}">
+      <textarea class="fault-explain" placeholder="Объяснение для разбора после сдачи" style="min-height:50px;">${existing ? escapeHtml(existing.explain) : ''}</textarea>
+      <div class="variations-container"></div>
+      <button class="btn outline small" style="margin-top:6px;" onclick="addVariation(this.closest('.question-block'))">+ Вариация показаний</button>
+    `;
+    document.getElementById('faults-container').appendChild(wrap);
+    const varContainer = wrap.querySelector('.variations-container');
+    (existing ? existing.variations : []).forEach(v => addVariation(wrap, v));
+    if (!existing || !existing.variations || existing.variations.length === 0) addVariation(wrap);
+  }
+
+  function addVariation(faultBlock, existing) {
+    const div = document.createElement('div');
+    div.className = 'card';
+    div.style.background = '#fafbfc';
+    const soundOptions = SOUND_TYPES.map(s => `<option value="${s.value}" ${existing && existing.sound && existing.sound.type === s.value ? 'selected' : ''}>${s.label}</option>`).join('');
+    div.innerHTML = `
+      <div class="row between">
+        <label class="muted" style="font-weight:600;">Вариация показаний</label>
+        <button class="btn outline small" onclick="this.closest('.card').remove()">✕</button>
+      </div>
+      <input type="text" class="v-title" placeholder="Название узла (например, «Узел №14 — опорный подшипник»)" value="${existing ? escapeHtml(existing.title) : ''}">
+      <div class="row">
+        <input type="text" class="v-vib-value" placeholder="Вибрация, значение (например, 8,2 мм/с)" style="flex:1;" value="${existing ? escapeHtml(existing.vibration.value) : ''}">
+        <input type="text" class="v-vib-desc" placeholder="Вибрация, описание" style="flex:1;" value="${existing ? escapeHtml(existing.vibration.desc || '') : ''}">
+      </div>
+      <div class="row">
+        <input type="text" class="v-temp-value" placeholder="Температура, значение (например, +6 °C)" style="flex:1;" value="${existing ? escapeHtml(existing.temp.value) : ''}">
+        <input type="text" class="v-temp-desc" placeholder="Температура, описание" style="flex:1;" value="${existing ? escapeHtml(existing.temp.desc || '') : ''}">
+      </div>
+      <div class="row">
+        <select class="v-sound-type" style="flex:1; padding:10px; border:1px solid #ddd; border-radius:8px;">${soundOptions}</select>
+        <input type="text" class="v-sound-desc" placeholder="Описание звука" style="flex:1;" value="${existing ? escapeHtml(existing.sound.desc || '') : ''}">
+      </div>
+    `;
+    faultBlock.querySelector('.variations-container').appendChild(div);
+  }
+
+  async function saveLab() {
+    const title = document.getElementById('lab-title').value.trim();
+    const intro = document.getElementById('lab-intro').value.trim();
+    const errorEl = document.getElementById('lab-save-error');
+    errorEl.textContent = '';
+    if (!title) { errorEl.textContent = 'Введите название тренажёра'; return; }
+
+    const faultBlocks = document.querySelectorAll('#faults-container > .question-block');
+    if (faultBlocks.length === 0) { errorEl.textContent = 'Добавьте хотя бы одну неисправность'; return; }
+    const faults = [];
+    for (const fb of faultBlocks) {
+      const label = fb.querySelector('.fault-label').value.trim();
+      const explain = fb.querySelector('.fault-explain').value.trim();
+      if (!label || !explain) { errorEl.textContent = 'У каждой неисправности должно быть название и объяснение'; return; }
+      const varCards = fb.querySelectorAll('.variations-container > .card');
+      if (varCards.length === 0) { errorEl.textContent = `У неисправности «${label}» должна быть хотя бы одна вариация показаний`; return; }
+      const variations = [];
+      for (const vc of varCards) {
+        const vTitle = vc.querySelector('.v-title').value.trim();
+        const vibValue = vc.querySelector('.v-vib-value').value.trim();
+        const tempValue = vc.querySelector('.v-temp-value').value.trim();
+        if (!vTitle || !vibValue || !tempValue) { errorEl.textContent = `Заполните все поля показаний в вариациях для «${label}»`; return; }
+        variations.push({
+          title: vTitle,
+          vibration: { value: vibValue, desc: vc.querySelector('.v-vib-desc').value.trim() },
+          temp: { value: tempValue, desc: vc.querySelector('.v-temp-desc').value.trim() },
+          sound: { type: vc.querySelector('.v-sound-type').value, desc: vc.querySelector('.v-sound-desc').value.trim() }
+        });
+      }
+      faults.push({ label, explain, variations });
+    }
+
+    const payload = { title, intro, faults };
+    const url = editingLabId ? '/api/labs/' + editingLabId : '/api/labs';
+    const method = editingLabId ? 'PUT' : 'POST';
+    const res = await authFetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) { closeLabEditor(); return; }
+    if (res.status !== 403 || (data.error !== 'BLOCKED' && data.error !== 'TRIAL_ENDED')) {
+      errorEl.textContent = data.error || 'Ошибка сохранения тренажёра';
+    }
+  }
+
+  function deleteLab(id) {
+    if (!confirm('Удалить тренажёр?')) return;
+    authFetch('/api/labs/' + id, { method: 'DELETE' }).then(() => loadLabsList());
+  }
+
+  async function startLabSession(labId) {
+    const res = await authFetch('/api/lab-sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ labId })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      if (res.status !== 403 || (data.error !== 'BLOCKED' && data.error !== 'TRIAL_ENDED')) alert(data.error || 'Ошибка');
+      return;
+    }
+    currentSessionType = 'lab';
+    openSession(data.session, data.url, data.qrDataUrl);
+  }
+
+  // ==================== СТАТИСТИКА ====================
+
+  let statsCurrentTestId = null;
+
+  async function showStatsList() {
+    document.getElementById('stats-detail').classList.add('hidden');
+    document.getElementById('stats-tests-list').classList.remove('hidden');
+    const res = await authFetch('/api/tests');
+    if (!res.ok) return;
+    const tests = await res.json();
+    const container = document.getElementById('stats-tests-list');
+    if (tests.length === 0) {
+      container.innerHTML = '<div class="muted" style="padding:30px 0; text-align:center;">Тестов пока нет — статистика появится после первых прохождений.</div>';
+      return;
+    }
+    container.innerHTML = tests.map(t => `
+      <div class="card row between" style="cursor:pointer;" onclick="loadStatsDetail('${t.id}')">
+        <div>
+          <strong>${escapeHtml(t.title)}</strong>
+          <div class="muted">${t.questions.length} вопрос(ов)</div>
+        </div>
+        <div class="muted">Открыть статистику →</div>
+      </div>
+    `).join('');
+  }
+
+  async function loadStatsDetail(testId) {
+    statsCurrentTestId = testId;
+    const res = await authFetch('/api/tests/' + testId + '/stats');
+    if (!res.ok) return;
+    const data = await res.json();
+    document.getElementById('stats-tests-list').classList.add('hidden');
+    document.getElementById('stats-detail').classList.remove('hidden');
+    document.getElementById('stats-test-title').textContent = data.test.title;
+
+    const sBody = document.getElementById('stats-sessions-body');
+    const sEmpty = document.getElementById('stats-sessions-empty');
+    if (data.sessionStats.length === 0) {
+      document.getElementById('stats-sessions-table').classList.add('hidden');
+      sEmpty.textContent = 'Сессий по этому тесту ещё не было.';
+    } else {
+      document.getElementById('stats-sessions-table').classList.remove('hidden');
+      sEmpty.textContent = '';
+      sBody.innerHTML = data.sessionStats.map(s => `
+        <tr>
+          <td>${escapeHtml(s.code)}</td>
+          <td>${new Date(s.startedAt).toLocaleString('ru-RU')}</td>
+          <td>${s.totalParticipants}</td>
+          <td>${s.finishedParticipants}</td>
+          <td>${s.avgScore !== null ? s.avgScore + '%' : '—'}</td>
+          <td>${s.ended ? 'Завершена' : 'Активна'}</td>
+        </tr>
+      `).join('');
+    }
+
+    const qBody = document.getElementById('stats-questions-body');
+    const answered = data.questionStats.filter(q => q.total > 0);
+    if (answered.length === 0) {
+      qBody.innerHTML = '<tr><td colspan="3" class="muted" style="text-align:center; padding:16px;">Ещё нет ответов на вопросы этого теста.</td></tr>';
+    } else {
+      qBody.innerHTML = data.questionStats.map(q => q.total > 0 ? `
+        <tr>
+          <td>${escapeHtml(q.text)}</td>
+          <td>${q.correct}/${q.total}</td>
+          <td>${q.errorRate}%</td>
+        </tr>
+      ` : '').join('');
+    }
+  }
+
+  async function clearTestHistory() {
+    if (!statsCurrentTestId) return;
+    if (!confirm('Удалить всю историю сессий и прохождений этого теста? Счётчик пробного периода не сбрасывается. Действие необратимо.')) return;
+    const res = await authFetch('/api/tests/' + statsCurrentTestId + '/sessions', { method: 'DELETE' });
+    if (res.ok) loadStatsDetail(statsCurrentTestId);
   }
 </script>
 </body>

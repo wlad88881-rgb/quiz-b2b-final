@@ -281,7 +281,11 @@
       const res = await fetch(`/api/sessions/${CODE}/info`);
       const data = await res.json();
       if (!res.ok) {
-        showError(res.status === 404 ? t('notFound') : (data.error || t('notFound')));
+        if (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED') {
+          showError(data.message || t('notFound'));
+        } else {
+          showError(res.status === 404 ? t('notFound') : (data.error || t('notFound')));
+        }
         return;
       }
       if (data.ended) {
@@ -385,7 +389,7 @@
       });
       const data = await res.json();
       if (!res.ok) {
-        errEl.textContent = data.error || t('notFound');
+        errEl.textContent = (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED') ? (data.message || t('notFound')) : (data.error || t('notFound'));
         errEl.classList.remove('hidden');
         btn.disabled = false;
         return;
