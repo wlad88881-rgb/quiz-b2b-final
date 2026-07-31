@@ -1,9 +1,13 @@
-const CACHE_NAME = 'b2b-quiz-shell-v1';
+const CACHE_NAME = 'b2b-quiz-shell-v2';
 const APP_SHELL = [
   '/',
+  '/admin',
   '/manifest.json',
+  '/manifest-admin.json',
   '/icons/icon-192.png',
-  '/icons/icon-512.png'
+  '/icons/icon-512.png',
+  '/icons/icon-admin-192.png',
+  '/icons/icon-admin-512.png'
 ];
 
 self.addEventListener('install', (event) => {
