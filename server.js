@@ -1180,6 +1180,24 @@ async function seedLabs() {
   console.log(`[labs] Синхронизировано общих тренажёров: ${SEED_LABS.length}`);
 }
 
+// ==================== ГЛОБАЛЬНАЯ ОБРАБОТКА ОШИБОК ====================
+// Ловит любую ошибку, брошенную (или переданную через next(err)) внутри
+// обработчиков маршрутов, чтобы один сбойный запрос не ронял весь процесс.
+app.use((err, req, res, next) => {
+  console.error('[unhandled route error]', err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: 'Внутренняя ошибка сервера. Попробуйте ещё раз.' });
+});
+
+// Последний рубеж: если ошибка всё же произошла вне express (например, в
+// таймере или сокет-обработчике), логируем и продолжаем работу вместо краша.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException] Сервер продолжает работу:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection] Сервер продолжает работу:', reason);
+});
+
 async function start() {
   await db.initCache();
   await seedLabs();
