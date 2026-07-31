@@ -37,7 +37,7 @@ const DEVELOPER_CONTACTS = process.env.DEVELOPER_CONTACTS ||
 
 const FREE_MAX_TESTS = 3;
 const FREE_MAX_QUESTIONS = 20;
-const FREE_MAX_SUBMISSIONS = 50;
+const FREE_MAX_SUBMISSIONS = 20;
 
 if (!process.env.ADMIN_PASSWORD) {
   console.warn('[security] ВНИМАНИЕ: ADMIN_PASSWORD не задан в переменных окружения — используется пароль по умолчанию. Задайте свой пароль перед выходом в продакшн!');
