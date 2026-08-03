@@ -376,6 +376,26 @@ app.get('/api/tests', checkAuth, (req, res) => {
   res.json(list);
 });
 
+// Сводка по тегам вопросов компании: сколько вопросов помечено каждым тегом
+// (вопросы собираются по всем тестам компании — это и есть общий «банк вопросов»).
+// ВАЖНО: этот маршрут должен идти РАНЬШЕ '/api/tests/:id', иначе Express
+// примет "tags-summary" за значение :id.
+app.get('/api/tests/tags-summary', checkAuth, (req, res) => {
+  const data = db.load();
+  const counts = {};
+  Object.values(data.tests)
+    .filter(t => t.companyId === req.companyId)
+    .forEach(t => {
+      t.questions.forEach(q => {
+        (q.tags || []).forEach(tag => { counts[tag] = (counts[tag] || 0) + 1; });
+      });
+    });
+  const tags = Object.entries(counts)
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count);
+  res.json({ tags });
+});
+
 app.get('/api/tests/:id', checkAuth, (req, res) => {
   const data = db.load();
   const test = safeGet(data.tests, req.params.id);
@@ -408,7 +428,8 @@ app.post('/api/tests', checkAuth, async (req, res) => {
       text: q.text,
       options: q.options,
       correct: q.correct,
-      multi: !!q.multi
+      multi: !!q.multi,
+      tags: Array.isArray(q.tags) ? [...new Set(q.tags.map(t => String(t).trim()).filter(Boolean))] : []
     })),
     createdAt: Date.now()
   };
@@ -430,7 +451,8 @@ app.put('/api/tests/:id', checkAuth, async (req, res) => {
       text: q.text,
       options: q.options,
       correct: q.correct,
-      multi: !!q.multi
+      multi: !!q.multi,
+      tags: Array.isArray(q.tags) ? [...new Set(q.tags.map(t => String(t).trim()).filter(Boolean))] : []
     }));
     return test;
   });
@@ -451,6 +473,63 @@ app.delete('/api/tests/:id', checkAuth, async (req, res) => {
     }
   });
   res.json({ ok: true });
+});
+
+// Собирает новый тест «вразброс» из вопросов с выбранными тегами (по всем тестам компании).
+app.post('/api/tests/generate', checkAuth, async (req, res) => {
+  const { title, tags, count } = req.body;
+  if (!title || !Array.isArray(tags) || tags.length === 0) {
+    return res.status(400).json({ error: 'Укажите название и хотя бы один тег' });
+  }
+  const wantCount = Math.max(1, Math.min(200, parseInt(count, 10) || 20));
+  const data = db.load();
+  if (req.company.plan === 'free') {
+    const existingCount = Object.values(data.tests).filter(t => t.companyId === req.companyId).length;
+    if (existingCount >= FREE_MAX_TESTS) {
+      return res.status(403).json({ error: `Бесплатный тариф позволяет создать не более ${FREE_MAX_TESTS} тестов. ${DEVELOPER_CONTACTS}` });
+    }
+  }
+  const tagSet = new Set(tags);
+  const pool = [];
+  const seenText = new Set(); // защита от дублей одного и того же вопроса из разных тестов
+  Object.values(data.tests)
+    .filter(t => t.companyId === req.companyId)
+    .forEach(t => {
+      t.questions.forEach(q => {
+        if ((q.tags || []).some(tag => tagSet.has(tag)) && !seenText.has(q.text)) {
+          seenText.add(q.text);
+          pool.push(q);
+        }
+      });
+    });
+  if (pool.length === 0) {
+    return res.status(400).json({ error: 'По выбранным темам не нашлось вопросов' });
+  }
+  // Перемешиваем и берём нужное количество (или все, если запрошено больше, чем есть)
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  const maxAllowed = req.company.plan === 'free' ? Math.min(wantCount, FREE_MAX_QUESTIONS) : wantCount;
+  const selected = pool.slice(0, Math.min(maxAllowed, pool.length));
+
+  const id = participantId();
+  const test = {
+    id,
+    companyId: req.companyId,
+    title,
+    questions: selected.map((q, i) => ({
+      id: 'q' + i,
+      text: q.text,
+      options: q.options,
+      correct: q.correct,
+      multi: !!q.multi,
+      tags: q.tags || []
+    })),
+    createdAt: Date.now()
+  };
+  await db.update((d) => { d.tests[id] = test; });
+  res.json({ test, availableInPool: pool.length, selectedCount: selected.length });
 });
 
 // Очистка истории прохождений теста (сессии удаляются, счётчик пробного периода НЕ сбрасывается)
@@ -695,11 +774,11 @@ app.get('/api/sessions/:code/export', checkAuth, (req, res) => {
 // ==================== ИМПОРТ И ШАБЛОНЫ ====================
 
 app.get('/api/import-template', checkAuth, (req, res) => {
-  const headers = ['Вопрос', 'Вариант 1', 'Вариант 2', 'Вариант 3', 'Вариант 4', 'Вариант 5', 'Правильные (номера через запятую)'];
-  const example1 = ['Какая муфта применяется во избежание поломок деталей механизма из-за перегрузок?', 'Компенсирующая муфта', 'Жёсткая муфта', 'Предохранительная муфта', 'Обгонная муфта', '', '3'];
-  const example2 = ['Выберите чётные числа', '1', '2', '3', '4', '', '2,4'];
+  const headers = ['Вопрос', 'Вариант 1', 'Вариант 2', 'Вариант 3', 'Вариант 4', 'Вариант 5', 'Правильные (номера через запятую)', 'Теги (через запятую, необязательно)'];
+  const example1 = ['Какая муфта применяется во избежание поломок деталей механизма из-за перегрузок?', 'Компенсирующая муфта', 'Жёсткая муфта', 'Предохранительная муфта', 'Обгонная муфта', '', '3', 'приводы и передачи'];
+  const example2 = ['Выберите чётные числа', '1', '2', '3', '4', '', '2,4', ''];
   const ws = XLSX.utils.aoa_to_sheet([headers, example1, example2]);
-  ws['!cols'] = [{ wch: 45 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 30 }];
+  ws['!cols'] = [{ wch: 45 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 30 }, { wch: 30 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Вопросы');
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -744,7 +823,9 @@ app.post('/api/import-questions', checkAuth, upload.single('file'), (req, res) =
       continue;
     }
     const multi = correctIdxs.length > 1;
-    questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi });
+    const tagsRaw = String(row[7] || '').trim();
+    const tags = tagsRaw ? [...new Set(tagsRaw.split(',').map(t => t.trim()).filter(Boolean))] : [];
+    questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi, tags });
   }
   if (questions.length === 0) {
     return res.status(400).json({ error: 'Не удалось распознать ни одного вопроса. Проверьте формат файла (скачайте шаблон).', skipped });
