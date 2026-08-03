@@ -730,6 +730,27 @@ app.post('/api/sessions/:code/submit', async (req, res) => {
   res.json({ score, total, review });
 });
 
+// Анонимный топ-3 по сессии для студента: без имён, только позиции и проценты,
+// плюс собственное место (если передан participantId). Публичный маршрут —
+// доступен со страницы прохождения теста, авторизация преподавателя не нужна.
+app.get('/api/sessions/:code/leaderboard', (req, res) => {
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.type === 'lab') return res.status(404).json({ error: 'Сессия не найдена' });
+  const finished = Object.entries(session.participants)
+    .filter(([, p]) => p.finished && p.total > 0)
+    .map(([pid, p]) => ({ pid, percent: Math.round((p.score / p.total) * 100), finishedAt: p.finishedAt }))
+    .sort((a, b) => b.percent - a.percent || a.finishedAt - b.finishedAt);
+  const top = finished.slice(0, 3).map((p, i) => ({ rank: i + 1, percent: p.percent }));
+  const myPid = req.query.participantId;
+  let yourRank = null;
+  if (myPid) {
+    const idx = finished.findIndex(p => p.pid === myPid);
+    if (idx >= 0) yourRank = idx + 1;
+  }
+  res.json({ top, yourRank, totalParticipants: finished.length });
+});
+
 app.post('/api/sessions/:code/end', checkAuth, async (req, res) => {
   await db.update((d) => {
     const s = safeGet(d.sessions, req.params.code);
@@ -1251,6 +1272,16 @@ app.delete('/api/admin/companies/:id', checkAdmin, async (req, res) => {
     Object.keys(d.labs).forEach(id => { if (d.labs[id].companyId === cid) delete d.labs[id]; });
   });
   res.json({ ok: true });
+});
+
+// Резервная копия всей базы данных целиком (компании, тесты, сессии, тренажёры) в виде
+// скачиваемого JSON-файла. Доступно только администратору.
+app.get('/api/admin/backup', checkAdmin, (req, res) => {
+  const data = db.load();
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  res.setHeader('Content-Disposition', `attachment; filename="quiz-b2b-backup-${stamp}.json"`);
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.send(JSON.stringify(data, null, 2));
 });
 
 async function seedLabs() {
