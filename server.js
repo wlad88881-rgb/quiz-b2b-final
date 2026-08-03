@@ -429,7 +429,8 @@ app.post('/api/tests', checkAuth, async (req, res) => {
       options: q.options,
       correct: q.correct,
       multi: !!q.multi,
-      tags: Array.isArray(q.tags) ? [...new Set(q.tags.map(t => String(t).trim()).filter(Boolean))] : []
+      tags: Array.isArray(q.tags) ? [...new Set(q.tags.map(t => String(t).trim()).filter(Boolean))] : [],
+      explain: (q.explain || '').toString().trim()
     })),
     createdAt: Date.now()
   };
@@ -452,7 +453,8 @@ app.put('/api/tests/:id', checkAuth, async (req, res) => {
       options: q.options,
       correct: q.correct,
       multi: !!q.multi,
-      tags: Array.isArray(q.tags) ? [...new Set(q.tags.map(t => String(t).trim()).filter(Boolean))] : []
+      tags: Array.isArray(q.tags) ? [...new Set(q.tags.map(t => String(t).trim()).filter(Boolean))] : [],
+      explain: (q.explain || '').toString().trim()
     }));
     return test;
   });
@@ -524,7 +526,8 @@ app.post('/api/tests/generate', checkAuth, async (req, res) => {
       options: q.options,
       correct: q.correct,
       multi: !!q.multi,
-      tags: q.tags || []
+      tags: q.tags || [],
+      explain: q.explain || ''
     })),
     createdAt: Date.now()
   };
@@ -612,6 +615,11 @@ app.post('/api/sessions', checkAuth, async (req, res) => {
   const data = db.load();
   const test = safeGet(data.tests, testId);
   if (!test || test.companyId !== req.companyId) return res.status(404).json({ error: 'Тест не найден' });
+  let scheduledAt = null;
+  if (req.body.scheduledAt) {
+    const ts = parseInt(req.body.scheduledAt, 10);
+    if (!isNaN(ts) && ts > Date.now()) scheduledAt = ts;
+  }
   let code;
   do { code = nanoid(); } while (safeGet(data.sessions, code));
   const session = {
@@ -621,6 +629,7 @@ app.post('/api/sessions', checkAuth, async (req, res) => {
     testTitle: test.title,
     timeLimit: req.body.timeLimit || null,
     startedAt: Date.now(),
+    scheduledAt,
     ended: false,
     participants: {}
   };
@@ -628,6 +637,17 @@ app.post('/api/sessions', checkAuth, async (req, res) => {
   const url = `${getBaseUrl()}/s/${code}`;
   const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
   res.json({ session, url, qrDataUrl });
+});
+
+app.post('/api/sessions/:code/start-now', checkAuth, async (req, res) => {
+  const result = await db.update((d) => {
+    const session = safeGet(d.sessions, req.params.code);
+    if (!session || session.companyId !== req.companyId) return null;
+    session.scheduledAt = null;
+    return session;
+  });
+  if (!result) return res.status(404).json({ error: 'Сессия не найдена' });
+  res.json({ ok: true });
 });
 
 app.get('/api/sessions/:code/info', (req, res) => {
@@ -641,6 +661,7 @@ app.get('/api/sessions/:code/info', (req, res) => {
     testTitle: session.testTitle,
     timeLimit: session.timeLimit || null,
     ended: !!session.ended,
+    scheduledAt: session.scheduledAt || null,
     questionCount: test ? test.questions.length : 0
   });
 });
@@ -652,6 +673,13 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
   const session = safeGet(data.sessions, req.params.code);
   if (!session || session.type === 'lab') return res.status(404).json({ error: 'Сессия не найдена' });
   if (session.ended) return res.status(410).json({ error: 'Тестирование завершено' });
+  if (session.scheduledAt && Date.now() < session.scheduledAt) {
+    return res.status(403).json({
+      error: 'NOT_STARTED',
+      message: `Тестирование ещё не началось. Начало запланировано на ${new Date(session.scheduledAt).toLocaleString('ru-RU')}.`,
+      scheduledAt: session.scheduledAt
+    });
+  }
   const trialMsg = trialBlockedForCompany(data, session.companyId);
   if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
   const test = safeGet(data.tests, session.testId);
@@ -724,7 +752,8 @@ app.post('/api/sessions/:code/submit', async (req, res) => {
     multi: q.multi,
     given: detail[q.id].given,
     correct: detail[q.id].correct,
-    isCorrect: detail[q.id].isCorrect
+    isCorrect: detail[q.id].isCorrect,
+    explain: q.explain || ''
   }));
   io.to('session:' + req.params.code).emit('participant:finished', result);
   res.json({ score, total, review });
@@ -795,11 +824,11 @@ app.get('/api/sessions/:code/export', checkAuth, (req, res) => {
 // ==================== ИМПОРТ И ШАБЛОНЫ ====================
 
 app.get('/api/import-template', checkAuth, (req, res) => {
-  const headers = ['Вопрос', 'Вариант 1', 'Вариант 2', 'Вариант 3', 'Вариант 4', 'Вариант 5', 'Правильные (номера через запятую)', 'Теги (через запятую, необязательно)'];
-  const example1 = ['Какая муфта применяется во избежание поломок деталей механизма из-за перегрузок?', 'Компенсирующая муфта', 'Жёсткая муфта', 'Предохранительная муфта', 'Обгонная муфта', '', '3', 'приводы и передачи'];
-  const example2 = ['Выберите чётные числа', '1', '2', '3', '4', '', '2,4', ''];
+  const headers = ['Вопрос', 'Вариант 1', 'Вариант 2', 'Вариант 3', 'Вариант 4', 'Вариант 5', 'Правильные (номера через запятую)', 'Теги (через запятую, необязательно)', 'Пояснение (необязательно, показывается после сдачи теста)'];
+  const example1 = ['Какая муфта применяется во избежание поломок деталей механизма из-за перегрузок?', 'Компенсирующая муфта', 'Жёсткая муфта', 'Предохранительная муфта', 'Обгонная муфта', '', '3', 'приводы и передачи', 'Предохранительная муфта разъединяет вал при превышении допустимого крутящего момента, защищая механизм от поломки.'];
+  const example2 = ['Выберите чётные числа', '1', '2', '3', '4', '', '2,4', '', ''];
   const ws = XLSX.utils.aoa_to_sheet([headers, example1, example2]);
-  ws['!cols'] = [{ wch: 45 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 30 }, { wch: 30 }];
+  ws['!cols'] = [{ wch: 45 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 30 }, { wch: 30 }, { wch: 50 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Вопросы');
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -846,7 +875,8 @@ app.post('/api/import-questions', checkAuth, upload.single('file'), (req, res) =
     const multi = correctIdxs.length > 1;
     const tagsRaw = String(row[7] || '').trim();
     const tags = tagsRaw ? [...new Set(tagsRaw.split(',').map(t => t.trim()).filter(Boolean))] : [];
-    questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi, tags });
+    const explain = String(row[8] || '').trim();
+    questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi, tags, explain });
   }
   if (questions.length === 0) {
     return res.status(400).json({ error: 'Не удалось распознать ни одного вопроса. Проверьте формат файла (скачайте шаблон).', skipped });
@@ -1003,6 +1033,11 @@ app.post('/api/lab-sessions', checkAuth, async (req, res) => {
   const data = db.load();
   const lab = safeGet(data.labs, labId);
   if (!lab || (!lab.shared && lab.companyId !== req.companyId)) return res.status(404).json({ error: 'Тренажёр не найден' });
+  let scheduledAt = null;
+  if (req.body.scheduledAt) {
+    const ts = parseInt(req.body.scheduledAt, 10);
+    if (!isNaN(ts) && ts > Date.now()) scheduledAt = ts;
+  }
   let code;
   do { code = nanoid(); } while (safeGet(data.sessions, code));
   const session = {
@@ -1012,6 +1047,7 @@ app.post('/api/lab-sessions', checkAuth, async (req, res) => {
     labId,
     testTitle: lab.title,
     startedAt: Date.now(),
+    scheduledAt,
     ended: false,
     participants: {}
   };
@@ -1019,6 +1055,17 @@ app.post('/api/lab-sessions', checkAuth, async (req, res) => {
   const url = `${getBaseUrl()}/l/${code}`;
   const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
   res.json({ session, url, qrDataUrl });
+});
+
+app.post('/api/lab-sessions/:code/start-now', checkAuth, async (req, res) => {
+  const result = await db.update((d) => {
+    const session = safeGet(d.sessions, req.params.code);
+    if (!session || session.companyId !== req.companyId) return null;
+    session.scheduledAt = null;
+    return session;
+  });
+  if (!result) return res.status(404).json({ error: 'Сессия не найдена' });
+  res.json({ ok: true });
 });
 
 app.get('/api/lab-sessions/:code', checkAuth, (req, res) => {
@@ -1039,7 +1086,7 @@ app.get('/api/lab-sessions/:code/info', (req, res) => {
   const trialMsg = trialBlockedForCompany(data, session.companyId);
   if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
   const lab = safeGet(data.labs, session.labId);
-  res.json({ testTitle: session.testTitle, intro: lab ? lab.intro : '', caseCount: lab ? lab.faults.length : 0 });
+  res.json({ testTitle: session.testTitle, intro: lab ? lab.intro : '', caseCount: lab ? lab.faults.length : 0, scheduledAt: session.scheduledAt || null });
 });
 
 app.post('/api/lab-sessions/:code/join', joinLimiter, async (req, res) => {
@@ -1049,6 +1096,13 @@ app.post('/api/lab-sessions/:code/join', joinLimiter, async (req, res) => {
   const session = safeGet(data.sessions, req.params.code);
   if (!session || session.type !== 'lab') return res.status(404).json({ error: 'Сессия не найдена' });
   if (session.ended) return res.status(410).json({ error: 'Тренажёр завершён' });
+  if (session.scheduledAt && Date.now() < session.scheduledAt) {
+    return res.status(403).json({
+      error: 'NOT_STARTED',
+      message: `Тренажёр ещё не начался. Начало запланировано на ${new Date(session.scheduledAt).toLocaleString('ru-RU')}.`,
+      scheduledAt: session.scheduledAt
+    });
+  }
   const trialMsg = trialBlockedForCompany(data, session.companyId);
   if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
   const lab = safeGet(data.labs, session.labId);
