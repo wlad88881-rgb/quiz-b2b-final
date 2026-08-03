@@ -84,6 +84,9 @@
   }
   .option:hover { border-color: #ccc; }
   .option.selected { border-color: var(--orange); background: #fff6ec; }
+  .option.correct-answer { border-color: #2e9e4f; background: #e6f4ea; }
+  .option.wrong-answer { border-color: #d64545; background: #fdecea; }
+  .option.locked { cursor: default; }
   .option input { margin-top: 3px; flex-shrink: 0; width: 18px; height: 18px; cursor: pointer; }
   .option .opt-text { font-size: 15px; color: #333; line-height: 1.4; }
 
@@ -177,6 +180,17 @@
     </div>
     <h2 style="font-size:15px; color: var(--navy); margin: 18px 0 10px;" data-i18n="reviewTitle"></h2>
     <div id="review-container"></div>
+    <button class="btn" id="retry-wrong-btn" onclick="startRetry()" style="margin-top:16px; background:var(--orange);"></button>
+  </div>
+
+  <div id="screen-retry" class="hidden">
+    <h1 data-i18n="retryTitle" style="text-align:center;"></h1>
+    <div class="sub" data-i18n="retrySub" style="text-align:center; color:#888; font-size:13px; margin-bottom:16px;"></div>
+    <div id="retry-score" class="info-box hidden" style="text-align:center; font-weight:700;"></div>
+    <div id="retry-list"></div>
+    <button class="btn" id="retry-check-btn" onclick="checkRetry()" data-i18n="retryCheckBtn" style="margin-top:10px;"></button>
+    <button class="btn hidden" id="retry-again-btn" onclick="startRetry(true)" style="margin-top:10px; background:var(--orange);"></button>
+    <button class="btn outline hidden" id="retry-done-btn" onclick="showResult()" data-i18n="retryDoneBtn" style="margin-top:10px;"></button>
   </div>
 
 </div>
@@ -210,7 +224,15 @@
       testEnded: 'Тестирование завершено преподавателем.',
       notFound: 'Сессия не найдена. Проверьте код или QR-код.',
       alreadyDone: 'Вы уже сдали этот тест.',
-      translateFail: 'Перевод сейчас недоступен, показан русский текст.'
+      translateFail: 'Перевод сейчас недоступен, показан русский текст.',
+      retryWrongBtn: 'Пройти ещё раз ошибки ({n})',
+      retryTitle: 'Работа над ошибками',
+      retrySub: 'Ответьте ещё раз только на вопросы, где были ошибки. Это не влияет на итоговый результат теста.',
+      retryCheckBtn: 'Проверить',
+      retryDoneBtn: 'Вернуться к результату',
+      retryAgainBtn: 'Повторить оставшиеся ошибки ({n})',
+      retryAllCorrect: 'Все ответы верны! 🎉',
+      retryScoreLabel: 'Верно: {s} из {n}'
     },
     kk: {
       oops: 'Сәтсіз аяқталды',
@@ -237,7 +259,15 @@
       testEnded: 'Тестілеу оқытушы тарапынан аяқталды.',
       notFound: 'Сессия табылмады. Кодты немесе QR-кодты тексеріңіз.',
       alreadyDone: 'Сіз бұл тестті тапсырып қойдыңыз.',
-      translateFail: 'Аударма қазір қолжетімсіз, орыс тіліндегі мәтін көрсетілді.'
+      translateFail: 'Аударма қазір қолжетімсіз, орыс тіліндегі мәтін көрсетілді.',
+      retryWrongBtn: 'Қателерді қайта өту ({n})',
+      retryTitle: 'Қателермен жұмыс',
+      retrySub: 'Тек қателескен сұрақтарға қайта жауап беріңіз. Бұл тесттің қорытынды нәтижесіне әсер етпейді.',
+      retryCheckBtn: 'Тексеру',
+      retryDoneBtn: 'Нәтижеге оралу',
+      retryAgainBtn: 'Қалған қателерді қайталау ({n})',
+      retryAllCorrect: 'Барлық жауаптар дұрыс! 🎉',
+      retryScoreLabel: 'Дұрыс: {s} / {n}'
     }
   };
 
@@ -268,7 +298,7 @@
   }
 
   function showScreen(id) {
-    ['screen-loading','screen-error','screen-join','screen-quiz','screen-result'].forEach(s => {
+    ['screen-loading','screen-error','screen-join','screen-quiz','screen-result','screen-retry'].forEach(s => {
       document.getElementById(s).classList.toggle('hidden', s !== id);
     });
   }
@@ -551,6 +581,14 @@
     showScreen('screen-result');
     document.getElementById('auto-submit-note').classList.toggle('hidden', !lastResult.auto);
     renderResultTexts();
+    const wrongCount = lastResult.review.filter(r => !r.isCorrect).length;
+    const retryBtn = document.getElementById('retry-wrong-btn');
+    if (wrongCount > 0) {
+      retryBtn.textContent = t('retryWrongBtn').replace('{n}', wrongCount);
+      retryBtn.classList.remove('hidden');
+    } else {
+      retryBtn.classList.add('hidden');
+    }
   }
 
   function reviewOptionText(reviewItem, i) {
@@ -612,6 +650,128 @@
 
   function escapeHtml(s) {
     return (s || '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ==================== РАБОТА НАД ОШИБКАМИ ====================
+  // Полностью на стороне браузера: сервер уже вернул после сдачи теста полный
+  // разбор с правильными ответами (lastResult.review), поэтому повтор не требует
+  // новых обращений к серверу и не расходует лимит прохождений тарифа.
+
+  let retryPool = [];       // [{text, options, multi, correct}]
+  let retryAnswers = {};    // индекс в retryPool -> ответ
+
+  function startRetry(fromWithinRetry) {
+    const source = fromWithinRetry
+      ? retryPool.filter((item, i) => !isRetryAnswerCorrect(item, retryAnswers[i]))
+      : lastResult.review.filter(r => !r.isCorrect);
+    retryPool = source.map(r => ({ text: r.text, options: r.options, multi: r.multi, correct: r.correct }));
+    retryAnswers = {};
+    document.getElementById('retry-score').classList.add('hidden');
+    document.getElementById('retry-check-btn').classList.remove('hidden');
+    document.getElementById('retry-again-btn').classList.add('hidden');
+    document.getElementById('retry-done-btn').classList.add('hidden');
+    renderRetryList();
+    showScreen('screen-retry');
+  }
+
+  function retryItemText(item) {
+    if (state.lang === 'kk' && state.translated) {
+      const idx = state.questions.findIndex(q => q.text === item.text);
+      if (idx >= 0 && state.translated.questions[idx]) return state.translated.questions[idx].text;
+    }
+    return item.text;
+  }
+  function retryItemOptionText(item, i) {
+    if (state.lang === 'kk' && state.translated) {
+      const idx = state.questions.findIndex(q => q.text === item.text);
+      if (idx >= 0 && state.translated.questions[idx]) return state.translated.questions[idx].options[i];
+    }
+    return item.options[i];
+  }
+
+  function renderRetryList() {
+    const container = document.getElementById('retry-list');
+    container.innerHTML = '';
+    retryPool.forEach((item, idx) => {
+      const card = document.createElement('div');
+      card.className = 'review-item';
+      const title = document.createElement('div');
+      title.className = 'rq';
+      title.textContent = `${idx + 1}. ${retryItemText(item)}`;
+      card.appendChild(title);
+
+      const optsWrap = document.createElement('div');
+      optsWrap.style.marginTop = '10px';
+      item.options.forEach((optText, i) => {
+        const given = retryAnswers[idx];
+        const isSelected = item.multi ? (Array.isArray(given) && given.includes(i)) : (given === i);
+        const div = document.createElement('div');
+        div.className = 'option' + (isSelected ? ' selected' : '');
+        div.dataset.retryIdx = idx;
+        div.dataset.optIdx = i;
+        div.onclick = () => selectRetryOption(idx, i, item.multi);
+        div.innerHTML = `<input type="${item.multi ? 'checkbox' : 'radio'}" ${isSelected ? 'checked' : ''} readonly><div class="opt-text"></div>`;
+        div.querySelector('.opt-text').textContent = retryItemOptionText(item, i);
+        optsWrap.appendChild(div);
+      });
+      card.appendChild(optsWrap);
+      container.appendChild(card);
+    });
+  }
+
+  function selectRetryOption(idx, i, multi) {
+    if (multi) {
+      const arr = Array.isArray(retryAnswers[idx]) ? retryAnswers[idx].slice() : [];
+      const pos = arr.indexOf(i);
+      if (pos >= 0) arr.splice(pos, 1); else arr.push(i);
+      retryAnswers[idx] = arr;
+    } else {
+      retryAnswers[idx] = i;
+    }
+    renderRetryList();
+  }
+
+  function isRetryAnswerCorrect(item, given) {
+    if (item.multi) {
+      const correctSet = JSON.stringify([...item.correct].sort());
+      const givenSet = JSON.stringify([...(Array.isArray(given) ? given : [])].sort());
+      return correctSet === givenSet;
+    }
+    return given === item.correct;
+  }
+
+  function checkRetry() {
+    let correctCount = 0;
+    retryPool.forEach((item, idx) => {
+      const given = retryAnswers[idx];
+      const ok = isRetryAnswerCorrect(item, given);
+      if (ok) correctCount++;
+      const correctIdxs = item.multi ? item.correct : [item.correct];
+      document.querySelectorAll(`.option[data-retry-idx="${idx}"]`).forEach(div => {
+        div.classList.add('locked');
+        div.onclick = null;
+        const optI = parseInt(div.dataset.optIdx, 10);
+        if (correctIdxs.includes(optI)) div.classList.add('correct-answer');
+        else if (item.multi ? (Array.isArray(given) && given.includes(optI)) : given === optI) div.classList.add('wrong-answer');
+      });
+    });
+
+    const scoreBox = document.getElementById('retry-score');
+    scoreBox.textContent = correctCount === retryPool.length
+      ? t('retryAllCorrect')
+      : t('retryScoreLabel').replace('{s}', correctCount).replace('{n}', retryPool.length);
+    scoreBox.classList.remove('hidden');
+
+    document.getElementById('retry-check-btn').classList.add('hidden');
+    const remainingWrong = retryPool.length - correctCount;
+    const againBtn = document.getElementById('retry-again-btn');
+    if (remainingWrong > 0) {
+      againBtn.textContent = t('retryAgainBtn').replace('{n}', remainingWrong);
+      againBtn.classList.remove('hidden');
+    } else {
+      againBtn.classList.add('hidden');
+    }
+    document.getElementById('retry-done-btn').classList.remove('hidden');
   }
 
   init();

@@ -114,6 +114,7 @@
           <input type="file" id="import-file" accept=".xlsx,.xls" style="display:none;" onchange="importFromExcel()">
           <button class="btn outline" onclick="document.getElementById('import-file').click()">Импорт Excel</button>
           <button class="btn outline" onclick="downloadTemplate()">Шаблон Excel</button>
+          <button class="btn outline" onclick="openTagBuilder()">Собрать по темам</button>
         </div>
         <h2 style="font-size:18px; margin-bottom:12px;">Мои тесты</h2>
         <div id="tests-list"></div>
@@ -205,6 +206,22 @@
       <div class="row" style="margin-top:6px;">
         <button class="btn outline" style="flex:1;" onclick="closeSessionModal()">Отмена</button>
         <button class="btn" style="flex:1;" onclick="confirmStartSession()">Начать</button>
+      </div>
+    </div>
+  </div>
+  <!-- Модальное окно сборки теста по темам -->
+  <div id="tag-builder-modal" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,0.4); display:flex; align-items:center; justify-content:center; z-index:50;">
+    <div style="width:360px; max-height:80vh; overflow-y:auto; background:#fff; border-radius:14px; padding:20px;">
+      <h3 style="margin-bottom:10px; color:#2C3E50;">Собрать тест по темам</h3>
+      <div id="tag-builder-empty" class="muted hidden" style="padding:10px 0;">Пока нет ни одного тега. Добавьте теги к вопросам в существующих тестах (поле «Теги через запятую» при редактировании вопроса) или при импорте из Excel.</div>
+      <div id="tag-builder-list"></div>
+      <input type="text" id="tag-builder-title" placeholder="Название нового теста" style="margin-top:12px;">
+      <label class="muted" style="display:block; margin:8px 0 6px;">Сколько вопросов взять</label>
+      <input type="text" id="tag-builder-count" placeholder="например, 20" inputmode="numeric" value="20">
+      <div class="error" id="tag-builder-error"></div>
+      <div class="row" style="margin-top:6px;">
+        <button class="btn outline" style="flex:1;" onclick="closeTagBuilder()">Отмена</button>
+        <button class="btn" style="flex:1;" onclick="confirmGenerateByTags()">Собрать тест</button>
       </div>
     </div>
   </div>
@@ -418,6 +435,7 @@
         <button class="btn outline small" onclick="this.closest('.question-block').remove()">✕</button>
       </div>
       <input type="text" class="q-text" value="${existing ? escapeHtml(existing.text) : ''}" placeholder="Текст вопроса">
+      <input type="text" class="q-tags" value="${existing && existing.tags ? escapeHtml(existing.tags.join(', ')) : ''}" placeholder="Теги через запятую (например: подшипники, вибрация) — необязательно" style="font-size:13px; color:#666;">
       <div class="options-container">${optionsHtml}</div>
       <button class="btn outline small" style="margin-top:6px;" onclick="addOption(this.closest('.question-block'))">+ Вариант</button>
     `;
@@ -465,7 +483,9 @@
         return;
       }
       const multi = correctIdxs.length > 1;
-      questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi });
+      const tagsRaw = block.querySelector('.q-tags').value.trim();
+      const tags = tagsRaw ? [...new Set(tagsRaw.split(',').map(t => t.trim()).filter(Boolean))] : [];
+      questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi, tags });
     }
 
     const payload = { title, questions };
@@ -517,7 +537,7 @@
     document.getElementById('test-title').value = file.name.replace(/\.(xlsx|xls)$/i, '');
     document.getElementById('questions-container').innerHTML = '';
     document.getElementById('save-error').textContent = '';
-    data.questions.forEach(q => addQuestion({ text: q.text, options: q.options, correct: q.correct, multi: q.multi }));
+    data.questions.forEach(q => addQuestion({ text: q.text, options: q.options, correct: q.correct, multi: q.multi, tags: q.tags }));
     document.getElementById('screen-list').classList.add('hidden');
     document.getElementById('screen-editor').classList.remove('hidden');
     if (data.skipped && data.skipped.length) {
@@ -544,6 +564,71 @@
     document.getElementById('session-start-modal').classList.add('hidden');
     pendingTestId = null;
   }
+
+  // ==================== СБОРКА ТЕСТА ПО ТЕГАМ ====================
+
+  async function openTagBuilder() {
+    const res = await authFetch('/api/tests/tags-summary');
+    if (!res.ok) return;
+    const data = await res.json();
+    const listEl = document.getElementById('tag-builder-list');
+    const emptyEl = document.getElementById('tag-builder-empty');
+    listEl.innerHTML = '';
+    document.getElementById('tag-builder-title').value = '';
+    document.getElementById('tag-builder-count').value = '20';
+    document.getElementById('tag-builder-error').textContent = '';
+    if (data.tags.length === 0) {
+      emptyEl.classList.remove('hidden');
+    } else {
+      emptyEl.classList.add('hidden');
+      data.tags.forEach(({ tag, count }) => {
+        const label = document.createElement('label');
+        label.style.cssText = 'display:flex; align-items:center; gap:8px; padding:8px 0; cursor:pointer;';
+        label.innerHTML = `
+          <input type="checkbox" class="tag-builder-checkbox" value="${escapeHtml(tag)}" style="width:16px; height:16px;">
+          <span style="flex:1;">${escapeHtml(tag)}</span>
+          <span class="muted" style="font-size:12px;">${count}</span>
+        `;
+        listEl.appendChild(label);
+      });
+    }
+    document.getElementById('tag-builder-modal').classList.remove('hidden');
+  }
+
+  function closeTagBuilder() {
+    document.getElementById('tag-builder-modal').classList.add('hidden');
+  }
+
+  async function confirmGenerateByTags() {
+    const title = document.getElementById('tag-builder-title').value.trim();
+    const errorEl = document.getElementById('tag-builder-error');
+    errorEl.textContent = '';
+    const selectedTags = Array.from(document.querySelectorAll('.tag-builder-checkbox:checked')).map(cb => cb.value);
+    if (!title) { errorEl.textContent = 'Введите название теста'; return; }
+    if (selectedTags.length === 0) { errorEl.textContent = 'Выберите хотя бы одну тему'; return; }
+    const countRaw = document.getElementById('tag-builder-count').value.trim();
+    const count = parseInt(countRaw, 10) || 20;
+    if (count <= 0) { errorEl.textContent = 'Количество вопросов должно быть больше нуля'; return; }
+
+    const res = await authFetch('/api/tests/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, tags: selectedTags, count })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status !== 403 || (data.error !== 'BLOCKED' && data.error !== 'TRIAL_ENDED')) {
+        errorEl.textContent = data.error || 'Ошибка сборки теста';
+      }
+      return;
+    }
+    closeTagBuilder();
+    if (data.selectedCount < count) {
+      alert(`Собрано ${data.selectedCount} из ${count} запрошенных — по выбранным темам столько нашлось уникальных вопросов.`);
+    }
+    loadTestsList();
+  }
+
 
   async function confirmStartSession() {
     const raw = document.getElementById('session-time-limit').value.trim();
