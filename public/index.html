@@ -106,6 +106,11 @@
     #stats-questions-table th, #stats-questions-table td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
     #results-table th, #stats-sessions-table th, #stats-questions-table th { font-weight: 600; background: var(--bg-table-head); }
 
+    .qchart-row { margin-bottom: 10px; }
+    .qchart-label { font-size: 13px; margin-bottom: 4px; color: var(--text); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+    .qchart-track { background: var(--bg-table-head); border-radius: 6px; height: 24px; overflow: hidden; }
+    .qchart-fill { height: 100%; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; color: #fff; font-size: 11.5px; font-weight: 700; border-radius: 6px; transition: width .5s ease; white-space: nowrap; min-width: 34px; }
+
     input[type="text"], input[type="email"], input[type="password"], textarea, select { 
       width: 100%; padding: 10px; border: 1px solid var(--border-strong); border-radius: 8px; margin-bottom: 10px; font-size: 15px; font-family: inherit;
       background: var(--bg-card); color: var(--text);
@@ -199,6 +204,7 @@
           <div class="muted" id="stats-sessions-empty" style="padding:16px 0; text-align:center;"></div>
 
           <div class="muted" style="font-weight:600; margin-bottom:6px;">Вопросы по проценту ошибок (сначала самые сложные)</div>
+          <div id="stats-questions-chart" style="margin-bottom:16px;"></div>
           <table id="stats-questions-table">
             <thead><tr><th>Вопрос</th><th>Верно / Всего</th><th>% ошибок</th></tr></thead>
             <tbody id="stats-questions-body"></tbody>
@@ -231,6 +237,10 @@
           <button class="btn danger" id="end-session-btn" onclick="endSession()">Завершить</button>
         </div>
       </div>
+      <div id="scheduled-banner" class="hidden" style="background:var(--blue-bg); color:var(--navy); border-radius:10px; padding:10px 14px; margin-bottom:12px; font-size:13.5px; display:flex; align-items:center; justify-content:space-between; gap:10px;">
+        <span id="scheduled-banner-text"></span>
+        <button class="btn small" onclick="startSessionNow()">Начать сейчас</button>
+      </div>
       <div class="card">
         <div class="row between">
           <div>
@@ -256,8 +266,22 @@
   <div id="session-start-modal" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,0.4); display:flex; align-items:center; justify-content:center; z-index:50;">
     <div style="width:320px; background:#fff; border-radius:14px; padding:20px;">
       <h3 style="margin-bottom:10px; color:#2C3E50;">Начать сессию</h3>
-      <label class="muted" style="display:block; margin-bottom:6px;">Лимит времени на тест, минут (оставьте пустым — без ограничения)</label>
-      <input type="text" id="session-time-limit" placeholder="например, 20" inputmode="numeric">
+      <div id="session-timelimit-wrap">
+        <label class="muted" style="display:block; margin-bottom:6px;">Лимит времени на тест, минут (оставьте пустым — без ограничения)</label>
+        <input type="text" id="session-time-limit" placeholder="например, 20" inputmode="numeric">
+      </div>
+
+      <div class="row" style="margin:10px 0 6px; gap:16px;">
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13.5px;">
+          <input type="radio" name="session-when" value="now" checked onchange="toggleScheduleInput()"> Начать сейчас
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13.5px;">
+          <input type="radio" name="session-when" value="later" onchange="toggleScheduleInput()"> Запланировать
+        </label>
+      </div>
+      <input type="datetime-local" id="session-schedule-at" class="hidden" style="margin-bottom:6px;">
+      <div class="error" id="session-modal-error"></div>
+
       <div class="row" style="margin-top:6px;">
         <button class="btn outline" style="flex:1;" onclick="closeSessionModal()">Отмена</button>
         <button class="btn" style="flex:1;" onclick="confirmStartSession()">Начать</button>
@@ -509,6 +533,7 @@
       </div>
       <input type="text" class="q-text" value="${existing ? escapeHtml(existing.text) : ''}" placeholder="Текст вопроса">
       <input type="text" class="q-tags" value="${existing && existing.tags ? escapeHtml(existing.tags.join(', ')) : ''}" placeholder="Теги через запятую (например: подшипники, вибрация) — необязательно" style="font-size:13px; color:#666;">
+      <textarea class="q-explain" placeholder="Пояснение — покажется студенту после сдачи теста, необязательно" style="font-size:13px; color:#666; min-height:44px;">${existing && existing.explain ? escapeHtml(existing.explain) : ''}</textarea>
       <div class="options-container">${optionsHtml}</div>
       <button class="btn outline small" style="margin-top:6px;" onclick="addOption(this.closest('.question-block'))">+ Вариант</button>
     `;
@@ -558,7 +583,8 @@
       const multi = correctIdxs.length > 1;
       const tagsRaw = block.querySelector('.q-tags').value.trim();
       const tags = tagsRaw ? [...new Set(tagsRaw.split(',').map(t => t.trim()).filter(Boolean))] : [];
-      questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi, tags });
+      const explain = block.querySelector('.q-explain').value.trim();
+      questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi, tags, explain });
     }
 
     const payload = { title, questions };
@@ -610,7 +636,7 @@
     document.getElementById('test-title').value = file.name.replace(/\.(xlsx|xls)$/i, '');
     document.getElementById('questions-container').innerHTML = '';
     document.getElementById('save-error').textContent = '';
-    data.questions.forEach(q => addQuestion({ text: q.text, options: q.options, correct: q.correct, multi: q.multi, tags: q.tags }));
+    data.questions.forEach(q => addQuestion({ text: q.text, options: q.options, correct: q.correct, multi: q.multi, tags: q.tags, explain: q.explain }));
     document.getElementById('screen-list').classList.add('hidden');
     document.getElementById('screen-editor').classList.remove('hidden');
     if (data.skipped && data.skipped.length) {
@@ -622,20 +648,41 @@
   }
 
   // СЕССИЯ
-  let pendingTestId = null;
+  let pendingSessionType = 'test'; // 'test' | 'lab'
+  let pendingSessionId = null;
   let currentSessionCode = null;
   let currentSessionType = 'test'; // 'test' | 'lab'
   let socket = null;
 
-  function startSession(testId) {
-    pendingTestId = testId;
+  function startSession(testId) { openSessionModal('test', testId); }
+  function startLabSession(labId) { openSessionModal('lab', labId); }
+
+  function openSessionModal(type, id) {
+    pendingSessionType = type;
+    pendingSessionId = id;
     document.getElementById('session-time-limit').value = '';
+    document.getElementById('session-timelimit-wrap').classList.toggle('hidden', type === 'lab');
+    document.querySelector('input[name="session-when"][value="now"]').checked = true;
+    document.getElementById('session-schedule-at').classList.add('hidden');
+    document.getElementById('session-schedule-at').value = '';
+    document.getElementById('session-modal-error').textContent = '';
     document.getElementById('session-start-modal').classList.remove('hidden');
+  }
+
+  function toggleScheduleInput() {
+    const later = document.querySelector('input[name="session-when"]:checked').value === 'later';
+    const input = document.getElementById('session-schedule-at');
+    input.classList.toggle('hidden', !later);
+    if (later && !input.value) {
+      const d = new Date(Date.now() + 15 * 60000); // по умолчанию через 15 минут от текущего момента
+      d.setSeconds(0, 0);
+      input.value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    }
   }
 
   function closeSessionModal() {
     document.getElementById('session-start-modal').classList.add('hidden');
-    pendingTestId = null;
+    pendingSessionId = null;
   }
 
   // ==================== СБОРКА ТЕСТА ПО ТЕГАМ ====================
@@ -704,29 +751,45 @@
 
 
   async function confirmStartSession() {
-    const raw = document.getElementById('session-time-limit').value.trim();
+    const errorEl = document.getElementById('session-modal-error');
+    errorEl.textContent = '';
     let timeLimit = null;
-    if (raw) {
-      const n = parseInt(raw, 10);
-      if (isNaN(n) || n <= 0) {
-        alert('Введите положительное число минут или оставьте поле пустым');
-        return;
+    if (pendingSessionType === 'test') {
+      const raw = document.getElementById('session-time-limit').value.trim();
+      if (raw) {
+        const n = parseInt(raw, 10);
+        if (isNaN(n) || n <= 0) { errorEl.textContent = 'Введите положительное число минут или оставьте поле пустым'; return; }
+        timeLimit = n;
       }
-      timeLimit = n;
     }
-    const testId = pendingTestId;
+
+    let scheduledAt = null;
+    const isLater = document.querySelector('input[name="session-when"]:checked').value === 'later';
+    if (isLater) {
+      const raw = document.getElementById('session-schedule-at').value;
+      if (!raw) { errorEl.textContent = 'Укажите дату и время начала'; return; }
+      const ts = new Date(raw).getTime();
+      if (isNaN(ts) || ts <= Date.now()) { errorEl.textContent = 'Выберите время в будущем'; return; }
+      scheduledAt = ts;
+    }
+
+    const type = pendingSessionType;
+    const id = pendingSessionId;
     closeSessionModal();
-    const res = await authFetch('/api/sessions', {
+
+    const endpoint = type === 'lab' ? '/api/lab-sessions' : '/api/sessions';
+    const body = type === 'lab' ? { labId: id, scheduledAt } : { testId: id, timeLimit, scheduledAt };
+    const res = await authFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ testId, timeLimit })
+      body: JSON.stringify(body)
     });
     const data = await res.json();
     if (!res.ok) {
       if (res.status !== 403 || (data.error !== 'BLOCKED' && data.error !== 'TRIAL_ENDED')) alert(data.error || 'Ошибка');
       return;
     }
-    currentSessionType = 'test';
+    currentSessionType = type;
     openSession(data.session, data.url, data.qrDataUrl);
   }
 
@@ -765,13 +828,36 @@
     document.getElementById('no-participants').classList.remove('hidden');
     document.getElementById('results-table').classList.add('hidden');
     document.getElementById('results-body').innerHTML = '';
-    document.getElementById('session-status').textContent = 'Идёт тестирование';
-    document.getElementById('session-status').classList.add('live');
     document.getElementById('end-session-btn').disabled = false;
 
     currentSessionCode = session.code;
+    updateScheduledBanner(session.scheduledAt || null);
+
     const s = ensureSocket();
     s.emit('teacher:watch', currentSessionCode);
+  }
+
+  function updateScheduledBanner(scheduledAt) {
+    const banner = document.getElementById('scheduled-banner');
+    const statusEl = document.getElementById('session-status');
+    if (scheduledAt && scheduledAt > Date.now()) {
+      const dt = new Date(scheduledAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      document.getElementById('scheduled-banner-text').textContent = `⏰ Запланировано на ${dt}. Ссылку и QR уже можно раздать — присоединиться получится только после начала.`;
+      banner.classList.remove('hidden');
+      statusEl.textContent = 'Запланировано';
+      statusEl.classList.remove('live');
+    } else {
+      banner.classList.add('hidden');
+      statusEl.textContent = 'Идёт тестирование';
+      statusEl.classList.add('live');
+    }
+  }
+
+  async function startSessionNow() {
+    if (!currentSessionCode) return;
+    const endpoint = currentSessionType === 'lab' ? '/api/lab-sessions/' : '/api/sessions/';
+    await authFetch(endpoint + currentSessionCode + '/start-now', { method: 'POST' });
+    updateScheduledBanner(null);
   }
 
   function deleteTest(id) {
@@ -982,21 +1068,6 @@
     authFetch('/api/labs/' + id, { method: 'DELETE' }).then(() => loadLabsList());
   }
 
-  async function startLabSession(labId) {
-    const res = await authFetch('/api/lab-sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ labId })
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      if (res.status !== 403 || (data.error !== 'BLOCKED' && data.error !== 'TRIAL_ENDED')) alert(data.error || 'Ошибка');
-      return;
-    }
-    currentSessionType = 'lab';
-    openSession(data.session, data.url, data.qrDataUrl);
-  }
-
   // ==================== СТАТИСТИКА ====================
 
   let statsCurrentTestId = null;
@@ -1053,9 +1124,11 @@
     }
 
     const qBody = document.getElementById('stats-questions-body');
+    const chartEl = document.getElementById('stats-questions-chart');
     const answered = data.questionStats.filter(q => q.total > 0);
     if (answered.length === 0) {
       qBody.innerHTML = '<tr><td colspan="3" class="muted" style="text-align:center; padding:16px;">Ещё нет ответов на вопросы этого теста.</td></tr>';
+      chartEl.innerHTML = '';
     } else {
       qBody.innerHTML = data.questionStats.map(q => q.total > 0 ? `
         <tr>
@@ -1064,6 +1137,20 @@
           <td>${q.errorRate}%</td>
         </tr>
       ` : '').join('');
+
+      chartEl.innerHTML = answered.map(q => {
+        const rate = q.errorRate;
+        const color = rate >= 60 ? 'var(--red)' : rate >= 30 ? 'var(--orange)' : 'var(--green)';
+        const shortText = q.text.length > 70 ? q.text.slice(0, 70) + '…' : q.text;
+        return `
+          <div class="qchart-row">
+            <div class="qchart-label" title="${escapeHtml(q.text)}">${escapeHtml(shortText)}</div>
+            <div class="qchart-track">
+              <div class="qchart-fill" style="width:${Math.max(rate, 6)}%; background:${color};">${rate}%</div>
+            </div>
+          </div>
+        `;
+      }).join('');
     }
   }
 

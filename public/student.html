@@ -127,6 +127,7 @@
   .review-item .badge-status { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; float: right; }
   .review-item .badge-status.ok { background: #e6f4ea; color: #2e9e4f; }
   .review-item .badge-status.no { background: #fdecea; color: #d64545; }
+  .review-item .rexplain { font-size: 13px; color: #666; margin-top: 8px; line-height: 1.5; padding-top: 8px; border-top: 1px dashed #eee; }
 
   .center { text-align: center; }
   .spinner {
@@ -160,6 +161,7 @@
       <span class="pill" id="join-qcount"></span>
       <span class="pill hidden" id="join-timelimit"></span>
     </div>
+    <div class="info-box hidden" id="scheduled-banner-student"></div>
     <input type="text" id="student-name" data-i18n-ph="namePh" maxlength="60">
     <div class="error-box hidden" id="join-error"></div>
     <button class="btn" id="join-btn" onclick="joinTest()" data-i18n="startBtn"></button>
@@ -253,7 +255,8 @@
       retryScoreLabel: 'Верно: {s} из {n}',
       leaderboardTitle: 'Топ-3 результата в этой сессии',
       leaderboardYourRank: 'Ваше место: {r} из {n}',
-      leaderboardYou: 'Вы'
+      leaderboardYou: 'Вы',
+      scheduledBanner: '⏰ Тестирование начнётся {dt}. Страница обновится автоматически.'
     },
     kk: {
       oops: 'Сәтсіз аяқталды',
@@ -291,7 +294,8 @@
       retryScoreLabel: 'Дұрыс: {s} / {n}',
       leaderboardTitle: 'Осы сессиядағы үздік-3 нәтиже',
       leaderboardYourRank: 'Сіздің орныңыз: {n} ішінен {r}',
-      leaderboardYou: 'Сіз'
+      leaderboardYou: 'Сіз',
+      scheduledBanner: '⏰ Тестілеу {dt} басталады. Бет автоматты түрде жаңарады.'
     }
   };
 
@@ -357,6 +361,9 @@
         const pill = document.getElementById('join-timelimit');
         pill.textContent = t('timeLimitWord').replace('{m}', data.timeLimit);
         pill.classList.remove('hidden');
+      }
+      if (data.scheduledAt && data.scheduledAt > Date.now()) {
+        showScheduledBanner(data.scheduledAt);
       }
       showScreen('screen-join');
     } catch (e) {
@@ -446,9 +453,10 @@
       });
       const data = await res.json();
       if (!res.ok) {
-        errEl.textContent = (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED') ? (data.message || t('notFound')) : (data.error || t('notFound'));
+        errEl.textContent = (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED' || data.error === 'NOT_STARTED') ? (data.message || t('notFound')) : (data.error || t('notFound'));
         errEl.classList.remove('hidden');
         btn.disabled = false;
+        if (data.error === 'NOT_STARTED' && data.scheduledAt) showScheduledBanner(data.scheduledAt);
         return;
       }
       state.participantId = data.participantId;
@@ -769,6 +777,7 @@
         <div class="rq">${ridx + 1}. ${escapeHtml(qText)}</div>
         <div class="ropt ${r.isCorrect ? 'correct' : 'wrong'}">${t('yourAnswer')}: ${escapeHtml(givenLabel)}</div>
         ${!r.isCorrect ? `<div class="ropt correct">${t('correctAnswer')}: ${escapeHtml(correctLabel)}</div>` : ''}
+        ${r.explain ? `<div class="rexplain">${escapeHtml(r.explain)}</div>` : ''}
       `;
       container.appendChild(div);
     });
@@ -776,6 +785,32 @@
 
   function escapeHtml(s) {
     return (s || '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ==================== БАННЕР ЗАПЛАНИРОВАННОГО НАЧАЛА ====================
+  let scheduledPollTimer = null;
+
+  function showScheduledBanner(scheduledAt) {
+    const banner = document.getElementById('scheduled-banner-student');
+    const dt = new Date(scheduledAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    banner.textContent = t('scheduledBanner').replace('{dt}', dt);
+    banner.classList.remove('hidden');
+    document.getElementById('join-btn').disabled = true;
+
+    if (scheduledPollTimer) clearInterval(scheduledPollTimer);
+    scheduledPollTimer = setInterval(async () => {
+      if (Date.now() < scheduledAt) return;
+      try {
+        const res = await fetch(`/api/sessions/${CODE}/info`);
+        const data = await res.json();
+        if (res.ok && (!data.scheduledAt || data.scheduledAt <= Date.now())) {
+          clearInterval(scheduledPollTimer);
+          scheduledPollTimer = null;
+          banner.classList.add('hidden');
+          document.getElementById('join-btn').disabled = false;
+        }
+      } catch (e) { /* попробуем на следующем тике */ }
+    }, 5000);
   }
 
   // ==================== РАБОТА НАД ОШИБКАМИ ====================
@@ -790,7 +825,7 @@
     const source = fromWithinRetry
       ? retryPool.filter((item, i) => !isRetryAnswerCorrect(item, retryAnswers[i]))
       : lastResult.review.filter(r => !r.isCorrect);
-    retryPool = source.map(r => ({ text: r.text, options: r.options, multi: r.multi, correct: r.correct }));
+    retryPool = source.map(r => ({ text: r.text, options: r.options, multi: r.multi, correct: r.correct, explain: r.explain }));
     retryAnswers = {};
     document.getElementById('retry-score').classList.add('hidden');
     document.getElementById('retry-check-btn').classList.remove('hidden');
@@ -841,6 +876,13 @@
         optsWrap.appendChild(div);
       });
       card.appendChild(optsWrap);
+      if (item.explain) {
+        const expl = document.createElement('div');
+        expl.className = 'rexplain hidden';
+        expl.dataset.retryExplain = idx;
+        expl.textContent = item.explain;
+        card.appendChild(expl);
+      }
       container.appendChild(card);
     });
   }
@@ -881,6 +923,8 @@
         if (correctIdxs.includes(optI)) div.classList.add('correct-answer');
         else if (item.multi ? (Array.isArray(given) && given.includes(optI)) : given === optI) div.classList.add('wrong-answer');
       });
+      const explEl = document.querySelector(`[data-retry-explain="${idx}"]`);
+      if (explEl) explEl.classList.remove('hidden');
     });
 
     const scoreBox = document.getElementById('retry-score');
