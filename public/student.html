@@ -105,6 +105,19 @@
   }
   .score-circle .pct { font-size: 30px; font-weight: 800; color: var(--navy); }
   .score-circle .frac { font-size: 13px; color: #888; }
+  .score-circle.celebrate { animation: scorePulse .6s ease-out; }
+  @keyframes scorePulse { 0% { transform: scale(0.7); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); } }
+
+  .leaderboard-box { background: var(--gray); border-radius: 12px; padding: 14px 16px; margin: 14px 0; }
+  .leaderboard-box .lb-title { font-size: 12px; font-weight: 700; color: #999; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+  .lb-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 14px; }
+  .lb-medal { width: 22px; text-align: center; }
+  .lb-you { background: #fff6ec; border-radius: 6px; padding-left: 6px; margin-left: -6px; font-weight: 700; }
+  .lb-percent { margin-left: auto; font-weight: 700; color: var(--navy); }
+  .lb-your-rank { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #ddd; font-size: 13px; color: #666; }
+
+  .confetti-piece { position: fixed; top: -10px; z-index: 999; border-radius: 2px; pointer-events: none; animation: confettiFall linear forwards; }
+  @keyframes confettiFall { to { transform: translateY(110vh) rotate(360deg); opacity: 0.3; } }
 
   .review-item { border: 1px solid #eee; border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
   .review-item .rq { font-size: 14px; font-weight: 600; color: var(--navy); margin-bottom: 8px; }
@@ -174,9 +187,14 @@
   <div id="screen-result" class="hidden">
     <h1 data-i18n="resultTitle" style="text-align:center;"></h1>
     <div class="info-box hidden" id="auto-submit-note" data-i18n="autoSubmitNote"></div>
-    <div class="score-circle">
+    <div class="score-circle" id="score-circle">
       <div class="pct" id="score-pct">0%</div>
       <div class="frac" id="score-frac">0/0</div>
+    </div>
+    <div class="leaderboard-box hidden" id="leaderboard-box">
+      <div class="lb-title" data-i18n="leaderboardTitle"></div>
+      <div id="leaderboard-rows"></div>
+      <div class="lb-your-rank hidden" id="leaderboard-your-rank"></div>
     </div>
     <h2 style="font-size:15px; color: var(--navy); margin: 18px 0 10px;" data-i18n="reviewTitle"></h2>
     <div id="review-container"></div>
@@ -232,7 +250,10 @@
       retryDoneBtn: 'Вернуться к результату',
       retryAgainBtn: 'Повторить оставшиеся ошибки ({n})',
       retryAllCorrect: 'Все ответы верны! 🎉',
-      retryScoreLabel: 'Верно: {s} из {n}'
+      retryScoreLabel: 'Верно: {s} из {n}',
+      leaderboardTitle: 'Топ-3 результата в этой сессии',
+      leaderboardYourRank: 'Ваше место: {r} из {n}',
+      leaderboardYou: 'Вы'
     },
     kk: {
       oops: 'Сәтсіз аяқталды',
@@ -267,7 +288,10 @@
       retryDoneBtn: 'Нәтижеге оралу',
       retryAgainBtn: 'Қалған қателерді қайталау ({n})',
       retryAllCorrect: 'Барлық жауаптар дұрыс! 🎉',
-      retryScoreLabel: 'Дұрыс: {s} / {n}'
+      retryScoreLabel: 'Дұрыс: {s} / {n}',
+      leaderboardTitle: 'Осы сессиядағы үздік-3 нәтиже',
+      leaderboardYourRank: 'Сіздің орныңыз: {n} ішінен {r}',
+      leaderboardYou: 'Сіз'
     }
   };
 
@@ -589,6 +613,108 @@
     } else {
       retryBtn.classList.add('hidden');
     }
+
+    const circle = document.getElementById('score-circle');
+    circle.classList.remove('celebrate');
+    void circle.offsetWidth; // перезапуск CSS-анимации
+    circle.classList.add('celebrate');
+
+    const percent = lastResult.total > 0 ? Math.round((lastResult.score / lastResult.total) * 100) : 0;
+    if (percent === 100) {
+      playChime('great');
+      launchConfetti();
+    } else if (percent >= 60) {
+      playChime('good');
+    }
+
+    loadLeaderboard();
+  }
+
+  async function loadLeaderboard() {
+    const box = document.getElementById('leaderboard-box');
+    try {
+      const url = `/api/sessions/${CODE}/leaderboard` + (state.participantId ? `?participantId=${encodeURIComponent(state.participantId)}` : '');
+      const res = await fetch(url);
+      if (!res.ok) { box.classList.add('hidden'); return; }
+      const data = await res.json();
+      if (!data.top || data.top.length === 0) { box.classList.add('hidden'); return; }
+      const medals = ['🥇', '🥈', '🥉'];
+      const rowsEl = document.getElementById('leaderboard-rows');
+      rowsEl.innerHTML = data.top.map(r => `
+        <div class="lb-row">
+          <span class="lb-medal">${medals[r.rank - 1] || r.rank}</span>
+          <span class="lb-percent">${r.percent}%</span>
+        </div>
+      `).join('');
+      const rankEl = document.getElementById('leaderboard-your-rank');
+      if (data.yourRank) {
+        rankEl.textContent = t('leaderboardYourRank').replace('{r}', data.yourRank).replace('{n}', data.totalParticipants);
+        rankEl.classList.remove('hidden');
+      } else {
+        rankEl.classList.add('hidden');
+      }
+      box.classList.remove('hidden');
+    } catch (e) {
+      box.classList.add('hidden');
+    }
+  }
+
+  // ==================== ЗВУК И КОНФЕТТИ (лёгкая геймификация) ====================
+  let gamifyAudioCtx = null;
+  function ensureGamifyCtx() {
+    if (!gamifyAudioCtx) gamifyAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (gamifyAudioCtx.state === 'suspended') gamifyAudioCtx.resume();
+    return gamifyAudioCtx;
+  }
+  function playChime(kind) {
+    try {
+      const ctx = ensureGamifyCtx();
+      const now = ctx.currentTime;
+      const notes = kind === 'great' ? [523.25, 659.25, 783.99, 1046.5] : [523.25, 659.25];
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        const t0 = now + i * 0.09;
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.25);
+        osc.connect(g); g.connect(ctx.destination);
+        osc.start(t0); osc.stop(t0 + 0.3);
+      });
+    } catch (e) { /* звук необязателен — молча игнорируем */ }
+  }
+  function playTick() {
+    try {
+      const ctx = ensureGamifyCtx();
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 880;
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(0.2, now + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(now); osc.stop(now + 0.16);
+    } catch (e) {}
+  }
+  function launchConfetti() {
+    const colors = ['#F07C00', '#2C3E50', '#2e9e4f', '#e0a72e', '#d64545'];
+    for (let i = 0; i < 40; i++) {
+      const piece = document.createElement('div');
+      piece.className = 'confetti-piece';
+      const size = 6 + Math.random() * 6;
+      piece.style.width = size + 'px';
+      piece.style.height = size * 0.6 + 'px';
+      piece.style.left = Math.random() * 100 + 'vw';
+      piece.style.background = colors[Math.floor(Math.random() * colors.length)];
+      piece.style.animationDuration = (2 + Math.random() * 1.5) + 's';
+      piece.style.transform = `rotate(${Math.random() * 360}deg)`;
+      document.body.appendChild(piece);
+      setTimeout(() => piece.remove(), 4000);
+    }
   }
 
   function reviewOptionText(reviewItem, i) {
@@ -742,10 +868,11 @@
 
   function checkRetry() {
     let correctCount = 0;
+    let delay = 0;
     retryPool.forEach((item, idx) => {
       const given = retryAnswers[idx];
       const ok = isRetryAnswerCorrect(item, given);
-      if (ok) correctCount++;
+      if (ok) { correctCount++; setTimeout(playTick, delay); delay += 90; }
       const correctIdxs = item.multi ? item.correct : [item.correct];
       document.querySelectorAll(`.option[data-retry-idx="${idx}"]`).forEach(div => {
         div.classList.add('locked');
@@ -761,6 +888,10 @@
       ? t('retryAllCorrect')
       : t('retryScoreLabel').replace('{s}', correctCount).replace('{n}', retryPool.length);
     scoreBox.classList.remove('hidden');
+
+    if (correctCount === retryPool.length) {
+      setTimeout(() => { playChime('great'); launchConfetti(); }, delay + 150);
+    }
 
     document.getElementById('retry-check-btn').classList.add('hidden');
     const remainingWrong = retryPool.length - correctCount;

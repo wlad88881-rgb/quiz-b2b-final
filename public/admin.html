@@ -61,7 +61,10 @@
   <div id="screen-dashboard" class="hidden">
     <div class="top-row">
       <h1>Админ-панель</h1>
-      <span class="logout-link" onclick="adminLogout()">Выйти</span>
+      <div class="row" style="gap:12px;">
+        <button class="btn outline small" onclick="downloadBackup()">📥 Скачать бэкап базы</button>
+        <span class="logout-link" onclick="adminLogout()">Выйти</span>
+      </div>
     </div>
 
     <div class="overview" id="overview"></div>
@@ -144,6 +147,27 @@
       throw new Error('unauthorized');
     }
     return res;
+  }
+
+  async function downloadBackup() {
+    try {
+      const res = await adminFetch('/api/admin/backup');
+      if (!res.ok) { alert('Не удалось скачать бэкап'); return; }
+      const blob = await res.blob();
+      const disposition = res.headers.get('Content-Disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match ? match[1] : `quiz-b2b-backup-${Date.now()}.json`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      if (e.message !== 'unauthorized') alert('Ошибка при скачивании бэкапа');
+    }
   }
 
   function enterDashboard() {
