@@ -37,6 +37,17 @@ const DEVELOPER_CONTACTS = process.env.DEVELOPER_CONTACTS ||
 
 const FREE_MAX_TESTS = 3;
 const FREE_MAX_QUESTIONS = 20;
+const MAX_IMAGE_LEN = 1500000; // ~1.1 МБ бинарных данных в виде base64 data URL
+
+// Проверяет изображение вопроса: допускается только data URL (картинка, отправленная
+// с клиента уже сжатой через canvas), с ограничением на размер, чтобы не раздувать
+// единый JSON-блок базы данных, который целиком перезаписывается при каждом сохранении.
+function sanitizeQuestionImage(img) {
+  if (!img || typeof img !== 'string') return null;
+  if (!img.startsWith('data:image/')) return null;
+  if (img.length > MAX_IMAGE_LEN) return null;
+  return img;
+}
 const FREE_MAX_SUBMISSIONS = 20;
 
 if (!process.env.ADMIN_PASSWORD) {
@@ -430,7 +441,8 @@ app.post('/api/tests', checkAuth, async (req, res) => {
       correct: q.correct,
       multi: !!q.multi,
       tags: Array.isArray(q.tags) ? [...new Set(q.tags.map(t => String(t).trim()).filter(Boolean))] : [],
-      explain: (q.explain || '').toString().trim()
+      explain: (q.explain || '').toString().trim(),
+      image: sanitizeQuestionImage(q.image)
     })),
     createdAt: Date.now()
   };
@@ -454,7 +466,8 @@ app.put('/api/tests/:id', checkAuth, async (req, res) => {
       correct: q.correct,
       multi: !!q.multi,
       tags: Array.isArray(q.tags) ? [...new Set(q.tags.map(t => String(t).trim()).filter(Boolean))] : [],
-      explain: (q.explain || '').toString().trim()
+      explain: (q.explain || '').toString().trim(),
+      image: sanitizeQuestionImage(q.image)
     }));
     return test;
   });
@@ -527,7 +540,8 @@ app.post('/api/tests/generate', checkAuth, async (req, res) => {
       correct: q.correct,
       multi: !!q.multi,
       tags: q.tags || [],
-      explain: q.explain || ''
+      explain: q.explain || '',
+      image: q.image || null
     })),
     createdAt: Date.now()
   };
@@ -685,6 +699,25 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
   const test = safeGet(data.tests, session.testId);
   if (!test) return res.status(404).json({ error: 'Тест не найден' });
   const pid = participantId();
+
+  // Перемешиваем порядок вопросов и порядок вариантов ответа индивидуально для
+  // каждого участника (защита от списывания у соседа на очном тестировании).
+  // Карта optionShuffle[qId][новая_позиция] = исходный_индекс — сохраняется у
+  // участника, чтобы при проверке ответов перевести их обратно в исходную систему координат.
+  const optionShuffle = {};
+  const shuffledQuestions = test.questions.map(q => {
+    const order = shuffleArr(q.options.map((_, i) => i));
+    optionShuffle[q.id] = order;
+    return {
+      id: q.id,
+      text: q.text,
+      options: order.map(origIdx => q.options[origIdx]),
+      multi: !!q.multi,
+      image: q.image || null
+    };
+  });
+  const orderedQuestions = shuffleArr(shuffledQuestions);
+
   const participant = {
     id: pid,
     name: name.trim().slice(0, 80),
@@ -692,7 +725,8 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
     answers: {},
     finished: false,
     score: null,
-    total: null
+    total: null,
+    optionShuffle
   };
   await db.update((d) => { d.sessions[req.params.code].participants[pid] = participant; });
   io.to('session:' + req.params.code).emit('participant:joined', participant);
@@ -700,12 +734,7 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
     participantId: pid,
     testTitle: test.title,
     timeLimit: session.timeLimit || null,
-    questions: test.questions.map(q => ({
-      id: q.id,
-      text: q.text,
-      options: q.options,
-      multi: !!q.multi
-    }))
+    questions: orderedQuestions
   });
 });
 
@@ -723,8 +752,18 @@ app.post('/api/sessions/:code/submit', async (req, res) => {
   let score = 0;
   const total = test.questions.length;
   const detail = {};
+  const optionShuffle = participant.optionShuffle || {};
   for (const q of test.questions) {
-    const given = safeAnswers[q.id];
+    const rawGiven = safeAnswers[q.id];
+    const mapping = optionShuffle[q.id]; // [новая_позиция] = исходный_индекс
+    let given = rawGiven;
+    if (mapping) {
+      if (q.multi) {
+        given = Array.isArray(rawGiven) ? rawGiven.map(i => mapping[i]).filter(v => v !== undefined) : [];
+      } else if (rawGiven !== undefined && rawGiven !== null) {
+        given = mapping[rawGiven] !== undefined ? mapping[rawGiven] : rawGiven;
+      }
+    }
     let isCorrect = false;
     if (q.multi) {
       const correctSet = JSON.stringify([...q.correct].sort());
@@ -753,7 +792,8 @@ app.post('/api/sessions/:code/submit', async (req, res) => {
     given: detail[q.id].given,
     correct: detail[q.id].correct,
     isCorrect: detail[q.id].isCorrect,
-    explain: q.explain || ''
+    explain: q.explain || '',
+    image: q.image || null
   }));
   io.to('session:' + req.params.code).emit('participant:finished', result);
   res.json({ score, total, review });
@@ -833,6 +873,37 @@ app.get('/api/import-template', checkAuth, (req, res) => {
   XLSX.utils.book_append_sheet(wb, ws, 'Вопросы');
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
   res.setHeader('Content-Disposition', 'attachment; filename="shablon_voprosov.xlsx"');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
+});
+
+// Экспорт существующего теста обратно в Excel — тот же формат, что и шаблон импорта,
+// чтобы можно было забрать вопросы для правки офлайн и загрузить их снова.
+// Изображения вопросов в экспорт не попадают (в файле остаётся только текстовое содержимое).
+app.get('/api/tests/:id/export-excel', checkAuth, (req, res) => {
+  const data = db.load();
+  const test = safeGet(data.tests, req.params.id);
+  if (!test || test.companyId !== req.companyId) return res.status(404).json({ error: 'Тест не найден' });
+  const headers = ['Вопрос', 'Вариант 1', 'Вариант 2', 'Вариант 3', 'Вариант 4', 'Вариант 5', 'Правильные (номера через запятую)', 'Теги (через запятую, необязательно)', 'Пояснение (необязательно, показывается после сдачи теста)'];
+  const rows = test.questions.map(q => {
+    const correctIdxs = q.multi ? q.correct : [q.correct];
+    const opts = [0, 1, 2, 3, 4].map(i => q.options[i] !== undefined ? q.options[i] : '');
+    return [
+      q.text,
+      ...opts,
+      correctIdxs.map(i => i + 1).join(','),
+      (q.tags || []).join(', '),
+      q.explain || ''
+    ];
+  });
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  ws['!cols'] = [{ wch: 45 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 30 }, { wch: 30 }, { wch: 50 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Вопросы');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const asciiFallback = test.title.replace(/[^\x20-\x7E]/g, '_').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60) || 'test';
+  const utf8Name = encodeURIComponent(test.title.slice(0, 80) + '.xlsx');
+  res.setHeader('Content-Disposition', `attachment; filename="${asciiFallback}.xlsx"; filename*=UTF-8''${utf8Name}`);
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.send(buf);
 });
