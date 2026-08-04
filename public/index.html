@@ -473,6 +473,7 @@
           <div class="row">
             <button class="btn small" onclick="startSession('${t.id}')">Начать сессию</button>
             <button class="btn outline small" onclick="editTest('${t.id}')">Изменить</button>
+            <button class="btn outline small" onclick="exportTestExcel('${t.id}')">Экспорт Excel</button>
             <button class="btn danger small" onclick="deleteTest('${t.id}')">Удалить</button>
           </div>
         </div>
@@ -518,6 +519,7 @@
   function addQuestion(existing) {
     const wrap = document.createElement('div');
     wrap.className = 'question-block';
+    wrap._imageData = existing && existing.image ? existing.image : null;
     const optionsHtml = (existing ? existing.options : ['', '']).map((opt, i) => `
       <div class="option-row">
         <input type="checkbox" class="opt-correct">
@@ -534,6 +536,15 @@
       <input type="text" class="q-text" value="${existing ? escapeHtml(existing.text) : ''}" placeholder="Текст вопроса">
       <input type="text" class="q-tags" value="${existing && existing.tags ? escapeHtml(existing.tags.join(', ')) : ''}" placeholder="Теги через запятую (например: подшипники, вибрация) — необязательно" style="font-size:13px; color:#666;">
       <textarea class="q-explain" placeholder="Пояснение — покажется студенту после сдачи теста, необязательно" style="font-size:13px; color:#666; min-height:44px;">${existing && existing.explain ? escapeHtml(existing.explain) : ''}</textarea>
+      <div class="q-image-block" style="margin:8px 0;">
+        <input type="file" accept="image/*" style="display:none;" class="q-image-input" onchange="handleQuestionImage(this)">
+        <button type="button" class="btn outline small" onclick="this.previousElementSibling.click()">🖼️ ${existing && existing.image ? 'Заменить изображение' : 'Добавить изображение'}</button>
+        <span class="muted" style="font-size:12px;">необязательно, сжимается автоматически</span>
+        <div class="q-image-preview-wrap ${existing && existing.image ? '' : 'hidden'}" style="margin-top:8px;">
+          <img class="q-image-preview" src="${existing && existing.image ? existing.image : ''}" style="max-width:220px; max-height:140px; border-radius:8px; display:block; border:1px solid var(--border);">
+          <button type="button" class="btn outline small" style="margin-top:4px;" onclick="removeQuestionImage(this)">Удалить изображение</button>
+        </div>
+      </div>
       <div class="options-container">${optionsHtml}</div>
       <button class="btn outline small" style="margin-top:6px;" onclick="addOption(this.closest('.question-block'))">+ Вариант</button>
     `;
@@ -555,6 +566,44 @@
       <button class="btn outline small" onclick="this.parentElement.remove()">✕</button>
     `;
     container.appendChild(div);
+  }
+
+  // Сжимает изображение на клиенте перед отправкой (ограничивает ширину и качество JPEG),
+  // чтобы не раздувать единый JSON-блок базы данных, целиком перезаписываемый при каждом сохранении.
+  function handleQuestionImage(inputEl) {
+    const file = inputEl.files && inputEl.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { alert('Выберите файл изображения'); return; }
+    const block = inputEl.closest('.question-block');
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const maxW = 1000;
+        const scale = Math.min(1, maxW / img.width);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+        block._imageData = dataUrl;
+        const previewWrap = block.querySelector('.q-image-preview-wrap');
+        previewWrap.querySelector('.q-image-preview').src = dataUrl;
+        previewWrap.classList.remove('hidden');
+      };
+      img.onerror = () => alert('Не удалось прочитать изображение');
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+    inputEl.value = '';
+  }
+
+  function removeQuestionImage(btn) {
+    const block = btn.closest('.question-block');
+    block._imageData = null;
+    block.querySelector('.q-image-preview-wrap').classList.add('hidden');
+    block.querySelector('.q-image-preview').src = '';
   }
 
   async function saveTest() {
@@ -584,7 +633,8 @@
       const tagsRaw = block.querySelector('.q-tags').value.trim();
       const tags = tagsRaw ? [...new Set(tagsRaw.split(',').map(t => t.trim()).filter(Boolean))] : [];
       const explain = block.querySelector('.q-explain').value.trim();
-      questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi, tags, explain });
+      const image = block._imageData || null;
+      questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi, tags, explain, image });
     }
 
     const payload = { title, questions };
@@ -605,6 +655,11 @@
   function downloadTemplate() {
     const token = localStorage.getItem('b2bToken');
     window.location.href = '/api/import-template?companyId=' + encodeURIComponent(token);
+  }
+
+  function exportTestExcel(testId) {
+    const token = localStorage.getItem('b2bToken');
+    window.location.href = '/api/tests/' + testId + '/export-excel?companyId=' + encodeURIComponent(token);
   }
 
   // ИМПОРТ ИЗ EXCEL

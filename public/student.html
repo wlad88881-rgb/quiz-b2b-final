@@ -176,6 +176,7 @@
     <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
     <div class="q-index" id="q-index"></div>
     <div class="q-text" id="q-text"></div>
+    <img id="q-image" class="hidden" style="max-width:100%; border-radius:10px; margin:10px 0; display:block;">
     <div class="q-hint" id="q-hint"></div>
     <div id="options-container"></div>
     <div class="dots" id="dots"></div>
@@ -505,9 +506,9 @@
     const q = state.questions[idx];
     if (state.lang === 'kk' && state.translated) {
       const tq = state.translated.questions[idx];
-      return { id: q.id, text: tq.text, options: tq.options, multi: q.multi };
+      return { id: q.id, text: tq.text, options: tq.options, multi: q.multi, image: q.image };
     }
-    return { id: q.id, text: q.text, options: q.options, multi: q.multi };
+    return { id: q.id, text: q.text, options: q.options, multi: q.multi, image: q.image };
   }
 
   function renderQuestion() {
@@ -517,6 +518,8 @@
 
     document.getElementById('q-index').textContent = `${idx + 1} / ${total}`;
     document.getElementById('q-text').textContent = q.text;
+    const qImg = document.getElementById('q-image');
+    if (q.image) { qImg.src = q.image; qImg.classList.remove('hidden'); } else { qImg.classList.add('hidden'); qImg.removeAttribute('src'); }
     document.getElementById('q-hint').textContent = q.multi ? t('selectMulti') : t('selectOne');
 
     const container = document.getElementById('options-container');
@@ -775,6 +778,7 @@
       div.innerHTML = `
         <span class="badge-status ${statusClass}">${statusText}</span>
         <div class="rq">${ridx + 1}. ${escapeHtml(qText)}</div>
+        ${r.image ? `<img src="${r.image}" style="max-width:100%; border-radius:8px; margin:6px 0 10px; display:block;">` : ''}
         <div class="ropt ${r.isCorrect ? 'correct' : 'wrong'}">${t('yourAnswer')}: ${escapeHtml(givenLabel)}</div>
         ${!r.isCorrect ? `<div class="ropt correct">${t('correctAnswer')}: ${escapeHtml(correctLabel)}</div>` : ''}
         ${r.explain ? `<div class="rexplain">${escapeHtml(r.explain)}</div>` : ''}
@@ -825,7 +829,7 @@
     const source = fromWithinRetry
       ? retryPool.filter((item, i) => !isRetryAnswerCorrect(item, retryAnswers[i]))
       : lastResult.review.filter(r => !r.isCorrect);
-    retryPool = source.map(r => ({ text: r.text, options: r.options, multi: r.multi, correct: r.correct, explain: r.explain }));
+    retryPool = source.map(r => ({ text: r.text, options: r.options, multi: r.multi, correct: r.correct, explain: r.explain, image: r.image }));
     retryAnswers = {};
     document.getElementById('retry-score').classList.add('hidden');
     document.getElementById('retry-check-btn').classList.remove('hidden');
@@ -860,6 +864,13 @@
       title.className = 'rq';
       title.textContent = `${idx + 1}. ${retryItemText(item)}`;
       card.appendChild(title);
+
+      if (item.image) {
+        const img = document.createElement('img');
+        img.src = item.image;
+        img.style.cssText = 'max-width:100%; border-radius:8px; margin-bottom:10px; display:block;';
+        card.appendChild(img);
+      }
 
       const optsWrap = document.createElement('div');
       optsWrap.style.marginTop = '10px';
