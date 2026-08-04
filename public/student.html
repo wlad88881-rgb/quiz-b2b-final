@@ -311,6 +311,7 @@
     deadline: null,
     timerInterval: null,
     translated: null,       // { title, questions: [{text, options[]}] } на kk
+    translatedExplains: {}, // { "исходный текст пояснения": "перевод на kk" }
     translating: false
   };
 
@@ -431,6 +432,38 @@
       if (!document.getElementById('screen-join').classList.contains('hidden')) {
         document.getElementById('join-title').textContent = displayTitle();
       }
+    }
+  }
+
+  // Пояснения к вопросам становятся известны только после сдачи теста (до этого их
+  // скрывают от студента, чтобы не подсказывать правильный ответ), поэтому переводятся
+  // отдельным запросом здесь, а не вместе с текстом вопросов в translateAll().
+  function explainText(original) {
+    if (!original) return '';
+    if (state.lang === 'kk' && state.translatedExplains && state.translatedExplains[original]) {
+      return state.translatedExplains[original];
+    }
+    return original;
+  }
+
+  async function translateExplains() {
+    if (!lastResult || state.lang !== 'kk') return;
+    const unique = [...new Set(lastResult.review.filter(r => r.explain).map(r => r.explain))]
+      .filter(txt => !state.translatedExplains[txt]);
+    if (unique.length === 0) return;
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texts: unique, target: 'kk' })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'translate error');
+      unique.forEach((txt, i) => { state.translatedExplains[txt] = data.translations[i]; });
+      if (!document.getElementById('screen-result').classList.contains('hidden')) renderResultTexts();
+      if (!document.getElementById('screen-retry').classList.contains('hidden')) renderRetryList();
+    } catch (e) {
+      console.warn('[translate] explain fail', e);
     }
   }
 
@@ -639,6 +672,7 @@
     }
 
     loadLeaderboard();
+    translateExplains();
   }
 
   async function loadLeaderboard() {
@@ -781,7 +815,7 @@
         ${r.image ? `<img src="${r.image}" style="max-width:100%; border-radius:8px; margin:6px 0 10px; display:block;">` : ''}
         <div class="ropt ${r.isCorrect ? 'correct' : 'wrong'}">${t('yourAnswer')}: ${escapeHtml(givenLabel)}</div>
         ${!r.isCorrect ? `<div class="ropt correct">${t('correctAnswer')}: ${escapeHtml(correctLabel)}</div>` : ''}
-        ${r.explain ? `<div class="rexplain">${escapeHtml(r.explain)}</div>` : ''}
+        ${r.explain ? `<div class="rexplain">${escapeHtml(explainText(r.explain))}</div>` : ''}
       `;
       container.appendChild(div);
     });
@@ -837,6 +871,7 @@
     document.getElementById('retry-done-btn').classList.add('hidden');
     renderRetryList();
     showScreen('screen-retry');
+    translateExplains();
   }
 
   function retryItemText(item) {
@@ -891,7 +926,7 @@
         const expl = document.createElement('div');
         expl.className = 'rexplain hidden';
         expl.dataset.retryExplain = idx;
-        expl.textContent = item.explain;
+        expl.textContent = explainText(item.explain);
         card.appendChild(expl);
       }
       container.appendChild(card);
