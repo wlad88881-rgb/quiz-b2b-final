@@ -14,7 +14,7 @@
     --gray: #F4F4F4;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
-  html, body { height: 100%; }
+  html, body { height: 100%; overscroll-behavior-y: contain; }
   body {
     background: var(--gray);
     display: flex;
@@ -218,6 +218,23 @@
 </div>
 
 <script>
+  // Подстраховка против жеста «потянуть вниз, чтобы обновить» на телефоне — иначе
+  // случайное движение пальцем во время теста перезагружает страницу и сбрасывает прогресс.
+  // overscroll-behavior в CSS покрывает большинство браузеров; это — на случай Safari
+  // на старых iPhone, где поддержка CSS-варианта менее надёжна.
+  (function() {
+    let touchStartY = 0;
+    document.addEventListener('touchstart', (e) => {
+      touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+    document.addEventListener('touchmove', (e) => {
+      const scrollTop = window.scrollY || document.documentElement.scrollTop;
+      if (scrollTop <= 0 && e.touches[0].clientY > touchStartY) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+  })();
+
   const CODE = location.pathname.split('/').filter(Boolean).pop();
 
   const UI = {
