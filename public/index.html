@@ -258,7 +258,7 @@
       </div>
       <div id="no-participants" class="muted" style="text-align:center; padding:30px 0;">Пока никто не присоединился.</div>
       <table id="results-table" class="hidden">
-        <thead><tr><th>Участник</th><th>Статус</th><th>Результат</th></tr></thead>
+        <thead><tr><th>Участник</th><th>Статус</th><th>Результат</th><th>Переключения вкладки</th></tr></thead>
         <tbody id="results-body"></tbody>
       </table>
     </div>
@@ -854,8 +854,31 @@
     socket = io();
     socket.on('participant:joined', (p) => { if (p) upsertParticipantRow(p); });
     socket.on('participant:finished', (p) => { if (p) upsertParticipantRow(p); });
+    socket.on('participant:tabswitch', (evt) => {
+      if (!evt || !evt.participantId) return;
+      const rec = liveTabSwitches[evt.participantId] || { count: 0, totalMs: 0 };
+      rec.count += 1;
+      rec.totalMs += evt.awayMs || 0;
+      liveTabSwitches[evt.participantId] = rec;
+      const row = document.getElementById('prow-' + evt.participantId);
+      if (row) {
+        const cell = row.children[3];
+        if (cell) cell.innerHTML = tabSwitchCellHtml({ id: evt.participantId, tabSwitchCount: undefined, tabSwitchTotalMs: undefined });
+      }
+    });
     socket.on('connect', () => { if (currentSessionCode) socket.emit('teacher:watch', currentSessionCode); });
     return socket;
+  }
+
+  let liveTabSwitches = {}; // participantId -> { count, totalMs } — накапливается по live-событиям до сдачи теста
+
+  function tabSwitchCellHtml(p) {
+    const live = liveTabSwitches[p.id];
+    const count = (p.tabSwitchCount !== undefined && p.tabSwitchCount !== null) ? p.tabSwitchCount : (live ? live.count : 0);
+    const totalMs = (p.tabSwitchTotalMs !== undefined && p.tabSwitchTotalMs !== null) ? p.tabSwitchTotalMs : (live ? live.totalMs : 0);
+    if (!count) return '<span class="muted">—</span>';
+    const sec = Math.round(totalMs / 1000);
+    return `<span style="color:var(--orange); font-weight:600;">⚠ ${count} раз(а), ~${sec} сек вне теста</span>`;
   }
 
   function upsertParticipantRow(p) {
@@ -869,7 +892,7 @@
     }
     const statusText = p.finished ? 'Завершил' : 'Проходит тест';
     const resultText = (p.finished && p.total) ? `${p.score}/${p.total} (${Math.round(p.score / p.total * 100)}%)` : '—';
-    row.innerHTML = `<td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td>`;
+    row.innerHTML = `<td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td><td>${tabSwitchCellHtml(p)}</td>`;
   }
 
   function openSession(session, url, qrDataUrl) {
@@ -885,6 +908,7 @@
     document.getElementById('results-table').classList.add('hidden');
     document.getElementById('results-body').innerHTML = '';
     document.getElementById('end-session-btn').disabled = false;
+    liveTabSwitches = {};
 
     currentSessionCode = session.code;
     updateScheduledBanner(session.scheduledAt || null);

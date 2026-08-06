@@ -136,6 +136,7 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
+<script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
 
@@ -623,6 +624,38 @@
 
   let lastResult = null;
 
+  // ==================== ОТСЛЕЖИВАНИЕ ПЕРЕКЛЮЧЕНИЯ ВКЛАДКИ ====================
+  // Используем стандартный Page Visibility API — единственный надёжный способ узнать,
+  // что студент свернул/переключил вкладку. Заблокировать сам скриншот или переключение
+  // невозможно (это ограничение уровня ОС, а не сайта) — здесь только фиксация факта.
+  let tabSwitchLog = [];
+  let tabHiddenAt = null;
+  let liveSocket = null;
+
+  function ensureLiveSocket() {
+    if (liveSocket) return liveSocket;
+    try { liveSocket = io(); } catch (e) { liveSocket = null; }
+    return liveSocket;
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    const quizVisible = !document.getElementById('screen-quiz').classList.contains('hidden');
+    if (document.hidden) {
+      if (quizVisible) tabHiddenAt = Date.now();
+      return;
+    }
+    if (tabHiddenAt === null) return;
+    const awayMs = Date.now() - tabHiddenAt;
+    tabHiddenAt = null;
+    if (awayMs < 1500) return; // короткие переключения (например, смахивание шторки) не считаем
+    if (!quizVisible) return;
+    tabSwitchLog.push({ awayMs, at: Date.now() });
+    if (state.participantId) {
+      const s = ensureLiveSocket();
+      if (s) s.emit('student:tabswitch', { code: CODE, participantId: state.participantId, awayMs });
+    }
+  });
+
   async function submitTest(auto) {
     if (state.timerInterval) clearInterval(state.timerInterval);
     document.getElementById('submit-btn').disabled = true;
@@ -630,7 +663,7 @@
       const res = await fetch(`/api/sessions/${CODE}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ participantId: state.participantId, answers: state.answers })
+        body: JSON.stringify({ participantId: state.participantId, answers: state.answers, tabSwitchLog })
       });
       const data = await res.json();
       if (!res.ok) {
