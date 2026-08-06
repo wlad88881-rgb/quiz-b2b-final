@@ -680,6 +680,31 @@ app.get('/api/sessions/:code/info', (req, res) => {
   });
 });
 
+// Публичный эндпоинт для «витрины показа» (/present.html): повторно отдаёт QR-код и
+// ссылку по коду сессии — без имён участников, результатов и другой чувствительной информации,
+// чтобы можно было безопасно открыть на проекторе/втором экране в классе.
+app.get('/api/sessions/:code/present', async (req, res) => {
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
+  const isLab = session.type === 'lab';
+  const url = `${getBaseUrl()}/${isLab ? 'l' : 's'}/${session.code}`;
+  try {
+    const qrDataUrl = await QRCode.toDataURL(url, { width: 500, margin: 1 });
+    res.json({
+      testTitle: session.testTitle,
+      code: session.code,
+      url,
+      qrDataUrl,
+      type: isLab ? 'lab' : 'test',
+      ended: !!session.ended,
+      scheduledAt: session.scheduledAt || null
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Не удалось сформировать QR-код' });
+  }
+});
+
 app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Введите имя' });
