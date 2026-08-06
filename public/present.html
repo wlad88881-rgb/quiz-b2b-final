@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Присоединяйтесь к тестированию</title>
+<meta name="theme-color" content="#2C3E50">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  :root { --navy: #2C3E50; --orange: #F07C00; }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  html, body { height: 100%; }
+  body {
+    background: var(--navy);
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 40px 20px;
+    text-align: center;
+  }
+  .hidden { display: none !important; }
+  h1 { font-size: clamp(22px, 3.5vw, 40px); font-weight: 700; margin-bottom: 8px; }
+  .sub { font-size: clamp(14px, 1.6vw, 20px); color: #b7c2d0; margin-bottom: 32px; }
+  .qr-card {
+    background: #fff;
+    border-radius: 24px;
+    padding: 24px;
+    display: inline-block;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+  }
+  .qr-card img { width: min(48vw, 420px); height: min(48vw, 420px); display: block; }
+  .code-label { margin-top: 28px; font-size: clamp(15px, 1.8vw, 22px); color: #b7c2d0; letter-spacing: 1px; }
+  .code-value { font-size: clamp(38px, 7vw, 76px); font-weight: 800; letter-spacing: 8px; color: var(--orange); margin-top: 4px; }
+  .link-line { margin-top: 24px; font-size: clamp(14px, 1.6vw, 20px); color: #fff; word-break: break-all; }
+  .joined-count { margin-top: 40px; font-size: clamp(16px, 2vw, 24px); color: #7fd99a; font-weight: 600; }
+  .status-badge { display: inline-block; margin-top: 16px; padding: 8px 20px; border-radius: 20px; font-size: 15px; font-weight: 700; background: #3a4453; }
+  .status-badge.scheduled { background: #3a3010; color: #f0c000; }
+  .status-badge.ended { background: #3a1f22; color: #ff7373; }
+  .center { text-align: center; }
+  .spinner { width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.2); border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error-text { font-size: 18px; color: #ff7373; }
+</style>
+</head>
+<body>
+
+  <div id="screen-loading" class="center">
+    <div class="spinner"></div>
+    <div class="sub">Загрузка...</div>
+  </div>
+
+  <div id="screen-error" class="hidden center">
+    <div class="error-text" id="error-text">Сессия не найдена</div>
+  </div>
+
+  <div id="screen-present" class="hidden">
+    <h1 id="p-title"></h1>
+    <div class="sub">Отсканируйте QR-код или перейдите по ссылке, чтобы присоединиться</div>
+    <div class="qr-card"><img id="p-qr" alt="QR-код"></div>
+    <div class="code-label">Код сессии</div>
+    <div class="code-value" id="p-code"></div>
+    <div class="link-line" id="p-link"></div>
+    <div id="p-status-wrap"></div>
+    <div class="joined-count hidden" id="p-joined">Присоединилось: 0</div>
+  </div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const CODE = params.get('code');
+  let joinedCount = 0;
+
+  function showScreen(id) {
+    ['screen-loading', 'screen-error', 'screen-present'].forEach(s => {
+      document.getElementById(s).classList.toggle('hidden', s !== id);
+    });
+  }
+
+  async function load() {
+    if (!CODE) { showScreen('screen-error'); return; }
+    try {
+      const res = await fetch(`/api/sessions/${CODE}/present`);
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById('error-text').textContent = data.error || 'Сессия не найдена';
+        showScreen('screen-error');
+        return;
+      }
+      document.getElementById('p-title').textContent = data.testTitle;
+      document.getElementById('p-qr').src = data.qrDataUrl;
+      document.getElementById('p-code').textContent = data.code;
+      document.getElementById('p-link').textContent = data.url;
+
+      const statusWrap = document.getElementById('p-status-wrap');
+      statusWrap.innerHTML = '';
+      if (data.ended) {
+        statusWrap.innerHTML = '<div class="status-badge ended">Тестирование завершено</div>';
+      } else if (data.scheduledAt && data.scheduledAt > Date.now()) {
+        const dt = new Date(data.scheduledAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        statusWrap.innerHTML = `<div class="status-badge scheduled">⏰ Начало в ${dt}</div>`;
+      }
+
+      showScreen('screen-present');
+      document.getElementById('p-joined').classList.remove('hidden');
+      watchLive(data.type);
+    } catch (e) {
+      document.getElementById('error-text').textContent = 'Не удалось подключиться';
+      showScreen('screen-error');
+    }
+  }
+
+  function watchLive(type) {
+    const socket = io();
+    socket.on('connect', () => socket.emit('teacher:watch', CODE));
+    // Только считаем присоединившихся — имена и результаты на этом экране намеренно не показываем
+    socket.on('participant:joined', () => {
+      joinedCount++;
+      document.getElementById('p-joined').textContent = `Присоединилось: ${joinedCount}`;
+    });
+  }
+
+  load();
+</script>
+</body>
+</html>

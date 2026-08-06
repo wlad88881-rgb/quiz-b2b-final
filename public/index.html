@@ -253,6 +253,7 @@
             <div class="muted" style="font-size:11px;">Ссылка</div>
             <a id="session-link" href="#" target="_blank"></a>
           </div>
+          <button class="btn outline small" onclick="openPresentView()">🖥 Экран для показа</button>
           <button class="btn outline small" onclick="exportResults()">📥 Excel</button>
         </div>
       </div>
@@ -960,6 +961,11 @@
     const token = localStorage.getItem('b2bToken');
     const endpoint = currentSessionType === 'lab' ? '/api/lab-sessions/' : '/api/sessions/';
     window.location.href = endpoint + currentSessionCode + '/export?companyId=' + encodeURIComponent(token);
+  }
+
+  function openPresentView() {
+    if (!currentSessionCode) return;
+    window.open('/present.html?code=' + encodeURIComponent(currentSessionCode), '_blank');
   }
 
   function escapeHtml(s) {
