@@ -726,7 +726,9 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
     finished: false,
     score: null,
     total: null,
-    optionShuffle
+    optionShuffle,
+    tabSwitchCount: 0,
+    tabSwitchTotalMs: 0
   };
   await db.update((d) => { d.sessions[req.params.code].participants[pid] = participant; });
   io.to('session:' + req.params.code).emit('participant:joined', participant);
@@ -739,8 +741,9 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
 });
 
 app.post('/api/sessions/:code/submit', async (req, res) => {
-  const { participantId: pid, answers } = req.body;
+  const { participantId: pid, answers, tabSwitchLog } = req.body;
   const safeAnswers = answers && typeof answers === 'object' ? answers : {};
+  const safeTabLog = Array.isArray(tabSwitchLog) ? tabSwitchLog.slice(0, 200) : [];
   const data = db.load();
   const session = safeGet(data.sessions, req.params.code);
   if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
@@ -782,6 +785,9 @@ app.post('/api/sessions/:code/submit', async (req, res) => {
     p.finishedAt = Date.now();
     p.score = score;
     p.total = total;
+    const totalAwayMs = safeTabLog.reduce((sum, e) => sum + (Math.max(0, parseInt(e.awayMs, 10) || 0)), 0);
+    p.tabSwitchCount = safeTabLog.length;
+    p.tabSwitchTotalMs = totalAwayMs;
     return p;
   });
   await incrementSubmissions(session.companyId);
@@ -842,7 +848,9 @@ app.get('/api/sessions/:code/export', checkAuth, (req, res) => {
       'Баллы': p.score !== null ? p.score : '—',
       'Всего вопросов': p.total !== null ? p.total : '—',
       'Процент': p.total ? Math.round((p.score / p.total) * 100) + '%' : '—',
-      'Статус': p.finished ? 'Завершил' : 'В процессе'
+      'Статус': p.finished ? 'Завершил' : 'В процессе',
+      'Переключений вкладки': p.tabSwitchCount || 0,
+      'Время вне теста, сек': p.tabSwitchTotalMs ? Math.round(p.tabSwitchTotalMs / 1000) : 0
     };
     if (test) {
       test.questions.forEach((q, i) => {
@@ -1321,6 +1329,17 @@ io.on('connection', (socket) => {
   });
   socket.on('teacher:unwatch', (code) => {
     if (typeof code === 'string') socket.leave('session:' + code);
+  });
+
+  // Студент сообщает, что вернулся после переключения вкладки/сворачивания приложения
+  // во время прохождения теста. Ретранслируем преподавателю, наблюдающему за сессией.
+  socket.on('student:tabswitch', (payload) => {
+    if (!payload || typeof payload.code !== 'string' || typeof payload.participantId !== 'string') return;
+    const awayMs = Math.max(0, parseInt(payload.awayMs, 10) || 0);
+    io.to('session:' + payload.code).emit('participant:tabswitch', {
+      participantId: payload.participantId,
+      awayMs
+    });
   });
 });
 
