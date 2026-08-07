@@ -813,6 +813,7 @@ app.post('/api/sessions/:code/submit', async (req, res) => {
     const totalAwayMs = safeTabLog.reduce((sum, e) => sum + (Math.max(0, parseInt(e.awayMs, 10) || 0)), 0);
     p.tabSwitchCount = safeTabLog.length;
     p.tabSwitchTotalMs = totalAwayMs;
+    p.tabSwitchLongCount = safeTabLog.filter(e => (Math.max(0, parseInt(e.awayMs, 10) || 0)) >= 5000).length;
     return p;
   });
   await incrementSubmissions(session.companyId);
@@ -875,6 +876,7 @@ app.get('/api/sessions/:code/export', checkAuth, (req, res) => {
       'Процент': p.total ? Math.round((p.score / p.total) * 100) + '%' : '—',
       'Статус': p.finished ? 'Завершил' : 'В процессе',
       'Переключений вкладки': p.tabSwitchCount || 0,
+      'Из них долгих (5+ сек)': p.tabSwitchLongCount || 0,
       'Время вне теста, сек': p.tabSwitchTotalMs ? Math.round(p.tabSwitchTotalMs / 1000) : 0
     };
     if (test) {
@@ -1363,7 +1365,8 @@ io.on('connection', (socket) => {
     const awayMs = Math.max(0, parseInt(payload.awayMs, 10) || 0);
     io.to('session:' + payload.code).emit('participant:tabswitch', {
       participantId: payload.participantId,
-      awayMs
+      awayMs,
+      isLong: !!payload.isLong
     });
   });
 });
