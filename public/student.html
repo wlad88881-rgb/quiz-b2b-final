@@ -59,6 +59,22 @@
   .btn-row .btn { width: auto; flex: 1; }
 
   .error-box { background: #fdecea; color: #d64545; padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+
+  .warn-overlay {
+    position: fixed; inset: 0; background: rgba(20,10,10,0.55);
+    display: flex; align-items: center; justify-content: center; z-index: 999; padding: 20px;
+  }
+  .warn-card {
+    background: #fff; border-radius: 16px; padding: 28px 24px; max-width: 380px; text-align: center;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3); border-top: 6px solid #d64545;
+  }
+  .warn-card .warn-icon { font-size: 40px; margin-bottom: 10px; }
+  .warn-card h3 { color: #d64545; font-size: 18px; margin-bottom: 10px; }
+  .warn-card p { color: #444; font-size: 14.5px; line-height: 1.5; margin-bottom: 18px; }
+  .warn-card button {
+    background: var(--navy); color: #fff; border: none; padding: 12px 24px; border-radius: 10px;
+    font-size: 15px; font-weight: 600; cursor: pointer; width: 100%;
+  }
   .info-box { background: #eef4fb; color: #2C3E50; padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
 
   .meta-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
@@ -217,6 +233,15 @@
 
 </div>
 
+<div id="tab-warn-overlay" class="warn-overlay hidden">
+  <div class="warn-card">
+    <div class="warn-icon">⚠️</div>
+    <h3 data-i18n="tabWarnTitle"></h3>
+    <p data-i18n="tabWarnText"></p>
+    <button onclick="dismissTabWarning()" data-i18n="tabWarnBtn"></button>
+  </div>
+</div>
+
 <script>
   // Подстраховка против жеста «потянуть вниз, чтобы обновить» на телефоне — иначе
   // случайное движение пальцем во время теста перезагружает страницу и сбрасывает прогресс.
@@ -275,7 +300,10 @@
       leaderboardTitle: 'Топ-3 результата в этой сессии',
       leaderboardYourRank: 'Ваше место: {r} из {n}',
       leaderboardYou: 'Вы',
-      scheduledBanner: '⏰ Тестирование начнётся {dt}. Страница обновится автоматически.'
+      scheduledBanner: '⏰ Тестирование начнётся {dt}. Страница обновится автоматически.',
+      tabWarnTitle: 'Не покидайте страницу теста',
+      tabWarnText: 'Вы уже несколько раз уходили со страницы во время тестирования. Не переключайтесь на другие вкладки и не используйте интернет для поиска ответов — это фиксируется и видно преподавателю.',
+      tabWarnBtn: 'Понятно, продолжаю'
     },
     kk: {
       oops: 'Сәтсіз аяқталды',
@@ -314,7 +342,10 @@
       leaderboardTitle: 'Осы сессиядағы үздік-3 нәтиже',
       leaderboardYourRank: 'Сіздің орныңыз: {n} ішінен {r}',
       leaderboardYou: 'Сіз',
-      scheduledBanner: '⏰ Тестілеу {dt} басталады. Бет автоматты түрде жаңарады.'
+      scheduledBanner: '⏰ Тестілеу {dt} басталады. Бет автоматты түрде жаңарады.',
+      tabWarnTitle: 'Тест бетінен кетпеңіз',
+      tabWarnText: 'Сіз тестілеу кезінде бірнеше рет беттен кеттіңіз. Басқа қойындыларға ауыспаңыз және жауап іздеу үшін интернетті қолданбаңыз — бұл тіркеледі және оқытушыға көрінеді.',
+      tabWarnBtn: 'Түсінікті, жалғастырамын'
     }
   };
 
@@ -648,6 +679,9 @@
   let tabSwitchLog = [];
   let tabHiddenAt = null;
   let liveSocket = null;
+  const LONG_SWITCH_MS = 5000;   // уход дольше этого считается «долгим»
+  const LONG_SWITCH_WARN_AFTER = 3; // предупреждаем начиная с (N+1)-го долгого ухода
+  let longSwitchCount = 0;
 
   function ensureLiveSocket() {
     if (liveSocket) return liveSocket;
@@ -669,9 +703,20 @@
     tabSwitchLog.push({ awayMs, at: Date.now() });
     if (state.participantId) {
       const s = ensureLiveSocket();
-      if (s) s.emit('student:tabswitch', { code: CODE, participantId: state.participantId, awayMs });
+      if (s) s.emit('student:tabswitch', { code: CODE, participantId: state.participantId, awayMs, isLong: awayMs >= LONG_SWITCH_MS });
+    }
+    if (awayMs >= LONG_SWITCH_MS) {
+      longSwitchCount++;
+      if (longSwitchCount > LONG_SWITCH_WARN_AFTER) showTabWarning();
     }
   });
+
+  function showTabWarning() {
+    document.getElementById('tab-warn-overlay').classList.remove('hidden');
+  }
+  function dismissTabWarning() {
+    document.getElementById('tab-warn-overlay').classList.add('hidden');
+  }
 
   async function submitTest(auto) {
     if (state.timerInterval) clearInterval(state.timerInterval);
