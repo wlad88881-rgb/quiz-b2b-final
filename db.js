@@ -132,11 +132,23 @@ async function save(data) {
   await persistToSupabase(data);
 }
 
+// Все изменения идут через единую очередь: следующая запись начинается только после
+// того, как предыдущая полностью завершилась (включая обращение к Supabase). Без этого
+// при параллельных запросах (например, когда много студентов сдают тест одновременно)
+// более быстрый поздний запрос мог "долететь" до Supabase раньше более раннего —
+// и его результат перезаписывался устаревшими данными, теряя часть обновлений.
+let writeQueue = Promise.resolve();
+
 async function update(callback) {
-  const data = load();
-  const result = callback(data);
-  await save(data);
-  return result;
+  const run = writeQueue.then(async () => {
+    const data = load();
+    const result = callback(data);
+    await save(data);
+    return result;
+  });
+  // Даже если эта запись провалится, очередь не должна встать намертво для следующих.
+  writeQueue = run.catch(() => {});
+  return run;
 }
 
 module.exports = { load, save, update, initCache };
