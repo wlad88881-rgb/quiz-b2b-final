@@ -63,6 +63,8 @@
       <h1>Админ-панель</h1>
       <div class="row" style="gap:12px;">
         <button class="btn outline small" onclick="downloadBackup()">📥 Скачать бэкап базы</button>
+        <input type="file" id="restore-file-input" accept="application/json,.json" style="display:none;" onchange="handleRestoreFile(this)">
+        <button class="btn outline small" onclick="document.getElementById('restore-file-input').click()">📤 Восстановить из бэкапа</button>
         <span class="logout-link" onclick="adminLogout()">Выйти</span>
       </div>
     </div>
@@ -168,6 +170,54 @@
     } catch (e) {
       if (e.message !== 'unauthorized') alert('Ошибка при скачивании бэкапа');
     }
+  }
+
+  function handleRestoreFile(inputEl) {
+    const file = inputEl.files && inputEl.files[0];
+    inputEl.value = ''; // сброс, чтобы можно было выбрать тот же файл повторно при необходимости
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      let parsed;
+      try {
+        parsed = JSON.parse(e.target.result);
+      } catch (err) {
+        alert('Не удалось прочитать файл — это не корректный JSON.');
+        return;
+      }
+      const companiesCount = parsed.companies ? Object.keys(parsed.companies).length : 0;
+      const testsCount = parsed.tests ? Object.keys(parsed.tests).length : 0;
+      const sessionsCount = parsed.sessions ? Object.keys(parsed.sessions).length : 0;
+
+      const step1 = confirm(
+        `В файле обнаружено:\n— компаний: ${companiesCount}\n— тестов: ${testsCount}\n— сессий: ${sessionsCount}\n\n` +
+        `ВНИМАНИЕ: восстановление ПОЛНОСТЬЮ заменит текущую базу данных содержимым этого файла. ` +
+        `Всё, что появилось на платформе ПОСЛЕ создания этого бэкапа, будет безвозвратно удалено.\n\n` +
+        `Продолжить?`
+      );
+      if (!step1) return;
+      const step2 = confirm('Вы точно уверены? Это последнее подтверждение — отменить восстановление после него будет нельзя.');
+      if (!step2) return;
+
+      try {
+        const res = await adminFetch('/api/admin/restore', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: e.target.result
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert('Ошибка восстановления: ' + (data.error || 'неизвестная ошибка'));
+          return;
+        }
+        alert(`Готово! Восстановлено:\nкомпаний — ${data.companies}\nтестов — ${data.tests}\nсессий — ${data.sessions}\nтренажёров — ${data.labs}`);
+        loadOverview();
+        loadCompanies();
+      } catch (err) {
+        if (err.message !== 'unauthorized') alert('Ошибка при восстановлении бэкапа');
+      }
+    };
+    reader.readAsText(file);
   }
 
   function enterDashboard() {
