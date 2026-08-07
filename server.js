@@ -1456,6 +1456,31 @@ app.get('/api/admin/backup', checkAdmin, (req, res) => {
   res.send(JSON.stringify(data, null, 2));
 });
 
+// Восстановление базы данных из файла, скачанного через «Скачать бэкап базы».
+// ПОЛНОСТЬЮ заменяет текущие данные — всё, что появилось после создания бэкапа, будет
+// потеряно. Собственный лимит на размер тела запроса (бэкап с изображениями в вопросах
+// может быть заметно больше, чем стандартный лимит остальных маршрутов).
+app.post('/api/admin/restore', checkAdmin, express.json({ limit: '25mb' }), async (req, res) => {
+  const incoming = req.body;
+  if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+    return res.status(400).json({ error: 'Файл не похож на корректный бэкап (ожидался JSON-объект)' });
+  }
+  const looksValid = ['companies', 'tests', 'sessions'].some(
+    key => incoming[key] && typeof incoming[key] === 'object' && !Array.isArray(incoming[key])
+  );
+  if (!looksValid) {
+    return res.status(400).json({ error: 'Файл не похож на бэкап этой платформы — не найдены ожидаемые разделы (companies/tests/sessions)' });
+  }
+  const restored = await db.restore(incoming);
+  res.json({
+    ok: true,
+    companies: Object.keys(restored.companies).length,
+    tests: Object.keys(restored.tests).length,
+    sessions: Object.keys(restored.sessions).length,
+    labs: Object.keys(restored.labs).length
+  });
+});
+
 async function seedLabs() {
   await db.update((d) => {
     if (!d.labs) d.labs = {};

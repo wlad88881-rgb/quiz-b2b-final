@@ -151,4 +151,17 @@ async function update(callback) {
   return run;
 }
 
-module.exports = { load, save, update, initCache };
+// Полностью заменяет базу данных содержимым бэкапа (тот самый файл из «Скачать бэкап
+// базы» в админке). Идёт через ту же очередь записи, что и update() — иначе восстановление
+// могло бы столкнуться с параллельной обычной записью и результат оказался бы гонкой.
+async function restore(newData) {
+  const run = writeQueue.then(async () => {
+    const normalized = normalize(newData);
+    await save(normalized);
+    return normalized;
+  });
+  writeQueue = run.catch(() => {});
+  return run;
+}
+
+module.exports = { load, save, update, restore, initCache };
