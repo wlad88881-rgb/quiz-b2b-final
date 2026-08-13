@@ -217,12 +217,16 @@
     <div id="screen-editor" class="hidden">
       <div class="row between" style="margin-bottom:12px;">
         <h2 id="editor-title" style="margin:0;">Новый тест</h2>
-        <button class="btn outline small" onclick="showList()">Отмена</button>
+        <div class="row">
+          <button class="btn outline small hidden" id="translate-kk-btn" onclick="translateTestToKK()">🌐 Перевести на казахский</button>
+          <button class="btn outline small" onclick="showList()">Отмена</button>
+        </div>
       </div>
       <input type="text" id="test-title" placeholder="Название теста">
       <div id="questions-container"></div>
       <button class="btn outline" onclick="addQuestion()" style="margin-bottom:12px;">+ Добавить вопрос</button>
       <button class="btn" onclick="saveTest()">Сохранить тест</button>
+      <div class="muted" id="translate-kk-status"></div>
       <div id="save-error" class="error"></div>
     </div>
 
@@ -510,6 +514,8 @@
     document.getElementById('test-title').value = '';
     document.getElementById('questions-container').innerHTML = '';
     document.getElementById('save-error').textContent = '';
+    document.getElementById('translate-kk-status').textContent = '';
+    document.getElementById('translate-kk-btn').classList.add('hidden'); // у нового теста ещё нет id — сначала сохрани
     addQuestion();
     document.getElementById('screen-list').classList.add('hidden');
     document.getElementById('screen-editor').classList.remove('hidden');
@@ -522,9 +528,32 @@
     document.getElementById('editor-title').textContent = 'Редактирование';
     document.getElementById('test-title').value = test.title;
     document.getElementById('questions-container').innerHTML = '';
+    document.getElementById('translate-kk-status').textContent = '';
+    document.getElementById('translate-kk-btn').classList.remove('hidden');
     test.questions.forEach(q => addQuestion(q));
     document.getElementById('screen-list').classList.add('hidden');
     document.getElementById('screen-editor').classList.remove('hidden');
+  }
+
+  async function translateTestToKK() {
+    if (!editingTestId) return;
+    const btn = document.getElementById('translate-kk-btn');
+    const statusEl = document.getElementById('translate-kk-status');
+    btn.disabled = true;
+    statusEl.textContent = 'Переводим... это может занять до минуты на большом тесте.';
+    try {
+      const res = await authFetch(`/api/tests/${editingTestId}/translate`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        statusEl.textContent = 'Ошибка: ' + (data.error || 'не удалось перевести');
+      } else {
+        statusEl.textContent = `Готово! Переведено текстов: ${data.translated}. Теперь студенты увидят казахский без задержек — перевод уже в кэше.`;
+      }
+    } catch (e) {
+      statusEl.textContent = 'Ошибка соединения с сервером';
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   function addQuestion(existing) {
