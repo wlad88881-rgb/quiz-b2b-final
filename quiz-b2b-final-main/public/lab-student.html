@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Тренажёр диагностики</title>
+<meta name="theme-color" content="#2C3E50">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<style>
+  :root { --navy: #2C3E50; --orange: #F07C00; --gray: #F4F4F4; }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  html, body { height: 100%; overscroll-behavior-y: contain; }
+  body { background: var(--gray); display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; padding: 16px; }
+  .wrap { max-width: 560px; width: 100%; background: #fff; border-radius: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); padding: 24px; margin-top: 20px; }
+  .hidden { display: none !important; }
+  h1 { font-size: 20px; color: var(--navy); margin-bottom: 6px; }
+  .sub { color: #888; font-size: 14px; margin-bottom: 18px; line-height: 1.5; }
+  .muted { color: #888; font-size: 13px; }
+
+  input[type="text"] { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 10px; font-size: 16px; margin-bottom: 12px; }
+  .btn { display: inline-block; background: var(--orange); color: #fff; border: none; padding: 12px 20px; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; width: 100%; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn.outline { background: transparent; border: 1.5px solid #ddd; color: var(--navy); }
+  .btn.navy { background: var(--navy); }
+  .btn-row { display: flex; gap: 10px; margin-top: 14px; }
+  .btn-row .btn { width: auto; flex: 1; }
+
+  .error-box { background: #fdecea; color: #d64545; padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+  .info-box { background: #eef4fb; color: #2C3E50; padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+
+  .meta-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .pill { background: var(--gray); color: var(--navy); font-size: 13px; padding: 6px 12px; border-radius: 20px; font-weight: 600; }
+
+  .progress-bar { height: 6px; background: #eee; border-radius: 3px; overflow: hidden; margin-bottom: 18px; }
+  .progress-fill { height: 100%; background: var(--orange); width: 0%; transition: width 0.25s; }
+
+  .q-index { font-size: 13px; color: var(--orange); font-weight: 700; margin-bottom: 6px; letter-spacing: 0.5px; }
+  .q-title { font-size: 18px; color: var(--navy); font-weight: 700; margin-bottom: 4px; line-height: 1.4; }
+  .q-hint { font-size: 12px; color: #999; margin-bottom: 14px; }
+
+  .schematic-wrap { background: var(--gray); border-radius: 12px; padding: 10px 14px 4px; margin-bottom: 14px; }
+  .readouts { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+  .readout { background: var(--gray); border-radius: 12px; padding: 12px 14px; }
+  .readout .rlabel { font-size: 11px; color: #999; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 3px; }
+  .readout .rvalue { font-size: 20px; font-weight: 800; color: var(--navy); }
+  .readout .rdesc { font-size: 13px; color: #777; margin-top: 2px; }
+
+  .sound-row { display: flex; align-items: center; gap: 12px; }
+  .sound-btn {
+    flex-shrink: 0; width: 54px; height: 54px; border-radius: 50%; border: none; background: var(--navy);
+    color: #fff; font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: transform .1s, background .15s;
+  }
+  .sound-btn:active { transform: scale(0.94); }
+  .sound-btn.playing { background: var(--orange); }
+  .wave { flex: 1; height: 40px; }
+  .wave-bar { display: inline-block; width: 3px; margin-right: 2px; background: #ccc; border-radius: 2px; vertical-align: bottom; transition: height .1s, background .15s; }
+  .wave-bar.active { background: var(--orange); }
+
+  .option {
+    display: flex; align-items: center; gap: 10px; padding: 13px 14px;
+    border: 1.5px solid #e5e5e5; border-radius: 10px; margin-bottom: 10px; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .option:hover { border-color: #ccc; }
+  .option.selected { border-color: var(--orange); background: #fff6ec; }
+  .option input { flex-shrink: 0; width: 18px; height: 18px; cursor: pointer; }
+  .option .opt-text { font-size: 15px; color: #333; line-height: 1.4; font-weight: 500; }
+
+  .dots { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0; }
+  .dot { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; cursor: pointer; border: 1.5px solid #e5e5e5; color: #999; background: #fff; }
+  .dot.answered { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .dot.current { border-color: var(--orange); box-shadow: 0 0 0 2px rgba(240,124,0,0.25); }
+
+  .score-circle { width: 130px; height: 130px; border-radius: 50%; border: 8px solid var(--orange); display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 10px auto 20px; }
+  .score-circle .pct { font-size: 30px; font-weight: 800; color: var(--navy); }
+  .score-circle .frac { font-size: 13px; color: #888; }
+
+  .review-item { border: 1px solid #eee; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+  .review-item .badge-status { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; float: right; }
+  .review-item .badge-status.ok { background: #e6f4ea; color: #2e9e4f; }
+  .review-item .badge-status.no { background: #fdecea; color: #d64545; }
+  .review-item .rtitle { font-size: 14px; font-weight: 700; color: var(--navy); margin-bottom: 8px; }
+  .review-item .rline { font-size: 13.5px; padding: 6px 10px; border-radius: 6px; margin-bottom: 4px; }
+  .review-item .rline.correct { background: #e6f4ea; color: #2e9e4f; }
+  .review-item .rline.wrong { background: #fdecea; color: #d64545; }
+  .review-item .rexplain { font-size: 13px; color: #666; margin-top: 8px; line-height: 1.5; padding-top: 8px; border-top: 1px dashed #eee; }
+
+  .center { text-align: center; }
+  .spinner { width: 34px; height: 34px; border: 3px solid #eee; border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 30px auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div id="screen-loading" class="center">
+    <div class="spinner"></div>
+    <div class="muted">Загрузка...</div>
+  </div>
+
+  <div id="screen-error" class="hidden">
+    <h1>Не получилось</h1>
+    <div class="error-box" id="error-text"></div>
+  </div>
+
+  <div id="screen-join" class="hidden">
+    <h1 id="join-title"></h1>
+    <div class="sub" id="join-intro"></div>
+    <div class="meta-row">
+      <span class="pill" id="join-count"></span>
+    </div>
+    <div class="info-box hidden" id="scheduled-banner-lab"></div>
+    <input type="text" id="student-name" placeholder="Введите ваше имя" maxlength="60">
+    <div class="error-box hidden" id="join-error"></div>
+    <button class="btn" id="join-btn" onclick="joinLab()">Начать тренажёр</button>
+  </div>
+
+  <div id="screen-quiz" class="hidden">
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+    <div class="q-index" id="q-index"></div>
+    <div class="q-title" id="q-title"></div>
+    <div class="q-hint">Изучите показания приборов и определите неисправность</div>
+
+    <div class="schematic-wrap">
+      <svg viewBox="0 0 600 180" xmlns="http://www.w3.org/2000/svg" style="width:100%; height:auto; display:block;">
+        <!-- Основание -->
+        <rect x="40" y="140" width="520" height="14" rx="3" fill="#2C3E50"/>
+        <!-- Опоры -->
+        <rect x="120" y="100" width="70" height="44" rx="4" fill="#dfe4ea"/>
+        <rect x="410" y="100" width="70" height="44" rx="4" fill="#dfe4ea"/>
+        <!-- Вал -->
+        <rect x="60" y="86" width="480" height="16" rx="8" fill="#2C3E50"/>
+        <!-- Корпус подшипника (левый) -->
+        <circle cx="155" cy="94" r="34" fill="#eef1f4" stroke="#2C3E50" stroke-width="2.5"/>
+        <circle cx="155" cy="94" r="17" fill="#ffffff" stroke="#2C3E50" stroke-width="2"/>
+        <circle cx="155" cy="77" r="4" fill="#F07C00"/>
+        <circle cx="169" cy="86" r="4" fill="#F07C00"/>
+        <circle cx="169" cy="103" r="4" fill="#F07C00"/>
+        <circle cx="155" cy="112" r="4" fill="#F07C00"/>
+        <circle cx="141" cy="103" r="4" fill="#F07C00"/>
+        <circle cx="141" cy="86" r="4" fill="#F07C00"/>
+        <!-- Корпус подшипника (правый) -->
+        <circle cx="445" cy="94" r="34" fill="#eef1f4" stroke="#2C3E50" stroke-width="2.5"/>
+        <circle cx="445" cy="94" r="17" fill="#ffffff" stroke="#2C3E50" stroke-width="2"/>
+        <!-- Значок вибрации -->
+        <g transform="translate(90,20)">
+          <path d="M0,14 L8,14 L12,2 L18,26 L24,10 L28,14 L36,14" fill="none" stroke="#F07C00" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+        </g>
+        <line x1="108" y1="46" x2="150" y2="68" stroke="#c7ccd3" stroke-width="1.5" stroke-dasharray="3,3"/>
+        <!-- Значок температуры -->
+        <g transform="translate(280,14)">
+          <rect x="6" y="0" width="10" height="26" rx="5" fill="none" stroke="#2C3E50" stroke-width="2"/>
+          <circle cx="11" cy="30" r="7" fill="#F07C00"/>
+          <rect x="8" y="10" width="6" height="18" fill="#F07C00"/>
+        </g>
+        <line x1="298" y1="46" x2="330" y2="86" stroke="#c7ccd3" stroke-width="1.5" stroke-dasharray="3,3"/>
+        <!-- Значок звука -->
+        <g transform="translate(470,18)">
+          <path d="M0,10 L6,10 L14,2 L14,24 L6,16 L0,16 Z" fill="#2C3E50"/>
+          <path d="M20,6 Q26,13 20,20" fill="none" stroke="#F07C00" stroke-width="2" stroke-linecap="round"/>
+          <path d="M25,2 Q34,13 25,24" fill="none" stroke="#F07C00" stroke-width="2" stroke-linecap="round"/>
+        </g>
+        <line x1="478" y1="46" x2="455" y2="68" stroke="#c7ccd3" stroke-width="1.5" stroke-dasharray="3,3"/>
+        <text x="300" y="172" text-anchor="middle" font-size="11" fill="#9aa5b3" font-family="system-ui, sans-serif">схема измерения — вибрация, температура и звук на опорном узле</text>
+      </svg>
+    </div>
+
+    <div class="readouts">
+      <div class="readout">
+        <div class="rlabel">Вибрация</div>
+        <div class="rvalue" id="r-vibration-value"></div>
+        <div class="rdesc" id="r-vibration-desc"></div>
+      </div>
+      <div class="readout">
+        <div class="rlabel">Температура (отклонение от нормы)</div>
+        <div class="rvalue" id="r-temp-value"></div>
+        <div class="rdesc" id="r-temp-desc"></div>
+      </div>
+      <div class="readout">
+        <div class="rlabel">Звук</div>
+        <div class="sound-row">
+          <button class="sound-btn" id="sound-btn" onclick="toggleSound()">▶</button>
+          <div class="wave" id="wave"></div>
+        </div>
+        <div class="rdesc" id="r-sound-desc" style="margin-top:8px;"></div>
+      </div>
+    </div>
+
+    <div id="options-container"></div>
+    <div class="dots" id="dots"></div>
+    <div class="btn-row">
+      <button class="btn outline" id="prev-btn" onclick="goPrev()">← Назад</button>
+      <button class="btn" id="next-btn" onclick="goNext()">Далее →</button>
+    </div>
+    <button class="btn navy" id="submit-btn" onclick="submitLab()" style="margin-top:10px;">Завершить тренажёр</button>
+  </div>
+
+  <div id="screen-result" class="hidden">
+    <h1 style="text-align:center;">Результат</h1>
+    <div class="score-circle">
+      <div class="pct" id="score-pct">0%</div>
+      <div class="frac" id="score-frac">0/0</div>
+    </div>
+    <h2 style="font-size:15px; color: var(--navy); margin: 18px 0 10px;">Разбор случаев</h2>
+    <div id="review-container"></div>
+  </div>
+
+</div>
+
+<script>
+  // Подстраховка против жеста «потянуть вниз, чтобы обновить» на телефоне — иначе
+  // случайное движение пальцем во время тренажёра перезагружает страницу и сбрасывает прогресс.
+  (function() {
+    let touchStartY = 0;
+    document.addEventListener('touchstart', (e) => {
+      touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+    document.addEventListener('touchmove', (e) => {
+      const scrollTop = window.scrollY || document.documentElement.scrollTop;
+      if (scrollTop <= 0 && e.touches[0].clientY > touchStartY) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+  })();
+
+  const CODE = location.pathname.split('/').filter(Boolean).pop();
+
+  const state = {
+    participantId: null,
+    testTitle: '',
+    cases: [],
+    answers: {},          // индекс случая -> faultId
+    currentIndex: 0
+  };
+
+  function showScreen(id) {
+    ['screen-loading','screen-error','screen-join','screen-quiz','screen-result'].forEach(s => {
+      document.getElementById(s).classList.toggle('hidden', s !== id);
+    });
+  }
+
+  function showError(msg) {
+    document.getElementById('error-text').textContent = msg;
+    showScreen('screen-error');
+  }
+
+  async function init() {
+    try {
+      const res = await fetch(`/api/lab-sessions/${CODE}/info`);
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 410) { showError('Тренажёр завершён преподавателем.'); return; }
+        if (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED') { showError(data.message || 'Доступ временно недоступен.'); return; }
+        showError(res.status === 404 ? 'Сессия не найдена. Проверьте код или QR-код.' : (data.error || 'Ошибка загрузки.'));
+        return;
+      }
+      state.testTitle = data.testTitle;
+      document.getElementById('join-title').textContent = data.testTitle;
+      document.getElementById('join-intro').textContent = data.intro || 'Определите неисправность по показаниям приборов и звуку.';
+      document.getElementById('join-count').textContent = `${data.caseCount} случа${caseWord(data.caseCount)}`;
+      if (data.scheduledAt && data.scheduledAt > Date.now()) {
+        showScheduledBannerLab(data.scheduledAt);
+      }
+      showScreen('screen-join');
+    } catch (e) {
+      showError('Не удалось подключиться. Проверьте интернет-соединение.');
+    }
+  }
+
+  let scheduledPollTimerLab = null;
+  function showScheduledBannerLab(scheduledAt) {
+    const banner = document.getElementById('scheduled-banner-lab');
+    const dt = new Date(scheduledAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    banner.textContent = `⏰ Тренажёр начнётся ${dt}. Страница обновится автоматически.`;
+    banner.classList.remove('hidden');
+    document.getElementById('join-btn').disabled = true;
+
+    if (scheduledPollTimerLab) clearInterval(scheduledPollTimerLab);
+    scheduledPollTimerLab = setInterval(async () => {
+      if (Date.now() < scheduledAt) return;
+      try {
+        const res = await fetch(`/api/lab-sessions/${CODE}/info`);
+        const data = await res.json();
+        if (res.ok && (!data.scheduledAt || data.scheduledAt <= Date.now())) {
+          clearInterval(scheduledPollTimerLab);
+          scheduledPollTimerLab = null;
+          banner.classList.add('hidden');
+          document.getElementById('join-btn').disabled = false;
+        }
+      } catch (e) { /* попробуем на следующем тике */ }
+    }, 5000);
+  }
+
+  function caseWord(n) {
+    const n10 = n % 10, n100 = n % 100;
+    if (n10 === 1 && n100 !== 11) return 'й';
+    if ([2,3,4].includes(n10) && ![12,13,14].includes(n100)) return 'я';
+    return 'ев';
+  }
+
+  async function joinLab() {
+    const nameInput = document.getElementById('student-name');
+    const name = nameInput.value.trim();
+    const errEl = document.getElementById('join-error');
+    errEl.classList.add('hidden');
+    if (!name) {
+      errEl.textContent = 'Введите имя';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const btn = document.getElementById('join-btn');
+    btn.disabled = true;
+    try {
+      const res = await fetch(`/api/lab-sessions/${CODE}/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        errEl.textContent = (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED' || data.error === 'NOT_STARTED') ? (data.message || 'Ошибка') : (data.error || 'Ошибка');
+        errEl.classList.remove('hidden');
+        btn.disabled = false;
+        if (data.error === 'NOT_STARTED' && data.scheduledAt) showScheduledBannerLab(data.scheduledAt);
+        return;
+      }
+      state.participantId = data.participantId;
+      state.testTitle = data.testTitle;
+      state.cases = data.cases;
+      state.currentIndex = 0;
+      state.answers = {};
+      showScreen('screen-quiz');
+      renderCase();
+    } catch (e) {
+      errEl.textContent = 'Не удалось подключиться. Проверьте интернет-соединение.';
+      errEl.classList.remove('hidden');
+      btn.disabled = false;
+    }
+  }
+
+  function renderCase() {
+    stopSound();
+    const idx = state.currentIndex;
+    const total = state.cases.length;
+    const c = state.cases[idx];
+
+    document.getElementById('q-index').textContent = `Случай ${idx + 1} / ${total}`;
+    document.getElementById('q-title').textContent = c.title;
+    document.getElementById('r-vibration-value').textContent = c.vibration.value;
+    document.getElementById('r-vibration-desc').textContent = c.vibration.desc || '';
+    document.getElementById('r-temp-value').textContent = c.temp.value;
+    document.getElementById('r-temp-desc').textContent = c.temp.desc || '';
+    document.getElementById('r-sound-desc').textContent = c.sound.desc || '';
+    buildWave();
+
+    const container = document.getElementById('options-container');
+    container.innerHTML = '';
+    const given = state.answers[idx];
+    c.options.forEach(opt => {
+      const isSelected = given === opt.id;
+      const div = document.createElement('div');
+      div.className = 'option' + (isSelected ? ' selected' : '');
+      div.onclick = () => selectOption(idx, opt.id);
+      div.innerHTML = `<input type="radio" ${isSelected ? 'checked' : ''} readonly><div class="opt-text"></div>`;
+      div.querySelector('.opt-text').textContent = opt.label;
+      container.appendChild(div);
+    });
+
+    const dots = document.getElementById('dots');
+    dots.innerHTML = '';
+    state.cases.forEach((cc, i) => {
+      const answered = state.answers[i] !== undefined;
+      const d = document.createElement('div');
+      d.className = 'dot' + (answered ? ' answered' : '') + (i === idx ? ' current' : '');
+      d.textContent = i + 1;
+      d.onclick = () => { state.currentIndex = i; renderCase(); };
+      dots.appendChild(d);
+    });
+
+    const answeredCount = Object.keys(state.answers).length;
+    document.getElementById('progress-fill').style.width = Math.round((answeredCount / total) * 100) + '%';
+
+    document.getElementById('prev-btn').style.visibility = idx === 0 ? 'hidden' : 'visible';
+    const isLast = idx === total - 1;
+    document.getElementById('next-btn').classList.toggle('hidden', isLast);
+    document.getElementById('submit-btn').classList.toggle('hidden', !isLast);
+  }
+
+  function selectOption(idx, faultId) {
+    state.answers[idx] = faultId;
+    renderCase();
+  }
+
+  function goNext() { if (state.currentIndex < state.cases.length - 1) { state.currentIndex++; renderCase(); } }
+  function goPrev() { if (state.currentIndex > 0) { state.currentIndex--; renderCase(); } }
+
+  let lastResult = null;
+
+  async function submitLab() {
+    stopSound();
+    document.getElementById('submit-btn').disabled = true;
+    const answersArr = state.cases.map((c, i) => state.answers[i] !== undefined ? state.answers[i] : null);
+    try {
+      const res = await fetch(`/api/lab-sessions/${CODE}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participantId: state.participantId, answers: answersArr })
+      });
+      const data = await res.json();
+      if (!res.ok) { showError(data.message || data.error || 'Ошибка отправки результата.'); return; }
+      lastResult = data;
+      showResult();
+    } catch (e) {
+      showError('Не удалось отправить результат. Проверьте интернет-соединение.');
+    }
+  }
+
+  function showResult() {
+    showScreen('screen-result');
+    const pct = lastResult.total ? Math.round((lastResult.score / lastResult.total) * 100) : 0;
+    document.getElementById('score-pct').textContent = pct + '%';
+    document.getElementById('score-frac').textContent = `${lastResult.score}/${lastResult.total}`;
+
+    const container = document.getElementById('review-container');
+    container.innerHTML = '';
+    lastResult.review.forEach((r, i) => {
+      const div = document.createElement('div');
+      div.className = 'review-item';
+      const statusClass = r.isCorrect ? 'ok' : 'no';
+      const statusText = r.isCorrect ? 'Верно' : 'Неверно';
+      const givenOpt = r.options.find(o => o.id === r.given);
+      div.innerHTML = `
+        <span class="badge-status ${statusClass}">${statusText}</span>
+        <div class="rtitle">${i + 1}. ${escapeHtml(r.title)}</div>
+        <div class="rline ${r.isCorrect ? 'correct' : 'wrong'}">Ваш ответ: ${escapeHtml(givenOpt ? givenOpt.label : 'нет ответа')}</div>
+        ${!r.isCorrect ? `<div class="rline correct">Правильный ответ: ${escapeHtml(r.correctLabel)}</div>` : ''}
+        <div class="rexplain">${escapeHtml(r.explain)}</div>
+      `;
+      container.appendChild(div);
+    });
+  }
+
+  function escapeHtml(s) {
+    return (s || '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ==================== ЗВУКОВОЙ СИНТЕЗ (Web Audio API) ====================
+
+  let audioCtx = null;
+  let activeNodes = [];
+  let soundTimeout = null;
+  let isPlaying = false;
+
+  function ensureCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+
+  function stopSound() {
+    if (soundTimeout) { clearTimeout(soundTimeout); soundTimeout = null; }
+    activeNodes.forEach(n => { try { n.stop && n.stop(); } catch (e) {} try { n.disconnect(); } catch (e) {} });
+    activeNodes = [];
+    isPlaying = false;
+    const btn = document.getElementById('sound-btn');
+    if (btn) { btn.textContent = '▶'; btn.classList.remove('playing'); }
+    stopWaveAnim();
+  }
+
+  function toggleSound() {
+    if (isPlaying) { stopSound(); return; }
+    const c = state.cases[state.currentIndex];
+    playSoundType(c.sound.type);
+  }
+
+  function makeNoiseBuffer(ctx, seconds) {
+    const bufferSize = Math.floor(ctx.sampleRate * seconds);
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+    return buffer;
+  }
+
+  function playSoundType(type) {
+    const ctx = ensureCtx();
+    const now = ctx.currentTime;
+    const master = ctx.createGain();
+    master.gain.value = 0.5;
+    master.connect(ctx.destination);
+    activeNodes.push(master);
+
+    const duration = 2.4;
+    const btn = document.getElementById('sound-btn');
+    btn.textContent = '❚❚';
+    btn.classList.add('playing');
+    isPlaying = true;
+    startWaveAnim();
+
+    switch (type) {
+      case 'grinding': { // скрежещущий с потрескиванием
+        const noise = ctx.createBufferSource();
+        noise.buffer = makeNoiseBuffer(ctx, duration);
+        noise.loop = true;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass'; bp.frequency.value = 1800; bp.Q.value = 0.7;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.001, now);
+        g.gain.linearRampToValueAtTime(0.9, now + 0.05);
+        for (let t = 0; t < duration; t += 0.09) {
+          const gg = 0.5 + Math.random() * 0.5;
+          g.gain.setValueAtTime(gg, now + t);
+        }
+        noise.connect(bp); bp.connect(g); g.connect(master);
+        noise.start(now);
+        activeNodes.push(noise, bp, g);
+        break;
+      }
+      case 'clicking': { // периодические щелчки
+        for (let t = 0; t < duration; t += 0.35) {
+          const osc = ctx.createOscillator();
+          osc.type = 'square'; osc.frequency.value = 1400;
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, now + t);
+          g.gain.exponentialRampToValueAtTime(0.7, now + t + 0.003);
+          g.gain.exponentialRampToValueAtTime(0.0001, now + t + 0.04);
+          osc.connect(g); g.connect(master);
+          osc.start(now + t); osc.stop(now + t + 0.05);
+          activeNodes.push(osc, g);
+        }
+        break;
+      }
+      case 'hum_axial': { // гул с пульсацией
+        const osc = ctx.createOscillator();
+        osc.type = 'sine'; osc.frequency.value = 90;
+        const lfo = ctx.createOscillator();
+        lfo.type = 'sine'; lfo.frequency.value = 5.5;
+        const lfoGain = ctx.createGain(); lfoGain.gain.value = 0.35;
+        const g = ctx.createGain(); g.gain.value = 0.55;
+        lfo.connect(lfoGain); lfoGain.connect(g.gain);
+        osc.connect(g); g.connect(master);
+        osc.start(now); lfo.start(now);
+        activeNodes.push(osc, lfo, lfoGain, g);
+        break;
+      }
+      case 'knocking': { // глухой стук
+        for (let t = 0; t < duration; t += 0.5) {
+          const osc = ctx.createOscillator();
+          osc.type = 'sine'; osc.frequency.setValueAtTime(160, now + t);
+          osc.frequency.exponentialRampToValueAtTime(60, now + t + 0.12);
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.9, now + t);
+          g.gain.exponentialRampToValueAtTime(0.001, now + t + 0.18);
+          osc.connect(g); g.connect(master);
+          osc.start(now + t); osc.stop(now + t + 0.2);
+          activeNodes.push(osc, g);
+        }
+        break;
+      }
+      case 'rattling': { // дребезжание
+        const noise = ctx.createBufferSource();
+        noise.buffer = makeNoiseBuffer(ctx, duration);
+        noise.loop = true;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 3;
+        const g = ctx.createGain();
+        for (let t = 0; t < duration; t += 0.12) {
+          g.gain.setValueAtTime(Math.random() > 0.4 ? 0.6 : 0.05, now + t);
+        }
+        noise.connect(bp); bp.connect(g); g.connect(master);
+        noise.start(now);
+        activeNodes.push(noise, bp, g);
+        break;
+      }
+      case 'whistling': { // свист
+        const osc = ctx.createOscillator();
+        osc.type = 'sine'; osc.frequency.value = 2800;
+        const lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 2;
+        const lfoGain = ctx.createGain(); lfoGain.gain.value = 150;
+        const g = ctx.createGain(); g.gain.value = 0.35;
+        lfo.connect(lfoGain); lfoGain.connect(osc.frequency);
+        osc.connect(g); g.connect(master);
+        osc.start(now); lfo.start(now);
+        activeNodes.push(osc, lfo, lfoGain, g);
+        break;
+      }
+      case 'squealing': { // визг
+        const osc = ctx.createOscillator();
+        osc.type = 'sawtooth'; osc.frequency.value = 3200;
+        const g = ctx.createGain(); g.gain.value = 0.22;
+        osc.connect(g); g.connect(master);
+        osc.start(now);
+        activeNodes.push(osc, g);
+        break;
+      }
+      case 'buzzing': { // жужжание
+        const osc = ctx.createOscillator();
+        osc.type = 'sawtooth'; osc.frequency.value = 220;
+        const g = ctx.createGain(); g.gain.value = 0.3;
+        osc.connect(g); g.connect(master);
+        osc.start(now);
+        activeNodes.push(osc, g);
+        break;
+      }
+      default: { // общий гул/шум по умолчанию
+        const noise = ctx.createBufferSource();
+        noise.buffer = makeNoiseBuffer(ctx, duration);
+        noise.loop = true;
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass'; lp.frequency.value = 500;
+        const g = ctx.createGain(); g.gain.value = 0.4;
+        noise.connect(lp); lp.connect(g); g.connect(master);
+        noise.start(now);
+        activeNodes.push(noise, lp, g);
+      }
+    }
+
+    soundTimeout = setTimeout(stopSound, duration * 1000);
+  }
+
+  // ==================== ПРОСТАЯ АНИМАЦИЯ ВОЛНЫ ====================
+  let waveInterval = null;
+  function buildWave() {
+    const wave = document.getElementById('wave');
+    wave.innerHTML = '';
+    for (let i = 0; i < 40; i++) {
+      const bar = document.createElement('span');
+      bar.className = 'wave-bar';
+      bar.style.height = '4px';
+      wave.appendChild(bar);
+    }
+  }
+  function startWaveAnim() {
+    const bars = document.querySelectorAll('.wave-bar');
+    waveInterval = setInterval(() => {
+      bars.forEach(b => {
+        b.style.height = (4 + Math.random() * 32) + 'px';
+        b.classList.add('active');
+      });
+    }, 100);
+  }
+  function stopWaveAnim() {
+    if (waveInterval) { clearInterval(waveInterval); waveInterval = null; }
+    document.querySelectorAll('.wave-bar').forEach(b => { b.style.height = '4px'; b.classList.remove('active'); });
+  }
+
+  init();
+</script>
+</body>
+</html>

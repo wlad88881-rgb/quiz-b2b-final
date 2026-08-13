@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Прохождение теста</title>
+<meta name="theme-color" content="#2C3E50">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<style>
+  :root {
+    --navy: #2C3E50;
+    --orange: #F07C00;
+    --gray: #F4F4F4;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  html, body { height: 100%; overscroll-behavior-y: contain; }
+  body {
+    background: var(--gray);
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    padding: 16px;
+  }
+  .wrap {
+    max-width: 560px;
+    width: 100%;
+    background: #fff;
+    border-radius: 18px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    padding: 24px;
+    margin-top: 20px;
+  }
+  .hidden { display: none !important; }
+  h1 { font-size: 20px; color: var(--navy); margin-bottom: 6px; }
+  .sub { color: #888; font-size: 14px; margin-bottom: 18px; }
+  .muted { color: #888; font-size: 13px; }
+
+  .lang-switch { display: flex; gap: 6px; justify-content: flex-end; margin-bottom: 14px; }
+  .lang-btn {
+    border: 1px solid #ddd; background: #fff; color: #555; padding: 5px 12px;
+    border-radius: 20px; font-size: 13px; cursor: pointer; font-weight: 600;
+  }
+  .lang-btn.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+  input[type="text"] {
+    width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 10px;
+    font-size: 16px; margin-bottom: 12px;
+  }
+  .btn {
+    display: inline-block; background: var(--orange); color: #fff; border: none;
+    padding: 12px 20px; border-radius: 10px; font-size: 15px; font-weight: 600;
+    cursor: pointer; width: 100%;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn.outline { background: transparent; border: 1px solid #ddd; color: var(--navy); }
+  .btn-row { display: flex; gap: 10px; margin-top: 14px; }
+  .btn-row .btn { width: auto; flex: 1; }
+
+  .error-box { background: #fdecea; color: #d64545; padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+
+  .warn-overlay {
+    position: fixed; inset: 0; background: rgba(20,10,10,0.55);
+    display: flex; align-items: center; justify-content: center; z-index: 999; padding: 20px;
+  }
+  .warn-card {
+    background: #fff; border-radius: 16px; padding: 28px 24px; max-width: 380px; text-align: center;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3); border-top: 6px solid #d64545;
+  }
+  .warn-card .warn-icon { font-size: 40px; margin-bottom: 10px; }
+  .warn-card h3 { color: #d64545; font-size: 18px; margin-bottom: 10px; }
+  .warn-card p { color: #444; font-size: 14.5px; line-height: 1.5; margin-bottom: 18px; }
+  .warn-card button {
+    background: var(--navy); color: #fff; border: none; padding: 12px 24px; border-radius: 10px;
+    font-size: 15px; font-weight: 600; cursor: pointer; width: 100%;
+  }
+  .info-box { background: #eef4fb; color: #2C3E50; padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+
+  .meta-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .pill { background: var(--gray); color: var(--navy); font-size: 13px; padding: 6px 12px; border-radius: 20px; font-weight: 600; }
+
+  .progress-bar { height: 6px; background: #eee; border-radius: 3px; overflow: hidden; margin-bottom: 18px; }
+  .progress-fill { height: 100%; background: var(--orange); width: 0%; transition: width 0.25s; }
+
+  .timer {
+    position: sticky; top: 0; text-align: center; font-weight: 800; font-size: 22px;
+    color: var(--navy); background: #fff; padding: 6px 0 12px; z-index: 5;
+  }
+  .timer.warn { color: #d64545; }
+
+  .q-index { font-size: 13px; color: var(--orange); font-weight: 700; margin-bottom: 6px; letter-spacing: 0.5px; }
+  .q-text { font-size: 18px; color: var(--navy); font-weight: 600; margin-bottom: 16px; line-height: 1.4; }
+  .q-hint { font-size: 12px; color: #999; margin-bottom: 10px; }
+
+  .option {
+    display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px;
+    border: 1.5px solid #e5e5e5; border-radius: 10px; margin-bottom: 10px; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .option:hover { border-color: #ccc; }
+  .option.selected { border-color: var(--orange); background: #fff6ec; }
+  .option.correct-answer { border-color: #2e9e4f; background: #e6f4ea; }
+  .option.wrong-answer { border-color: #d64545; background: #fdecea; }
+  .option.locked { cursor: default; }
+  .option input { margin-top: 3px; flex-shrink: 0; width: 18px; height: 18px; cursor: pointer; }
+  .option .opt-text { font-size: 15px; color: #333; line-height: 1.4; }
+
+  .dots { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0; }
+  .dot {
+    width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; cursor: pointer; border: 1.5px solid #e5e5e5; color: #999; background: #fff;
+  }
+  .dot.answered { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .dot.current { border-color: var(--orange); box-shadow: 0 0 0 2px rgba(240,124,0,0.25); }
+
+  .score-circle {
+    width: 130px; height: 130px; border-radius: 50%; border: 8px solid var(--orange);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    margin: 10px auto 20px;
+  }
+  .score-circle .pct { font-size: 30px; font-weight: 800; color: var(--navy); }
+  .score-circle .frac { font-size: 13px; color: #888; }
+  .score-circle.celebrate { animation: scorePulse .6s ease-out; }
+  @keyframes scorePulse { 0% { transform: scale(0.7); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); } }
+
+  .leaderboard-box { background: var(--gray); border-radius: 12px; padding: 14px 16px; margin: 14px 0; }
+  .leaderboard-box .lb-title { font-size: 12px; font-weight: 700; color: #999; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+  .lb-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 14px; }
+  .lb-medal { width: 22px; text-align: center; }
+  .lb-you { background: #fff6ec; border-radius: 6px; padding-left: 6px; margin-left: -6px; font-weight: 700; }
+  .lb-percent { margin-left: auto; font-weight: 700; color: var(--navy); }
+  .lb-your-rank { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #ddd; font-size: 13px; color: #666; }
+
+  .confetti-piece { position: fixed; top: -10px; z-index: 999; border-radius: 2px; pointer-events: none; animation: confettiFall linear forwards; }
+  @keyframes confettiFall { to { transform: translateY(110vh) rotate(360deg); opacity: 0.3; } }
+
+  .review-item { border: 1px solid #eee; border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+  .review-item .rq { font-size: 14px; font-weight: 600; color: var(--navy); margin-bottom: 8px; }
+  .review-item .ropt { font-size: 13.5px; padding: 6px 10px; border-radius: 6px; margin-bottom: 4px; }
+  .review-item .ropt.correct { background: #e6f4ea; color: #2e9e4f; }
+  .review-item .ropt.wrong { background: #fdecea; color: #d64545; }
+  .review-item .badge-status { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; float: right; }
+  .review-item .badge-status.ok { background: #e6f4ea; color: #2e9e4f; }
+  .review-item .badge-status.no { background: #fdecea; color: #d64545; }
+  .review-item .rexplain { font-size: 13px; color: #666; margin-top: 8px; line-height: 1.5; padding-top: 8px; border-top: 1px dashed #eee; }
+
+  .center { text-align: center; }
+  .spinner {
+    width: 34px; height: 34px; border: 3px solid #eee; border-top-color: var(--orange);
+    border-radius: 50%; animation: spin 0.8s linear infinite; margin: 30px auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+<script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div id="screen-loading" class="center">
+    <div class="spinner"></div>
+    <div class="muted" id="loading-text">Загрузка...</div>
+  </div>
+
+  <div id="screen-error" class="hidden">
+    <h1 data-i18n="oops">Не получилось</h1>
+    <div class="error-box" id="error-text"></div>
+  </div>
+
+  <div id="screen-join" class="hidden">
+    <div class="lang-switch">
+      <button class="lang-btn" id="lang-ru-1" onclick="setLang('ru')">RU</button>
+      <button class="lang-btn" id="lang-kk-1" onclick="setLang('kk')">KZ</button>
+    </div>
+    <h1 id="join-title"></h1>
+    <div class="meta-row">
+      <span class="pill" id="join-qcount"></span>
+      <span class="pill hidden" id="join-timelimit"></span>
+    </div>
+    <div class="info-box hidden" id="scheduled-banner-student"></div>
+    <input type="text" id="student-name" data-i18n-ph="namePh" maxlength="60">
+    <div class="error-box hidden" id="join-error"></div>
+    <button class="btn" id="join-btn" onclick="joinTest()" data-i18n="startBtn"></button>
+  </div>
+
+  <div id="screen-quiz" class="hidden">
+    <div class="lang-switch">
+      <button class="lang-btn" id="lang-ru-2" onclick="setLang('ru')">RU</button>
+      <button class="lang-btn" id="lang-kk-2" onclick="setLang('kk')">KZ</button>
+    </div>
+    <div class="timer hidden" id="timer-box">--:--</div>
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+    <div class="q-index" id="q-index"></div>
+    <div class="q-text" id="q-text"></div>
+    <img id="q-image" class="hidden" style="max-width:100%; border-radius:10px; margin:10px 0; display:block;">
+    <div class="q-hint" id="q-hint"></div>
+    <div id="options-container"></div>
+    <div class="dots" id="dots"></div>
+    <div class="btn-row">
+      <button class="btn outline" id="prev-btn" onclick="goPrev()" data-i18n="prevBtn"></button>
+      <button class="btn" id="next-btn" onclick="goNext()" data-i18n="nextBtn"></button>
+    </div>
+    <button class="btn" id="submit-btn" onclick="submitTest(false)" style="margin-top:10px; background:var(--navy);" data-i18n="submitBtn"></button>
+  </div>
+
+  <div id="screen-result" class="hidden">
+    <h1 data-i18n="resultTitle" style="text-align:center;"></h1>
+    <div class="info-box hidden" id="auto-submit-note" data-i18n="autoSubmitNote"></div>
+    <div class="score-circle" id="score-circle">
+      <div class="pct" id="score-pct">0%</div>
+      <div class="frac" id="score-frac">0/0</div>
+    </div>
+    <div class="leaderboard-box hidden" id="leaderboard-box">
+      <div class="lb-title" data-i18n="leaderboardTitle"></div>
+      <div id="leaderboard-rows"></div>
+      <div class="lb-your-rank hidden" id="leaderboard-your-rank"></div>
+    </div>
+    <h2 style="font-size:15px; color: var(--navy); margin: 18px 0 10px;" data-i18n="reviewTitle"></h2>
+    <div id="review-container"></div>
+    <button class="btn" id="retry-wrong-btn" onclick="startRetry()" style="margin-top:16px; background:var(--orange);"></button>
+  </div>
+
+  <div id="screen-retry" class="hidden">
+    <h1 data-i18n="retryTitle" style="text-align:center;"></h1>
+    <div class="sub" data-i18n="retrySub" style="text-align:center; color:#888; font-size:13px; margin-bottom:16px;"></div>
+    <div id="retry-score" class="info-box hidden" style="text-align:center; font-weight:700;"></div>
+    <div id="retry-list"></div>
+    <button class="btn" id="retry-check-btn" onclick="checkRetry()" data-i18n="retryCheckBtn" style="margin-top:10px;"></button>
+    <button class="btn hidden" id="retry-again-btn" onclick="startRetry(true)" style="margin-top:10px; background:var(--orange);"></button>
+    <button class="btn outline hidden" id="retry-done-btn" onclick="showResult()" data-i18n="retryDoneBtn" style="margin-top:10px;"></button>
+  </div>
+
+</div>
+
+<div id="tab-warn-overlay" class="warn-overlay hidden">
+  <div class="warn-card">
+    <div class="warn-icon">⚠️</div>
+    <h3 data-i18n="tabWarnTitle"></h3>
+    <p data-i18n="tabWarnText"></p>
+    <button onclick="dismissTabWarning()" data-i18n="tabWarnBtn"></button>
+  </div>
+</div>
+
+<script>
+  // Подстраховка против жеста «потянуть вниз, чтобы обновить» на телефоне — иначе
+  // случайное движение пальцем во время теста перезагружает страницу и сбрасывает прогресс.
+  // overscroll-behavior в CSS покрывает большинство браузеров; это — на случай Safari
+  // на старых iPhone, где поддержка CSS-варианта менее надёжна.
+  (function() {
+    let touchStartY = 0;
+    document.addEventListener('touchstart', (e) => {
+      touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+    document.addEventListener('touchmove', (e) => {
+      const scrollTop = window.scrollY || document.documentElement.scrollTop;
+      if (scrollTop <= 0 && e.touches[0].clientY > touchStartY) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+  })();
+
+  const CODE = location.pathname.split('/').filter(Boolean).pop();
+
+  const UI = {
+    ru: {
+      oops: 'Не получилось',
+      loading: 'Загрузка...',
+      namePh: 'Введите ваше имя',
+      startBtn: 'Начать тест',
+      prevBtn: '← Назад',
+      nextBtn: 'Далее →',
+      submitBtn: 'Завершить тест',
+      resultTitle: 'Результат',
+      reviewTitle: 'Разбор ответов',
+      autoSubmitNote: 'Тест был автоматически отправлен по истечении времени.',
+      questionsWord: 'вопросов',
+      timeLimitWord: 'Лимит: {m} мин',
+      selectOne: 'Выберите один вариант ответа',
+      selectMulti: 'Можно выбрать несколько вариантов',
+      timeUp: 'Время вышло',
+      enterName: 'Введите имя',
+      correctLabel: 'Верно',
+      wrongLabel: 'Неверно',
+      yourAnswer: 'Ваш ответ',
+      correctAnswer: 'Правильный ответ',
+      notAnswered: 'нет ответа',
+      testEnded: 'Тестирование завершено преподавателем.',
+      notFound: 'Сессия не найдена. Проверьте код или QR-код.',
+      alreadyDone: 'Вы уже сдали этот тест.',
+      translateFail: 'Перевод сейчас недоступен, показан русский текст.',
+      retryWrongBtn: 'Пройти ещё раз ошибки ({n})',
+      retryTitle: 'Работа над ошибками',
+      retrySub: 'Ответьте ещё раз только на вопросы, где были ошибки. Это не влияет на итоговый результат теста.',
+      retryCheckBtn: 'Проверить',
+      retryDoneBtn: 'Вернуться к результату',
+      retryAgainBtn: 'Повторить оставшиеся ошибки ({n})',
+      retryAllCorrect: 'Все ответы верны! 🎉',
+      retryScoreLabel: 'Верно: {s} из {n}',
+      leaderboardTitle: 'Топ-3 результата в этой сессии',
+      leaderboardYourRank: 'Ваше место: {r} из {n}',
+      leaderboardYou: 'Вы',
+      scheduledBanner: '⏰ Тестирование начнётся {dt}. Страница обновится автоматически.',
+      tabWarnTitle: 'Не покидайте страницу теста',
+      tabWarnText: 'Вы уже несколько раз уходили со страницы во время тестирования. Не переключайтесь на другие вкладки и не используйте интернет для поиска ответов — это фиксируется и видно преподавателю.',
+      tabWarnBtn: 'Понятно, продолжаю'
+    },
+    kk: {
+      oops: 'Сәтсіз аяқталды',
+      loading: 'Жүктелуде...',
+      namePh: 'Атыңызды енгізіңіз',
+      startBtn: 'Тестті бастау',
+      prevBtn: '← Артқа',
+      nextBtn: 'Келесі →',
+      submitBtn: 'Тестті аяқтау',
+      resultTitle: 'Нәтиже',
+      reviewTitle: 'Жауаптарды талдау',
+      autoSubmitNote: 'Уақыт аяқталғандықтан тест автоматты түрде жіберілді.',
+      questionsWord: 'сұрақ',
+      timeLimitWord: 'Уақыт шегі: {m} мин',
+      selectOne: 'Бір жауап нұсқасын таңдаңыз',
+      selectMulti: 'Бірнеше нұсқаны таңдауға болады',
+      timeUp: 'Уақыт аяқталды',
+      enterName: 'Атыңызды енгізіңіз',
+      correctLabel: 'Дұрыс',
+      wrongLabel: 'Қате',
+      yourAnswer: 'Сіздің жауабыңыз',
+      correctAnswer: 'Дұрыс жауап',
+      notAnswered: 'жауап жоқ',
+      testEnded: 'Тестілеу оқытушы тарапынан аяқталды.',
+      notFound: 'Сессия табылмады. Кодты немесе QR-кодты тексеріңіз.',
+      alreadyDone: 'Сіз бұл тестті тапсырып қойдыңыз.',
+      translateFail: 'Аударма қазір қолжетімсіз, орыс тіліндегі мәтін көрсетілді.',
+      retryWrongBtn: 'Қателерді қайта өту ({n})',
+      retryTitle: 'Қателермен жұмыс',
+      retrySub: 'Тек қателескен сұрақтарға қайта жауап беріңіз. Бұл тесттің қорытынды нәтижесіне әсер етпейді.',
+      retryCheckBtn: 'Тексеру',
+      retryDoneBtn: 'Нәтижеге оралу',
+      retryAgainBtn: 'Қалған қателерді қайталау ({n})',
+      retryAllCorrect: 'Барлық жауаптар дұрыс! 🎉',
+      retryScoreLabel: 'Дұрыс: {s} / {n}',
+      leaderboardTitle: 'Осы сессиядағы үздік-3 нәтиже',
+      leaderboardYourRank: 'Сіздің орныңыз: {n} ішінен {r}',
+      leaderboardYou: 'Сіз',
+      scheduledBanner: '⏰ Тестілеу {dt} басталады. Бет автоматты түрде жаңарады.',
+      tabWarnTitle: 'Тест бетінен кетпеңіз',
+      tabWarnText: 'Сіз тестілеу кезінде бірнеше рет беттен кеттіңіз. Басқа қойындыларға ауыспаңыз және жауап іздеу үшін интернетті қолданбаңыз — бұл тіркеледі және оқытушыға көрінеді.',
+      tabWarnBtn: 'Түсінікті, жалғастырамын'
+    }
+  };
+
+  const state = {
+    lang: 'ru',
+    participantId: null,
+    testTitle: '',
+    timeLimit: null,       // минуты
+    questions: [],
+    answers: {},            // qId -> idx | [idx,...]
+    currentIndex: 0,
+    deadline: null,
+    timerInterval: null,
+    translated: null,       // { title, questions: [{text, options[]}] } на kk
+    translatedExplains: {}, // { "исходный текст пояснения": "перевод на kk" }
+    translating: false
+  };
+
+  function t(key) { return UI[state.lang][key] || UI.ru[key] || key; }
+
+  function applyStaticUi() {
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    });
+    const nameInput = document.getElementById('student-name');
+    if (nameInput) nameInput.placeholder = t('namePh');
+    ['lang-ru-1','lang-ru-2'].forEach(id => document.getElementById(id).classList.toggle('active', state.lang === 'ru'));
+    ['lang-kk-1','lang-kk-2'].forEach(id => document.getElementById(id).classList.toggle('active', state.lang === 'kk'));
+  }
+
+  function showScreen(id) {
+    ['screen-loading','screen-error','screen-join','screen-quiz','screen-result','screen-retry'].forEach(s => {
+      document.getElementById(s).classList.toggle('hidden', s !== id);
+    });
+  }
+
+  function showError(msg) {
+    document.getElementById('error-text').textContent = msg;
+    showScreen('screen-error');
+  }
+
+  async function init() {
+    applyStaticUi();
+    try {
+      const res = await fetch(`/api/sessions/${CODE}/info`);
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED') {
+          showError(data.message || t('notFound'));
+        } else {
+          showError(res.status === 404 ? t('notFound') : (data.error || t('notFound')));
+        }
+        return;
+      }
+      if (data.ended) {
+        showError(t('testEnded'));
+        return;
+      }
+      state.testTitle = data.testTitle;
+      state.timeLimit = data.timeLimit;
+      document.getElementById('join-title').textContent = data.testTitle;
+      document.getElementById('join-qcount').textContent = `${data.questionCount} ${t('questionsWord')}`;
+      if (data.timeLimit) {
+        const pill = document.getElementById('join-timelimit');
+        pill.textContent = t('timeLimitWord').replace('{m}', data.timeLimit);
+        pill.classList.remove('hidden');
+      }
+      if (data.scheduledAt && data.scheduledAt > Date.now()) {
+        showScheduledBanner(data.scheduledAt);
+      }
+      showScreen('screen-join');
+    } catch (e) {
+      showError(t('notFound'));
+    }
+  }
+
+  function setLang(lang) {
+    state.lang = lang;
+    applyStaticUi();
+    // обновляем метки на экране входа (число вопросов / лимит времени) в новом языке
+    if (!document.getElementById('screen-join').classList.contains('hidden')) {
+      document.getElementById('join-qcount').textContent = `${state.questions.length || document.getElementById('join-qcount').textContent.split(' ')[0]} ${t('questionsWord')}`;
+      if (state.timeLimit) {
+        document.getElementById('join-timelimit').textContent = t('timeLimitWord').replace('{m}', state.timeLimit);
+      }
+      document.getElementById('join-title').textContent = displayTitle();
+    }
+    if (lang === 'kk' && state.questions.length && !state.translated && !state.translating) {
+      translateAll();
+    }
+    if (!document.getElementById('screen-quiz').classList.contains('hidden')) {
+      renderQuestion();
+    }
+    if (!document.getElementById('screen-result').classList.contains('hidden')) {
+      renderResultTexts();
+    }
+  }
+
+  function displayTitle() {
+    if (state.lang === 'kk' && state.translated) return state.translated.title;
+    return state.testTitle;
+  }
+
+  async function translateAll() {
+    state.translating = true;
+    const texts = [state.testTitle];
+    state.questions.forEach(q => {
+      texts.push(q.text);
+      q.options.forEach(o => texts.push(o));
+    });
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texts, target: 'kk' })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'translate error');
+      let ptr = 0;
+      const title = data.translations[ptr++];
+      const questions = state.questions.map(q => {
+        const text = data.translations[ptr++];
+        const options = q.options.map(() => data.translations[ptr++]);
+        return { text, options };
+      });
+      state.translated = { title, questions };
+    } catch (e) {
+      console.warn('[translate] fail', e);
+      state.translated = null;
+    } finally {
+      state.translating = false;
+      if (!document.getElementById('screen-quiz').classList.contains('hidden')) renderQuestion();
+      if (!document.getElementById('screen-join').classList.contains('hidden')) {
+        document.getElementById('join-title').textContent = displayTitle();
+      }
+    }
+  }
+
+  // Пояснения к вопросам становятся известны только после сдачи теста (до этого их
+  // скрывают от студента, чтобы не подсказывать правильный ответ), поэтому переводятся
+  // отдельным запросом здесь, а не вместе с текстом вопросов в translateAll().
+  function explainText(original) {
+    if (!original) return '';
+    if (state.lang === 'kk' && state.translatedExplains && state.translatedExplains[original]) {
+      return state.translatedExplains[original];
+    }
+    return original;
+  }
+
+  async function translateExplains() {
+    if (!lastResult || state.lang !== 'kk') return;
+    const unique = [...new Set(lastResult.review.filter(r => r.explain).map(r => r.explain))]
+      .filter(txt => !state.translatedExplains[txt]);
+    if (unique.length === 0) return;
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texts: unique, target: 'kk' })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'translate error');
+      unique.forEach((txt, i) => { state.translatedExplains[txt] = data.translations[i]; });
+      if (!document.getElementById('screen-result').classList.contains('hidden')) renderResultTexts();
+      if (!document.getElementById('screen-retry').classList.contains('hidden')) renderRetryList();
+    } catch (e) {
+      console.warn('[translate] explain fail', e);
+    }
+  }
+
+  async function joinTest() {
+    const nameInput = document.getElementById('student-name');
+    const name = nameInput.value.trim();
+    const errEl = document.getElementById('join-error');
+    errEl.classList.add('hidden');
+    if (!name) {
+      errEl.textContent = t('enterName');
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const btn = document.getElementById('join-btn');
+    btn.disabled = true;
+    try {
+      const res = await fetch(`/api/sessions/${CODE}/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        errEl.textContent = (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED' || data.error === 'NOT_STARTED' || data.error === 'ALREADY_SUBMITTED') ? (data.message || t('notFound')) : (data.error || t('notFound'));
+        errEl.classList.remove('hidden');
+        btn.disabled = false;
+        if (data.error === 'NOT_STARTED' && data.scheduledAt) showScheduledBanner(data.scheduledAt);
+        return;
+      }
+      state.participantId = data.participantId;
+      state.testTitle = data.testTitle;
+      state.timeLimit = data.timeLimit;
+      state.questions = data.questions;
+      state.currentIndex = 0;
+      state.answers = {};
+      showScreen('screen-quiz');
+      if (state.timeLimit) {
+        state.deadline = Date.now() + state.timeLimit * 60 * 1000;
+        document.getElementById('timer-box').classList.remove('hidden');
+        startTimer();
+      }
+      if (state.lang === 'kk') translateAll();
+      renderQuestion();
+    } catch (e) {
+      errEl.textContent = t('notFound');
+      errEl.classList.remove('hidden');
+      btn.disabled = false;
+    }
+  }
+
+  function startTimer() {
+    updateTimer();
+    state.timerInterval = setInterval(updateTimer, 1000);
+  }
+
+  function updateTimer() {
+    const box = document.getElementById('timer-box');
+    const remainingMs = state.deadline - Date.now();
+    if (remainingMs <= 0) {
+      box.textContent = '00:00';
+      clearInterval(state.timerInterval);
+      submitTest(true);
+      return;
+    }
+    const totalSec = Math.floor(remainingMs / 1000);
+    const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
+    const ss = String(totalSec % 60).padStart(2, '0');
+    box.textContent = `${mm}:${ss}`;
+    box.classList.toggle('warn', totalSec <= 60);
+  }
+
+  function currentQuestionView(idx) {
+    const q = state.questions[idx];
+    if (state.lang === 'kk' && state.translated) {
+      const tq = state.translated.questions[idx];
+      return { id: q.id, text: tq.text, options: tq.options, multi: q.multi, image: q.image };
+    }
+    return { id: q.id, text: q.text, options: q.options, multi: q.multi, image: q.image };
+  }
+
+  function renderQuestion() {
+    const idx = state.currentIndex;
+    const total = state.questions.length;
+    const q = currentQuestionView(idx);
+
+    document.getElementById('q-index').textContent = `${idx + 1} / ${total}`;
+    document.getElementById('q-text').textContent = q.text;
+    const qImg = document.getElementById('q-image');
+    if (q.image) { qImg.src = q.image; qImg.classList.remove('hidden'); } else { qImg.classList.add('hidden'); qImg.removeAttribute('src'); }
+    document.getElementById('q-hint').textContent = q.multi ? t('selectMulti') : t('selectOne');
+
+    const container = document.getElementById('options-container');
+    container.innerHTML = '';
+    const given = state.answers[q.id];
+    q.options.forEach((optText, i) => {
+      const isSelected = q.multi ? (Array.isArray(given) && given.includes(i)) : (given === i);
+      const div = document.createElement('div');
+      div.className = 'option' + (isSelected ? ' selected' : '');
+      div.onclick = () => selectOption(q, i);
+      div.innerHTML = `
+        <input type="${q.multi ? 'checkbox' : 'radio'}" ${isSelected ? 'checked' : ''} readonly>
+        <div class="opt-text"></div>
+      `;
+      div.querySelector('.opt-text').textContent = optText;
+      container.appendChild(div);
+    });
+
+    // точки-навигация
+    const dots = document.getElementById('dots');
+    dots.innerHTML = '';
+    state.questions.forEach((qq, i) => {
+      const answered = state.answers[qq.id] !== undefined &&
+        (Array.isArray(state.answers[qq.id]) ? state.answers[qq.id].length > 0 : true);
+      const d = document.createElement('div');
+      d.className = 'dot' + (answered ? ' answered' : '') + (i === idx ? ' current' : '');
+      d.textContent = i + 1;
+      d.onclick = () => { state.currentIndex = i; renderQuestion(); };
+      dots.appendChild(d);
+    });
+
+    const answeredCount = state.questions.filter(qq => {
+      const a = state.answers[qq.id];
+      return a !== undefined && (Array.isArray(a) ? a.length > 0 : true);
+    }).length;
+    document.getElementById('progress-fill').style.width = Math.round((answeredCount / total) * 100) + '%';
+
+    document.getElementById('prev-btn').style.visibility = idx === 0 ? 'hidden' : 'visible';
+    const isLast = idx === total - 1;
+    document.getElementById('next-btn').classList.toggle('hidden', isLast);
+    document.getElementById('submit-btn').classList.toggle('hidden', !isLast);
+  }
+
+  function selectOption(q, i) {
+    if (q.multi) {
+      const arr = Array.isArray(state.answers[q.id]) ? state.answers[q.id].slice() : [];
+      const pos = arr.indexOf(i);
+      if (pos >= 0) arr.splice(pos, 1); else arr.push(i);
+      state.answers[q.id] = arr;
+    } else {
+      state.answers[q.id] = i;
+    }
+    renderQuestion();
+  }
+
+  function goNext() {
+    if (state.currentIndex < state.questions.length - 1) {
+      state.currentIndex++;
+      renderQuestion();
+    }
+  }
+  function goPrev() {
+    if (state.currentIndex > 0) {
+      state.currentIndex--;
+      renderQuestion();
+    }
+  }
+
+  let lastResult = null;
+
+  // ==================== ОТСЛЕЖИВАНИЕ ПЕРЕКЛЮЧЕНИЯ ВКЛАДКИ ====================
+  // Используем стандартный Page Visibility API — единственный надёжный способ узнать,
+  // что студент свернул/переключил вкладку. Заблокировать сам скриншот или переключение
+  // невозможно (это ограничение уровня ОС, а не сайта) — здесь только фиксация факта.
+  let tabSwitchLog = [];
+  let tabHiddenAt = null;
+  let liveSocket = null;
+  const LONG_SWITCH_MS = 5000;   // уход дольше этого считается «долгим»
+  const LONG_SWITCH_WARN_AFTER = 2; // предупреждаем начиная с (N+1)-го долгого ухода
+  let longSwitchCount = 0;
+
+  function ensureLiveSocket() {
+    if (liveSocket) return liveSocket;
+    try { liveSocket = io(); } catch (e) { liveSocket = null; }
+    return liveSocket;
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    const quizVisible = !document.getElementById('screen-quiz').classList.contains('hidden');
+    if (document.hidden) {
+      if (quizVisible) tabHiddenAt = Date.now();
+      return;
+    }
+    if (tabHiddenAt === null) return;
+    const awayMs = Date.now() - tabHiddenAt;
+    tabHiddenAt = null;
+    if (awayMs < 1500) return; // короткие переключения (например, смахивание шторки) не считаем
+    if (!quizVisible) return;
+    tabSwitchLog.push({ awayMs, at: Date.now() });
+    if (state.participantId) {
+      const s = ensureLiveSocket();
+      if (s) s.emit('student:tabswitch', { code: CODE, participantId: state.participantId, awayMs, isLong: awayMs >= LONG_SWITCH_MS });
+    }
+    if (awayMs >= LONG_SWITCH_MS) {
+      longSwitchCount++;
+      if (longSwitchCount > LONG_SWITCH_WARN_AFTER) showTabWarning();
+    }
+  });
+
+  function showTabWarning() {
+    document.getElementById('tab-warn-overlay').classList.remove('hidden');
+  }
+  function dismissTabWarning() {
+    document.getElementById('tab-warn-overlay').classList.add('hidden');
+  }
+
+  async function submitTest(auto) {
+    if (state.timerInterval) clearInterval(state.timerInterval);
+    document.getElementById('submit-btn').disabled = true;
+    try {
+      const res = await fetch(`/api/sessions/${CODE}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participantId: state.participantId, answers: state.answers, tabSwitchLog })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showError(data.error || t('notFound'));
+        return;
+      }
+      lastResult = data;
+      lastResult.auto = auto;
+      showResult();
+    } catch (e) {
+      showError(t('notFound'));
+    }
+  }
+
+  function showResult() {
+    showScreen('screen-result');
+    document.getElementById('auto-submit-note').classList.toggle('hidden', !lastResult.auto);
+    renderResultTexts();
+    const wrongCount = lastResult.review.filter(r => !r.isCorrect).length;
+    const retryBtn = document.getElementById('retry-wrong-btn');
+    if (wrongCount > 0) {
+      retryBtn.textContent = t('retryWrongBtn').replace('{n}', wrongCount);
+      retryBtn.classList.remove('hidden');
+    } else {
+      retryBtn.classList.add('hidden');
+    }
+
+    const circle = document.getElementById('score-circle');
+    circle.classList.remove('celebrate');
+    void circle.offsetWidth; // перезапуск CSS-анимации
+    circle.classList.add('celebrate');
+
+    const percent = lastResult.total > 0 ? Math.round((lastResult.score / lastResult.total) * 100) : 0;
+    if (percent === 100) {
+      playChime('great');
+      launchConfetti();
+    } else if (percent >= 60) {
+      playChime('good');
+    }
+
+    loadLeaderboard();
+    translateExplains();
+  }
+
+  async function loadLeaderboard() {
+    const box = document.getElementById('leaderboard-box');
+    try {
+      const url = `/api/sessions/${CODE}/leaderboard` + (state.participantId ? `?participantId=${encodeURIComponent(state.participantId)}` : '');
+      const res = await fetch(url);
+      if (!res.ok) { box.classList.add('hidden'); return; }
+      const data = await res.json();
+      if (!data.top || data.top.length === 0) { box.classList.add('hidden'); return; }
+      const medals = ['🥇', '🥈', '🥉'];
+      const rowsEl = document.getElementById('leaderboard-rows');
+      rowsEl.innerHTML = data.top.map(r => `
+        <div class="lb-row">
+          <span class="lb-medal">${medals[r.rank - 1] || r.rank}</span>
+          <span class="lb-percent">${r.percent}%</span>
+        </div>
+      `).join('');
+      const rankEl = document.getElementById('leaderboard-your-rank');
+      if (data.yourRank) {
+        rankEl.textContent = t('leaderboardYourRank').replace('{r}', data.yourRank).replace('{n}', data.totalParticipants);
+        rankEl.classList.remove('hidden');
+      } else {
+        rankEl.classList.add('hidden');
+      }
+      box.classList.remove('hidden');
+    } catch (e) {
+      box.classList.add('hidden');
+    }
+  }
+
+  // ==================== ЗВУК И КОНФЕТТИ (лёгкая геймификация) ====================
+  let gamifyAudioCtx = null;
+  function ensureGamifyCtx() {
+    if (!gamifyAudioCtx) gamifyAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (gamifyAudioCtx.state === 'suspended') gamifyAudioCtx.resume();
+    return gamifyAudioCtx;
+  }
+  function playChime(kind) {
+    try {
+      const ctx = ensureGamifyCtx();
+      const now = ctx.currentTime;
+      const notes = kind === 'great' ? [523.25, 659.25, 783.99, 1046.5] : [523.25, 659.25];
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        const t0 = now + i * 0.09;
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.25);
+        osc.connect(g); g.connect(ctx.destination);
+        osc.start(t0); osc.stop(t0 + 0.3);
+      });
+    } catch (e) { /* звук необязателен — молча игнорируем */ }
+  }
+  function playTick() {
+    try {
+      const ctx = ensureGamifyCtx();
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 880;
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(0.2, now + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(now); osc.stop(now + 0.16);
+    } catch (e) {}
+  }
+  function launchConfetti() {
+    const colors = ['#F07C00', '#2C3E50', '#2e9e4f', '#e0a72e', '#d64545'];
+    for (let i = 0; i < 40; i++) {
+      const piece = document.createElement('div');
+      piece.className = 'confetti-piece';
+      const size = 6 + Math.random() * 6;
+      piece.style.width = size + 'px';
+      piece.style.height = size * 0.6 + 'px';
+      piece.style.left = Math.random() * 100 + 'vw';
+      piece.style.background = colors[Math.floor(Math.random() * colors.length)];
+      piece.style.animationDuration = (2 + Math.random() * 1.5) + 's';
+      piece.style.transform = `rotate(${Math.random() * 360}deg)`;
+      document.body.appendChild(piece);
+      setTimeout(() => piece.remove(), 4000);
+    }
+  }
+
+  function reviewOptionText(reviewItem, i) {
+    if (state.lang === 'kk' && state.translated) {
+      const idx = state.questions.findIndex(q => q.text === reviewItem.text);
+      if (idx >= 0 && state.translated.questions[idx]) {
+        return state.translated.questions[idx].options[i];
+      }
+    }
+    return reviewItem.options[i];
+  }
+  function reviewQuestionText(reviewItem) {
+    if (state.lang === 'kk' && state.translated) {
+      const idx = state.questions.findIndex(q => q.text === reviewItem.text);
+      if (idx >= 0 && state.translated.questions[idx]) return state.translated.questions[idx].text;
+    }
+    return reviewItem.text;
+  }
+
+  function renderResultTexts() {
+    if (!lastResult) return;
+    const pct = lastResult.total ? Math.round((lastResult.score / lastResult.total) * 100) : 0;
+    document.getElementById('score-pct').textContent = pct + '%';
+    document.getElementById('score-frac').textContent = `${lastResult.score}/${lastResult.total}`;
+
+    const container = document.getElementById('review-container');
+    container.innerHTML = '';
+    lastResult.review.forEach((r, ridx) => {
+      const div = document.createElement('div');
+      div.className = 'review-item';
+      const statusClass = r.isCorrect ? 'ok' : 'no';
+      const statusText = r.isCorrect ? t('correctLabel') : t('wrongLabel');
+      const qText = reviewQuestionText(r);
+
+      let givenLabel;
+      if (r.multi) {
+        const arr = Array.isArray(r.given) ? r.given : [];
+        givenLabel = arr.length ? arr.map(i => reviewOptionText(r, i)).join(', ') : t('notAnswered');
+      } else {
+        givenLabel = (r.given !== undefined && r.given !== null) ? reviewOptionText(r, r.given) : t('notAnswered');
+      }
+      let correctLabel;
+      if (r.multi) {
+        const arr = Array.isArray(r.correct) ? r.correct : [];
+        correctLabel = arr.map(i => reviewOptionText(r, i)).join(', ');
+      } else {
+        correctLabel = reviewOptionText(r, r.correct);
+      }
+
+      div.innerHTML = `
+        <span class="badge-status ${statusClass}">${statusText}</span>
+        <div class="rq">${ridx + 1}. ${escapeHtml(qText)}</div>
+        ${r.image ? `<img src="${r.image}" style="max-width:100%; border-radius:8px; margin:6px 0 10px; display:block;">` : ''}
+        <div class="ropt ${r.isCorrect ? 'correct' : 'wrong'}">${t('yourAnswer')}: ${escapeHtml(givenLabel)}</div>
+        ${!r.isCorrect ? `<div class="ropt correct">${t('correctAnswer')}: ${escapeHtml(correctLabel)}</div>` : ''}
+        ${r.explain ? `<div class="rexplain">${escapeHtml(explainText(r.explain))}</div>` : ''}
+      `;
+      container.appendChild(div);
+    });
+  }
+
+  function escapeHtml(s) {
+    return (s || '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ==================== БАННЕР ЗАПЛАНИРОВАННОГО НАЧАЛА ====================
+  let scheduledPollTimer = null;
+
+  function showScheduledBanner(scheduledAt) {
+    const banner = document.getElementById('scheduled-banner-student');
+    const dt = new Date(scheduledAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    banner.textContent = t('scheduledBanner').replace('{dt}', dt);
+    banner.classList.remove('hidden');
+    document.getElementById('join-btn').disabled = true;
+
+    if (scheduledPollTimer) clearInterval(scheduledPollTimer);
+    scheduledPollTimer = setInterval(async () => {
+      if (Date.now() < scheduledAt) return;
+      try {
+        const res = await fetch(`/api/sessions/${CODE}/info`);
+        const data = await res.json();
+        if (res.ok && (!data.scheduledAt || data.scheduledAt <= Date.now())) {
+          clearInterval(scheduledPollTimer);
+          scheduledPollTimer = null;
+          banner.classList.add('hidden');
+          document.getElementById('join-btn').disabled = false;
+        }
+      } catch (e) { /* попробуем на следующем тике */ }
+    }, 5000);
+  }
+
+  // ==================== РАБОТА НАД ОШИБКАМИ ====================
+  // Полностью на стороне браузера: сервер уже вернул после сдачи теста полный
+  // разбор с правильными ответами (lastResult.review), поэтому повтор не требует
+  // новых обращений к серверу и не расходует лимит прохождений тарифа.
+
+  let retryPool = [];       // [{text, options, multi, correct}]
+  let retryAnswers = {};    // индекс в retryPool -> ответ
+
+  function startRetry(fromWithinRetry) {
+    const source = fromWithinRetry
+      ? retryPool.filter((item, i) => !isRetryAnswerCorrect(item, retryAnswers[i]))
+      : lastResult.review.filter(r => !r.isCorrect);
+    retryPool = source.map(r => ({ text: r.text, options: r.options, multi: r.multi, correct: r.correct, explain: r.explain, image: r.image }));
+    retryAnswers = {};
+    document.getElementById('retry-score').classList.add('hidden');
+    document.getElementById('retry-check-btn').classList.remove('hidden');
+    document.getElementById('retry-again-btn').classList.add('hidden');
+    document.getElementById('retry-done-btn').classList.add('hidden');
+    renderRetryList();
+    showScreen('screen-retry');
+    translateExplains();
+  }
+
+  function retryItemText(item) {
+    if (state.lang === 'kk' && state.translated) {
+      const idx = state.questions.findIndex(q => q.text === item.text);
+      if (idx >= 0 && state.translated.questions[idx]) return state.translated.questions[idx].text;
+    }
+    return item.text;
+  }
+  function retryItemOptionText(item, i) {
+    if (state.lang === 'kk' && state.translated) {
+      const idx = state.questions.findIndex(q => q.text === item.text);
+      if (idx >= 0 && state.translated.questions[idx]) return state.translated.questions[idx].options[i];
+    }
+    return item.options[i];
+  }
+
+  function renderRetryList() {
+    const container = document.getElementById('retry-list');
+    container.innerHTML = '';
+    retryPool.forEach((item, idx) => {
+      const card = document.createElement('div');
+      card.className = 'review-item';
+      const title = document.createElement('div');
+      title.className = 'rq';
+      title.textContent = `${idx + 1}. ${retryItemText(item)}`;
+      card.appendChild(title);
+
+      if (item.image) {
+        const img = document.createElement('img');
+        img.src = item.image;
+        img.style.cssText = 'max-width:100%; border-radius:8px; margin-bottom:10px; display:block;';
+        card.appendChild(img);
+      }
+
+      const optsWrap = document.createElement('div');
+      optsWrap.style.marginTop = '10px';
+      item.options.forEach((optText, i) => {
+        const given = retryAnswers[idx];
+        const isSelected = item.multi ? (Array.isArray(given) && given.includes(i)) : (given === i);
+        const div = document.createElement('div');
+        div.className = 'option' + (isSelected ? ' selected' : '');
+        div.dataset.retryIdx = idx;
+        div.dataset.optIdx = i;
+        div.onclick = () => selectRetryOption(idx, i, item.multi);
+        div.innerHTML = `<input type="${item.multi ? 'checkbox' : 'radio'}" ${isSelected ? 'checked' : ''} readonly><div class="opt-text"></div>`;
+        div.querySelector('.opt-text').textContent = retryItemOptionText(item, i);
+        optsWrap.appendChild(div);
+      });
+      card.appendChild(optsWrap);
+      if (item.explain) {
+        const expl = document.createElement('div');
+        expl.className = 'rexplain hidden';
+        expl.dataset.retryExplain = idx;
+        expl.textContent = explainText(item.explain);
+        card.appendChild(expl);
+      }
+      container.appendChild(card);
+    });
+  }
+
+  function selectRetryOption(idx, i, multi) {
+    if (multi) {
+      const arr = Array.isArray(retryAnswers[idx]) ? retryAnswers[idx].slice() : [];
+      const pos = arr.indexOf(i);
+      if (pos >= 0) arr.splice(pos, 1); else arr.push(i);
+      retryAnswers[idx] = arr;
+    } else {
+      retryAnswers[idx] = i;
+    }
+    renderRetryList();
+  }
+
+  function isRetryAnswerCorrect(item, given) {
+    if (item.multi) {
+      const correctSet = JSON.stringify([...item.correct].sort());
+      const givenSet = JSON.stringify([...(Array.isArray(given) ? given : [])].sort());
+      return correctSet === givenSet;
+    }
+    return given === item.correct;
+  }
+
+  function checkRetry() {
+    let correctCount = 0;
+    let delay = 0;
+    retryPool.forEach((item, idx) => {
+      const given = retryAnswers[idx];
+      const ok = isRetryAnswerCorrect(item, given);
+      if (ok) { correctCount++; setTimeout(playTick, delay); delay += 90; }
+      const correctIdxs = item.multi ? item.correct : [item.correct];
+      document.querySelectorAll(`.option[data-retry-idx="${idx}"]`).forEach(div => {
+        div.classList.add('locked');
+        div.onclick = null;
+        const optI = parseInt(div.dataset.optIdx, 10);
+        if (correctIdxs.includes(optI)) div.classList.add('correct-answer');
+        else if (item.multi ? (Array.isArray(given) && given.includes(optI)) : given === optI) div.classList.add('wrong-answer');
+      });
+      const explEl = document.querySelector(`[data-retry-explain="${idx}"]`);
+      if (explEl) explEl.classList.remove('hidden');
+    });
+
+    const scoreBox = document.getElementById('retry-score');
+    scoreBox.textContent = correctCount === retryPool.length
+      ? t('retryAllCorrect')
+      : t('retryScoreLabel').replace('{s}', correctCount).replace('{n}', retryPool.length);
+    scoreBox.classList.remove('hidden');
+
+    if (correctCount === retryPool.length) {
+      setTimeout(() => { playChime('great'); launchConfetti(); }, delay + 150);
+    }
+
+    document.getElementById('retry-check-btn').classList.add('hidden');
+    const remainingWrong = retryPool.length - correctCount;
+    const againBtn = document.getElementById('retry-again-btn');
+    if (remainingWrong > 0) {
+      againBtn.textContent = t('retryAgainBtn').replace('{n}', remainingWrong);
+      againBtn.classList.remove('hidden');
+    } else {
+      againBtn.classList.add('hidden');
+    }
+    document.getElementById('retry-done-btn').classList.remove('hidden');
+  }
+
+  init();
+</script>
+</body>
+</html>
