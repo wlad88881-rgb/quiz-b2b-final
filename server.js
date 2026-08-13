@@ -190,10 +190,17 @@ async function translateOne(text, target) {
       ? json.responseData.translatedText
       : clean;
     // Иногда сервис возвращает служебные сообщения об ошибках вместо перевода
+    // (например, исчерпан дневной бесплатный лимит). В этом случае ВАЖНО не кэшировать
+    // оригинал как «перевод» — иначе после сброса лимита у сервиса текст навсегда
+    // останется непереведённым в нашем кэше, и переключение на KZ будет выглядеть
+    // сломанным даже когда сервис снова доступен.
     const looksLikeError = /MYMEMORY WARNING|INVALID|QUERY LENGTH LIMIT/i.test(translated);
-    const finalText = looksLikeError ? clean : translated;
-    await db.update((d) => { if (!d.translations) d.translations = {}; d.translations[key] = finalText; });
-    return finalText;
+    if (looksLikeError) {
+      console.warn('[translate] Сервис вернул предупреждение вместо перевода, не кэшируем:', translated.slice(0, 120));
+      return clean;
+    }
+    await db.update((d) => { if (!d.translations) d.translations = {}; d.translations[key] = translated; });
+    return translated;
   } catch (e) {
     console.error('[translate] Ошибка перевода:', e.message);
     return clean; // при недоступности сервиса возвращаем оригинал, чтобы приложение не падало
@@ -1503,6 +1510,19 @@ app.delete('/api/admin/companies/:id', checkAdmin, async (req, res) => {
     Object.keys(d.labs).forEach(id => { if (d.labs[id].companyId === cid) delete d.labs[id]; });
   });
   res.json({ ok: true });
+});
+
+// Очистка кэша переводов (RU -> KK). Нужна на случай, если ранее (до исправления
+// translateOne) в кэш попали «отравленные» записи — оригинальный русский текст,
+// сохранённый как перевод из-за временной ошибки/лимита сервиса MyMemory. После очистки
+// все тексты переведутся заново при следующем переключении на казахский язык.
+app.post('/api/admin/clear-translations', checkAdmin, async (req, res) => {
+  let count = 0;
+  await db.update((d) => {
+    count = Object.keys(d.translations || {}).length;
+    d.translations = {};
+  });
+  res.json({ ok: true, cleared: count });
 });
 
 // Резервная копия всей базы данных целиком (компании, тесты, сессии, тренажёры) в виде
