@@ -171,11 +171,27 @@ function verifyPasswordSecure(password, stored) {
 
 // ==================== ПЕРЕВОД (RU -> KK) ====================
 
-// Необязательный email для MyMemory API. Если задать переменную окружения
-// MYMEMORY_EMAIL, сервис поднимает анонимный дневной лимит (примерно с 5 000
-// до 50 000 слов) и мягче относится к скорости запросов — см. документацию
-// https://mymemory.translated.net/doc/spec.php («de» параметр).
+// Основной провайдер — Yandex Cloud Translate. Ключ привязан к аккаунту, а не к
+// исходящему IP сервера, поэтому не страдает от общих блокировок анонимного
+// доступа, в которые упирается MyMemory на бесплатном тарифе Render (там IP
+// общий для многих чужих проектов). Плюс: Yandex принимает целую пачку текстов
+// ОДНИМ запросом, поэтому лимиты по скорости запросов почти не встречаются даже
+// на больших тестах. Настраивается через переменные окружения
+// YANDEX_TRANSLATE_API_KEY и YANDEX_FOLDER_ID (см. Yandex Cloud Console).
+const YANDEX_TRANSLATE_API_KEY = process.env.YANDEX_TRANSLATE_API_KEY || '';
+const YANDEX_FOLDER_ID = process.env.YANDEX_FOLDER_ID || '';
+const USE_YANDEX = !!(YANDEX_TRANSLATE_API_KEY && YANDEX_FOLDER_ID);
+
+// Резервный вариант, если ключ Yandex ещё не настроен — анонимный MyMemory.
+// Необязательный email поднимает его дневной лимит (см. документацию MyMemory,
+// параметр «de»), но всё равно остаётся подвержен общим блокировкам IP Render.
 const MYMEMORY_EMAIL = process.env.MYMEMORY_EMAIL || '';
+
+if (USE_YANDEX) {
+  console.log('[translate] Провайдер перевода: Yandex Cloud Translate');
+} else {
+  console.warn('[translate] ВНИМАНИЕ: YANDEX_TRANSLATE_API_KEY/YANDEX_FOLDER_ID не заданы — используется анонимный MyMemory (менее надёжен на общем IP Render, может упираться в лимит запросов). Задайте переменные окружения, чтобы включить Yandex.');
+}
 
 function translationCacheKey(text, target) {
   return crypto.createHash('sha1').update(target + '::' + text).digest('hex');
@@ -183,14 +199,34 @@ function translationCacheKey(text, target) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-async function translateOne(text, target, attempt = 0) {
-  const clean = (text || '').toString();
-  if (!clean.trim()) return clean;
-  const data = db.load();
-  const key = translationCacheKey(clean, target);
-  if (data.translations[key]) return data.translations[key];
+// Переводит пачку текстов ОДНИМ запросом к Yandex Cloud Translate API.
+async function translateBatchViaYandex(texts) {
+  const resp = await fetch('https://translate.api.cloud.yandex.net/translate/v2/translate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Api-Key ${YANDEX_TRANSLATE_API_KEY}`
+    },
+    body: JSON.stringify({
+      folderId: YANDEX_FOLDER_ID,
+      texts,
+      sourceLanguageCode: 'ru',
+      targetLanguageCode: 'kk'
+    }),
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    throw new Error(`yandex translate http ${resp.status}: ${body.slice(0, 200)}`);
+  }
+  const json = await resp.json();
+  if (!json || !Array.isArray(json.translations)) throw new Error('yandex translate: неожиданный формат ответа');
+  return json.translations.map(t => (t && t.text) || '');
+}
+
+async function translateOneViaMyMemory(text, target, attempt = 0) {
   try {
-    let url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(clean)}&langpair=ru|${target}`;
+    let url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=ru|${target}`;
     if (MYMEMORY_EMAIL) url += `&de=${encodeURIComponent(MYMEMORY_EMAIL)}`;
     const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (resp.status === 429) {
@@ -199,47 +235,81 @@ async function translateOne(text, target, attempt = 0) {
       // ещё раз один раз, прежде чем сдаться и вернуть оригинал.
       if (attempt < 1) {
         await sleep(1500);
-        return translateOne(text, target, attempt + 1);
+        return translateOneViaMyMemory(text, target, attempt + 1);
       }
       console.warn('[translate] MyMemory: превышен лимит запросов в секунду (429), временно возвращаем оригинал');
-      return clean;
+      return text;
     }
     if (!resp.ok) throw new Error('translate http ' + resp.status);
     const json = await resp.json();
     const translated = json && json.responseData && json.responseData.translatedText
       ? json.responseData.translatedText
-      : clean;
+      : text;
     // Иногда сервис возвращает служебные сообщения об ошибках вместо перевода
-    // (например, исчерпан дневной бесплатный лимит). В этом случае ВАЖНО не кэшировать
-    // оригинал как «перевод» — иначе после сброса лимита у сервиса текст навсегда
-    // останется непереведённым в нашем кэше, и переключение на KZ будет выглядеть
-    // сломанным даже когда сервис снова доступен.
+    // (например, исчерпан дневной бесплатный лимит) — такое НЕ кэшируем выше по стеку.
     const looksLikeError = /MYMEMORY WARNING|INVALID|QUERY LENGTH LIMIT/i.test(translated);
-    if (looksLikeError) {
-      console.warn('[translate] Сервис вернул предупреждение вместо перевода, не кэшируем:', translated.slice(0, 120));
-      return clean;
-    }
-    await db.update((d) => { if (!d.translations) d.translations = {}; d.translations[key] = translated; });
-    return translated;
+    return looksLikeError ? text : translated;
   } catch (e) {
-    console.error('[translate] Ошибка перевода:', e.message);
-    return clean; // при недоступности сервиса возвращаем оригинал, чтобы приложение не падало
+    console.error('[translate] Ошибка перевода (MyMemory):', e.message);
+    return text; // при недоступности сервиса возвращаем оригинал, чтобы приложение не падало
   }
 }
 
+// Переводит список текстов, используя кэш и выбранного провайдера (Yandex, если
+// настроен, иначе резервный MyMemory). Кэшируются только реально переведённые
+// тексты — ошибки/лимиты никогда не кэшируются, чтобы не «замораживать» текст
+// непереведённым навсегда после временного сбоя сервиса.
 async function translateBatch(texts, target) {
+  const data = db.load();
   const results = new Array(texts.length);
-  // Небольшая скорость последовательных запросов вместо агрессивного параллелизма —
-  // анонимный MyMemory жёстко ограничивает запросы в секунду (ответ 429), и при
-  // параллелизме 4+ это легко пробивалось на тестах с большим числом вопросов.
+  const toTranslate = []; // { index, text, key }
+
+  texts.forEach((text, i) => {
+    const clean = (text || '').toString();
+    if (!clean.trim()) { results[i] = clean; return; }
+    const key = translationCacheKey(clean, target);
+    if (data.translations[key]) { results[i] = data.translations[key]; return; }
+    toTranslate.push({ index: i, text: clean, key });
+  });
+
+  if (toTranslate.length === 0) return results;
+
+  if (USE_YANDEX) {
+    const GROUP_SIZE = 100; // с запасом по лимитам Yandex на размер одного запроса
+    for (let g = 0; g < toTranslate.length; g += GROUP_SIZE) {
+      const group = toTranslate.slice(g, g + GROUP_SIZE);
+      try {
+        const translated = await translateBatchViaYandex(group.map(t => t.text));
+        const updates = {};
+        group.forEach((t, i) => {
+          const finalText = translated[i] || t.text;
+          results[t.index] = finalText;
+          updates[t.key] = finalText;
+        });
+        await db.update((d) => { if (!d.translations) d.translations = {}; Object.assign(d.translations, updates); });
+      } catch (e) {
+        console.error('[translate] Ошибка перевода (Yandex):', e.message);
+        group.forEach((t) => { results[t.index] = t.text; }); // не кэшируем — попробуем снова в следующий раз
+      }
+    }
+    return results;
+  }
+
+  // Резервный вариант без ключа Yandex — старая логика через анонимный MyMemory
+  // (медленнее и менее надёжно на общем IP Render).
   const CONCURRENCY = 2;
   const DELAY_MS = 150;
   let idx = 0;
   async function worker() {
-    while (idx < texts.length) {
+    while (idx < toTranslate.length) {
       const i = idx++;
-      results[i] = await translateOne(texts[i], target);
-      if (idx < texts.length) await sleep(DELAY_MS);
+      const t = toTranslate[i];
+      const translated = await translateOneViaMyMemory(t.text, target);
+      results[t.index] = translated;
+      if (translated !== t.text) {
+        await db.update((d) => { if (!d.translations) d.translations = {}; d.translations[t.key] = translated; });
+      }
+      if (idx < toTranslate.length) await sleep(DELAY_MS);
     }
   }
   const workers = [];
@@ -599,6 +669,35 @@ app.delete('/api/tests/:id/sessions', checkAuth, async (req, res) => {
 });
 
 // ==================== СТАТИСТИКА ====================
+
+// Ручной предварительный перевод всего теста на казахский ОДНИМ нажатием кнопки
+// в редакторе (вместо перевода «на лету» во время реальной сдачи студентами).
+// Собирает заголовок теста и все тексты вопросов/вариантов ответов, прогоняет их
+// через переводчик (Yandex, если настроен, иначе резервный MyMemory) и складывает
+// в общий кэш переводов. После этого студенты при переключении на KZ будут читать
+// уже готовый перевод из кэша — без единого живого запроса к сервису перевода
+// во время самого тестирования, что снимает любые проблемы с лимитами запросов.
+app.post('/api/tests/:id/translate', checkAuth, async (req, res) => {
+  const data = db.load();
+  const test = safeGet(data.tests, req.params.id);
+  if (!test || test.companyId !== req.companyId) return res.status(404).json({ error: 'Тест не найден' });
+
+  const texts = [test.title];
+  test.questions.forEach(q => {
+    texts.push(q.text);
+    (q.options || []).forEach(o => texts.push(o));
+  });
+  const uniqueTexts = [...new Set(texts.filter(t => (t || '').toString().trim()))];
+
+  try {
+    await translateBatch(uniqueTexts, 'kk');
+    res.json({ ok: true, translated: uniqueTexts.length, provider: USE_YANDEX ? 'yandex' : 'mymemory' });
+  } catch (e) {
+    console.error('[translate] Ошибка предварительного перевода теста:', e.message);
+    res.status(500).json({ error: 'Не удалось выполнить перевод, попробуйте ещё раз' });
+  }
+});
+
 
 app.get('/api/tests/:id/stats', checkAuth, (req, res) => {
   const data = db.load();
