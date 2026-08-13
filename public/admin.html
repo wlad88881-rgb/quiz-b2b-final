@@ -63,6 +63,7 @@
       <h1>Админ-панель</h1>
       <div class="row" style="gap:12px;">
         <button class="btn outline small" onclick="downloadBackup()">📥 Скачать бэкап базы</button>
+        <button class="btn outline small" onclick="clearTranslations()">🌐 Очистить кэш переводов (KZ)</button>
         <input type="file" id="restore-file-input" accept="application/json,.json" style="display:none;" onchange="handleRestoreFile(this)">
         <button class="btn outline small" onclick="document.getElementById('restore-file-input').click()">📤 Восстановить из бэкапа</button>
         <span class="logout-link" onclick="adminLogout()">Выйти</span>
@@ -149,6 +150,18 @@
       throw new Error('unauthorized');
     }
     return res;
+  }
+
+  async function clearTranslations() {
+    if (!confirm('Очистить кэш переводов на казахский? Все вопросы переведутся заново при следующем переключении студентами на KZ (может занять время и расходует дневной лимит сервиса перевода). Используйте, если казахский язык показывает нетронутый русский текст.')) return;
+    try {
+      const res = await adminFetch('/api/admin/clear-translations', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) { alert('Не удалось очистить кэш'); return; }
+      alert(`Готово. Удалено записей из кэша: ${data.cleared}`);
+    } catch (e) {
+      if (e.message !== 'unauthorized') alert('Ошибка соединения с сервером');
+    }
   }
 
   async function downloadBackup() {
