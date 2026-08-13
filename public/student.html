@@ -536,7 +536,7 @@
       });
       const data = await res.json();
       if (!res.ok) {
-        errEl.textContent = (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED' || data.error === 'NOT_STARTED') ? (data.message || t('notFound')) : (data.error || t('notFound'));
+        errEl.textContent = (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED' || data.error === 'NOT_STARTED' || data.error === 'ALREADY_SUBMITTED') ? (data.message || t('notFound')) : (data.error || t('notFound'));
         errEl.classList.remove('hidden');
         btn.disabled = false;
         if (data.error === 'NOT_STARTED' && data.scheduledAt) showScheduledBanner(data.scheduledAt);
@@ -680,7 +680,7 @@
   let tabHiddenAt = null;
   let liveSocket = null;
   const LONG_SWITCH_MS = 5000;   // уход дольше этого считается «долгим»
-  const LONG_SWITCH_WARN_AFTER = 3; // предупреждаем начиная с (N+1)-го долгого ухода
+  const LONG_SWITCH_WARN_AFTER = 2; // предупреждаем начиная с (N+1)-го долгого ухода
   let longSwitchCount = 0;
 
   function ensureLiveSocket() {

@@ -254,8 +254,17 @@
             <a id="session-link" href="#" target="_blank"></a>
           </div>
           <button class="btn outline small" onclick="openPresentView()">🖥 Экран для показа</button>
+          <button class="btn outline small" onclick="toggleSessionStats()">📊 Статистика вопросов</button>
           <button class="btn outline small" onclick="exportResults()">📥 Excel</button>
         </div>
+      </div>
+      <div id="session-stats-panel" class="card hidden">
+        <div class="row between" style="margin-bottom:12px;">
+          <strong style="color:var(--navy);">Статистика по вопросам — только эта сессия</strong>
+          <button class="btn outline small" onclick="loadSessionStats()">Обновить</button>
+        </div>
+        <div class="muted" id="session-stats-empty">Ещё нет ответов в этой сессии.</div>
+        <div id="session-stats-chart"></div>
       </div>
       <div id="no-participants" class="muted" style="text-align:center; padding:30px 0;">Пока никто не присоединился.</div>
       <table id="results-table" class="hidden">
@@ -873,6 +882,7 @@
   }
 
   let liveTabSwitches = {}; // participantId -> { count, totalMs, longCount } — накапливается по live-событиям до сдачи теста
+  let participantsMap = {}; // participantId -> последнее известное состояние участника — нужен, чтобы перестраивать таблицу отсортированной при каждом обновлении
 
   function tabSwitchCellHtml(p) {
     const live = liveTabSwitches[p.id];
@@ -881,24 +891,40 @@
     const longCount = (p.tabSwitchLongCount !== undefined && p.tabSwitchLongCount !== null) ? p.tabSwitchLongCount : (live ? live.longCount : 0);
     if (!count) return '<span class="muted">—</span>';
     const sec = Math.round(totalMs / 1000);
-    if (longCount > 3) {
+    if (longCount > 2) {
       return `<span style="color:var(--red); font-weight:700;">🚨 ${count} раз(а), ~${sec} сек — часто и подолгу отсутствовал</span>`;
     }
     return `<span style="color:var(--orange); font-weight:600;">⚠ ${count} раз(а), ~${sec} сек вне теста</span>`;
   }
 
+  // Таблица сортируется так же, как студенты видят топ-3 в лидерборде: сначала
+  // завершившие тест — по проценту результата (выше — выше в списке), при равном
+  // проценте раньше сдавший идёт первым; ещё не завершившие — ниже, в порядке захода.
   function upsertParticipantRow(p) {
+    participantsMap[p.id] = p;
     document.getElementById('no-participants').classList.add('hidden');
     document.getElementById('results-table').classList.remove('hidden');
-    let row = document.getElementById('prow-' + p.id);
-    if (!row) {
-      row = document.createElement('tr');
-      row.id = 'prow-' + p.id;
-      document.getElementById('results-body').appendChild(row);
-    }
-    const statusText = p.finished ? 'Завершил' : 'Проходит тест';
-    const resultText = (p.finished && p.total) ? `${p.score}/${p.total} (${Math.round(p.score / p.total * 100)}%)` : '—';
-    row.innerHTML = `<td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td><td>${tabSwitchCellHtml(p)}</td>`;
+    renderParticipantsTable();
+  }
+
+  function renderParticipantsTable() {
+    const list = Object.values(participantsMap);
+    list.sort((a, b) => {
+      if (a.finished && b.finished) {
+        const pa = a.total ? a.score / a.total : 0;
+        const pb = b.total ? b.score / b.total : 0;
+        if (pb !== pa) return pb - pa;
+        return (a.finishedAt || 0) - (b.finishedAt || 0);
+      }
+      if (a.finished !== b.finished) return a.finished ? -1 : 1;
+      return (a.joinedAt || 0) - (b.joinedAt || 0);
+    });
+    const body = document.getElementById('results-body');
+    body.innerHTML = list.map(p => {
+      const statusText = p.finished ? 'Завершил' : 'Проходит тест';
+      const resultText = (p.finished && p.total) ? `${p.score}/${p.total} (${Math.round(p.score / p.total * 100)}%)` : '—';
+      return `<tr id="prow-${p.id}"><td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td><td>${tabSwitchCellHtml(p)}</td></tr>`;
+    }).join('');
   }
 
   function openSession(session, url, qrDataUrl) {
@@ -915,6 +941,9 @@
     document.getElementById('results-body').innerHTML = '';
     document.getElementById('end-session-btn').disabled = false;
     liveTabSwitches = {};
+    participantsMap = {};
+    document.getElementById('session-stats-panel').classList.add('hidden');
+    document.getElementById('session-stats-chart').innerHTML = '';
 
     currentSessionCode = session.code;
     updateScheduledBanner(session.scheduledAt || null);
@@ -1242,6 +1271,49 @@
           </div>
         `;
       }).join('');
+    }
+  }
+
+  async function toggleSessionStats() {
+    const panel = document.getElementById('session-stats-panel');
+    const wasHidden = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden');
+    if (wasHidden) await loadSessionStats();
+  }
+
+  async function loadSessionStats() {
+    if (!currentSessionCode) return;
+    const emptyEl = document.getElementById('session-stats-empty');
+    const chartEl = document.getElementById('session-stats-chart');
+    try {
+      const res = await authFetch(`/api/sessions/${currentSessionCode}/stats`);
+      const data = await res.json();
+      if (!res.ok) { emptyEl.textContent = data.error || 'Не удалось загрузить статистику'; emptyEl.classList.remove('hidden'); chartEl.innerHTML = ''; return; }
+      const answered = data.questionStats.filter(q => q.total > 0);
+      if (answered.length === 0) {
+        emptyEl.textContent = 'Ещё нет ответов в этой сессии.';
+        emptyEl.classList.remove('hidden');
+        chartEl.innerHTML = '';
+        return;
+      }
+      emptyEl.classList.add('hidden');
+      chartEl.innerHTML = answered.map(q => {
+        const rate = q.errorRate;
+        const color = rate >= 60 ? 'var(--red)' : rate >= 30 ? 'var(--orange)' : 'var(--green)';
+        const shortText = q.text.length > 70 ? q.text.slice(0, 70) + '…' : q.text;
+        return `
+          <div class="qchart-row">
+            <div class="qchart-label" title="${escapeHtml(q.text)}">${escapeHtml(shortText)} (${q.correct}/${q.total})</div>
+            <div class="qchart-track">
+              <div class="qchart-fill" style="width:${Math.max(rate, 6)}%; background:${color};">${rate}%</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    } catch (e) {
+      emptyEl.textContent = 'Ошибка соединения с сервером';
+      emptyEl.classList.remove('hidden');
+      chartEl.innerHTML = '';
     }
   }
 
