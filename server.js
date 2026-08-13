@@ -171,19 +171,39 @@ function verifyPasswordSecure(password, stored) {
 
 // ==================== ПЕРЕВОД (RU -> KK) ====================
 
+// Необязательный email для MyMemory API. Если задать переменную окружения
+// MYMEMORY_EMAIL, сервис поднимает анонимный дневной лимит (примерно с 5 000
+// до 50 000 слов) и мягче относится к скорости запросов — см. документацию
+// https://mymemory.translated.net/doc/spec.php («de» параметр).
+const MYMEMORY_EMAIL = process.env.MYMEMORY_EMAIL || '';
+
 function translationCacheKey(text, target) {
   return crypto.createHash('sha1').update(target + '::' + text).digest('hex');
 }
 
-async function translateOne(text, target) {
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+async function translateOne(text, target, attempt = 0) {
   const clean = (text || '').toString();
   if (!clean.trim()) return clean;
   const data = db.load();
   const key = translationCacheKey(clean, target);
   if (data.translations[key]) return data.translations[key];
   try {
-    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(clean)}&langpair=ru|${target}`;
+    let url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(clean)}&langpair=ru|${target}`;
+    if (MYMEMORY_EMAIL) url += `&de=${encodeURIComponent(MYMEMORY_EMAIL)}`;
     const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (resp.status === 429) {
+      // Превышена скорость запросов (не дневной лимит — тот приходит как 200 с
+      // текстовым предупреждением, см. ниже). Даём сервису «отдышаться» и пробуем
+      // ещё раз один раз, прежде чем сдаться и вернуть оригинал.
+      if (attempt < 1) {
+        await sleep(1500);
+        return translateOne(text, target, attempt + 1);
+      }
+      console.warn('[translate] MyMemory: превышен лимит запросов в секунду (429), временно возвращаем оригинал');
+      return clean;
+    }
     if (!resp.ok) throw new Error('translate http ' + resp.status);
     const json = await resp.json();
     const translated = json && json.responseData && json.responseData.translatedText
@@ -209,12 +229,17 @@ async function translateOne(text, target) {
 
 async function translateBatch(texts, target) {
   const results = new Array(texts.length);
-  const CONCURRENCY = 4;
+  // Небольшая скорость последовательных запросов вместо агрессивного параллелизма —
+  // анонимный MyMemory жёстко ограничивает запросы в секунду (ответ 429), и при
+  // параллелизме 4+ это легко пробивалось на тестах с большим числом вопросов.
+  const CONCURRENCY = 2;
+  const DELAY_MS = 150;
   let idx = 0;
   async function worker() {
     while (idx < texts.length) {
       const i = idx++;
       results[i] = await translateOne(texts[i], target);
+      if (idx < texts.length) await sleep(DELAY_MS);
     }
   }
   const workers = [];
