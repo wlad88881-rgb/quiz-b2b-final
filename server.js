@@ -611,6 +611,49 @@ app.get('/api/tests/:id/stats', checkAuth, (req, res) => {
   res.json({ test: { id: test.id, title: test.title }, sessionStats, questionStats });
 });
 
+// Статистика по вопросам за ОДНУ конкретную сессию (группу), а не по всей истории
+// теста. Нужна, чтобы посмотреть ошибки текущей/только что прошедшей группы прямо
+// во время работы, не трогая и не стирая общую историю теста перед следующей группой.
+app.get('/api/sessions/:code/stats', checkAuth, (req, res) => {
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.companyId !== req.companyId || session.type === 'lab') {
+    return res.status(404).json({ error: 'Сессия не найдена' });
+  }
+  const test = safeGet(data.tests, session.testId);
+  if (!test) return res.status(404).json({ error: 'Тест не найден' });
+
+  const allParticipants = Object.values(session.participants);
+  const finished = allParticipants.filter(p => p.finished);
+
+  const questionStats = test.questions.map(q => {
+    let correct = 0;
+    let total = 0;
+    finished.forEach(p => {
+      if (!p.answers) return;
+      const a = p.answers[q.id];
+      if (!a) return;
+      total++;
+      if (a.isCorrect) correct++;
+    });
+    return {
+      id: q.id,
+      text: q.text,
+      correct,
+      total,
+      errorRate: total > 0 ? Math.round(((total - correct) / total) * 100) : null
+    };
+  }).sort((a, b) => (b.errorRate || 0) - (a.errorRate || 0));
+
+  res.json({
+    testTitle: test.title,
+    code: session.code,
+    totalParticipants: allParticipants.length,
+    finishedParticipants: finished.length,
+    questionStats
+  });
+});
+
 // ==================== QR-КОД (ОТДЕЛЬНЫЙ МАРШРУТ ДЛЯ КАРТИНКИ) ====================
 app.get('/api/sessions/:code/qr', async (req, res) => {
   const data = db.load();
@@ -723,6 +766,22 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
   if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
   const test = safeGet(data.tests, session.testId);
   if (!test) return res.status(404).json({ error: 'Тест не найден' });
+
+  // Запрет повторного захода под тем же именем в уже пройденную сессию: если участник
+  // с таким именем (без учёта регистра и лишних пробелов) уже завершил тест в этой
+  // сессии — не даём открыть его заново под тем же именем (защита от повторной сдачи
+  // за себя или подглядывания в свой же уже сданный результат).
+  const nameKey = name.trim().toLowerCase();
+  const alreadyFinished = Object.values(session.participants).some(
+    p => p.finished && p.name.trim().toLowerCase() === nameKey
+  );
+  if (alreadyFinished) {
+    return res.status(409).json({
+      error: 'ALREADY_SUBMITTED',
+      message: 'Участник с таким именем уже проходил это тестирование. Если это ошибка, обратитесь к преподавателю.'
+    });
+  }
+
   const pid = participantId();
 
   // Перемешиваем порядок вопросов и порядок вариантов ответа индивидуально для
