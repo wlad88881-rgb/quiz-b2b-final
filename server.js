@@ -12,6 +12,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const db = require('./db');
 const { SEED_LABS } = require('./labs-content');
+const { SEED_DRAWING_TASKS } = require('./drawing-content');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -1536,6 +1537,293 @@ app.get('/s/:code', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'student.html'));
 });
 
+app.get('/d/:code', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'drawing-student.html'));
+});
+
+// ==================== ЗАДАНИЯ ПО ЧЕРТЕЖАМ (открытые вопросы, ручная проверка) ====================
+// Структура и роуты намеренно зеркалят /api/labs и /api/lab-sessions выше, но вместо
+// автопроверки по вариантам ответа — свободный текст, который заполняет ученик,
+// а преподаватель проверяет и выставляет зачёт/незачёт по каждому пункту вручную.
+
+app.get('/api/drawing-tasks', checkAuth, (req, res) => {
+  const data = db.load();
+  const list = Object.values(data.drawingTasks)
+    .filter(t => t.shared || t.companyId === req.companyId)
+    .map(t => ({
+      id: t.id,
+      title: t.title,
+      intro: t.intro,
+      questionCount: t.questions.length,
+      shared: !!t.shared
+    }));
+  res.json(list);
+});
+
+app.get('/api/drawing-tasks/:id', checkAuth, (req, res) => {
+  const data = db.load();
+  const task = safeGet(data.drawingTasks, req.params.id);
+  if (!task || (!task.shared && task.companyId !== req.companyId)) return res.status(404).json({ error: 'Задание не найдено' });
+  res.json(task);
+});
+
+function validateDrawingTaskPayload(body) {
+  const { title, questions } = body;
+  if (!title || !title.trim()) return 'Введите название задания';
+  if (!Array.isArray(questions) || questions.length === 0) return 'Добавьте хотя бы один вопрос';
+  for (const q of questions) {
+    if (!q.text || !q.text.trim()) return 'У каждого пункта бланка должен быть текст вопроса';
+  }
+  return null;
+}
+
+app.post('/api/drawing-tasks', checkAuth, async (req, res) => {
+  const err = validateDrawingTaskPayload(req.body);
+  if (err) return res.status(400).json({ error: err });
+  const id = participantId();
+  const task = {
+    id,
+    companyId: req.companyId,
+    shared: false,
+    title: req.body.title.trim(),
+    intro: (req.body.intro || '').trim(),
+    questions: req.body.questions.map((q, qi) => ({
+      id: q.id || ('q' + qi + '_' + id),
+      text: q.text.trim()
+    })),
+    createdAt: Date.now(),
+    custom: true
+  };
+  await db.update((d) => { d.drawingTasks[id] = task; });
+  res.json(task);
+});
+
+app.put('/api/drawing-tasks/:id', checkAuth, async (req, res) => {
+  const err = validateDrawingTaskPayload(req.body);
+  if (err) return res.status(400).json({ error: err });
+  const result = await db.update((d) => {
+    const existing = safeGet(d.drawingTasks, req.params.id);
+    if (!existing || existing.shared || existing.companyId !== req.companyId) return null;
+    existing.title = req.body.title.trim();
+    existing.intro = (req.body.intro || '').trim();
+    existing.questions = req.body.questions.map((q, qi) => ({
+      id: q.id || ('q' + qi + '_' + req.params.id),
+      text: q.text.trim()
+    }));
+    return existing;
+  });
+  if (!result) return res.status(404).json({ error: 'Задание не найдено' });
+  res.json(result);
+});
+
+app.delete('/api/drawing-tasks/:id', checkAuth, async (req, res) => {
+  await db.update((d) => {
+    const task = safeGet(d.drawingTasks, req.params.id);
+    if (task && !task.shared && task.companyId === req.companyId) {
+      delete d.drawingTasks[req.params.id];
+      Object.keys(d.sessions).forEach(code => {
+        if (d.sessions[code].drawingTaskId === req.params.id && d.sessions[code].companyId === req.companyId) {
+          delete d.sessions[code];
+        }
+      });
+    }
+  });
+  res.json({ ok: true });
+});
+
+app.post('/api/drawing-sessions', checkAuth, async (req, res) => {
+  const { drawingTaskId } = req.body;
+  const data = db.load();
+  const task = safeGet(data.drawingTasks, drawingTaskId);
+  if (!task || (!task.shared && task.companyId !== req.companyId)) return res.status(404).json({ error: 'Задание не найдено' });
+  let scheduledAt = null;
+  if (req.body.scheduledAt) {
+    const ts = parseInt(req.body.scheduledAt, 10);
+    if (!isNaN(ts) && ts > Date.now()) scheduledAt = ts;
+  }
+  let code;
+  do { code = nanoid(); } while (safeGet(data.sessions, code));
+  const session = {
+    code,
+    companyId: req.companyId,
+    type: 'drawing',
+    drawingTaskId,
+    testTitle: task.title,
+    startedAt: Date.now(),
+    scheduledAt,
+    ended: false,
+    participants: {}
+  };
+  await db.update((d) => { d.sessions[code] = session; });
+  const url = `${getBaseUrl()}/d/${code}`;
+  const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
+  res.json({ session, url, qrDataUrl });
+});
+
+app.post('/api/drawing-sessions/:code/start-now', checkAuth, async (req, res) => {
+  const result = await db.update((d) => {
+    const session = safeGet(d.sessions, req.params.code);
+    if (!session || session.companyId !== req.companyId) return null;
+    session.scheduledAt = null;
+    return session;
+  });
+  if (!result) return res.status(404).json({ error: 'Сессия не найдена' });
+  res.json({ ok: true });
+});
+
+// Для преподавателя — полная сессия с ответами участников (для проверки).
+app.get('/api/drawing-sessions/:code', checkAuth, (req, res) => {
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.companyId !== req.companyId || session.type !== 'drawing') {
+    return res.status(404).json({ error: 'Сессия не найдена' });
+  }
+  const task = safeGet(data.drawingTasks, session.drawingTaskId);
+  res.json({ session, task: task || null });
+});
+
+// Публичный маршрут — вызывает страница ученика (/d/:code) до присоединения, без авторизации компании.
+app.get('/api/drawing-sessions/:code/info', (req, res) => {
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.type !== 'drawing') return res.status(404).json({ error: 'Сессия не найдена' });
+  if (session.ended) return res.status(410).json({ error: 'Задание завершено' });
+  const trialMsg = trialBlockedForCompany(data, session.companyId);
+  if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
+  const task = safeGet(data.drawingTasks, session.drawingTaskId);
+  res.json({
+    testTitle: session.testTitle,
+    intro: task ? task.intro : '',
+    questions: task ? task.questions.map(q => ({ id: q.id, text: q.text })) : [],
+    scheduledAt: session.scheduledAt || null
+  });
+});
+
+app.post('/api/drawing-sessions/:code/join', joinLimiter, async (req, res) => {
+  const { name, partInfo } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Введите имя' });
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.type !== 'drawing') return res.status(404).json({ error: 'Сессия не найдена' });
+  if (session.ended) return res.status(410).json({ error: 'Задание завершено' });
+  if (session.scheduledAt && Date.now() < session.scheduledAt) {
+    return res.status(403).json({
+      error: 'NOT_STARTED',
+      message: `Задание ещё не началось. Начало запланировано на ${new Date(session.scheduledAt).toLocaleString('ru-RU')}.`,
+      scheduledAt: session.scheduledAt
+    });
+  }
+  const trialMsg = trialBlockedForCompany(data, session.companyId);
+  if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
+  const task = safeGet(data.drawingTasks, session.drawingTaskId);
+  if (!task) return res.status(404).json({ error: 'Задание не найдено' });
+  const pid = participantId();
+  const participant = {
+    id: pid,
+    name: name.trim().slice(0, 80),
+    partInfo: (partInfo || '').trim().slice(0, 200),
+    joinedAt: Date.now(),
+    finished: false,
+    answers: null,
+    grades: null,
+    gradeComment: '',
+    graded: false
+  };
+  await db.update((d) => { d.sessions[req.params.code].participants[pid] = participant; });
+  io.to('session:' + req.params.code).emit('participant:joined', participant);
+  res.json({
+    participantId: pid,
+    testTitle: task.title,
+    intro: task.intro,
+    questions: task.questions.map(q => ({ id: q.id, text: q.text }))
+  });
+});
+
+app.post('/api/drawing-sessions/:code/submit', async (req, res) => {
+  const { participantId: pid, answers } = req.body;
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.type !== 'drawing') return res.status(404).json({ error: 'Сессия не найдена' });
+  const participant = safeGet(session.participants, pid);
+  if (!participant) return res.status(404).json({ error: 'Участник не найден' });
+  if (participant.finished) return res.status(400).json({ error: 'Бланк уже сдан' });
+  const task = safeGet(data.drawingTasks, session.drawingTaskId);
+  if (!task) return res.status(404).json({ error: 'Задание не найдено' });
+  const safeAnswers = task.questions.map((q, i) => {
+    const val = Array.isArray(answers) ? answers[i] : undefined;
+    return typeof val === 'string' ? val.trim().slice(0, 2000) : '';
+  });
+  const result = await db.update((d) => {
+    const p = safeGet(d.sessions[req.params.code].participants, pid);
+    p.finished = true;
+    p.finishedAt = Date.now();
+    p.answers = safeAnswers;
+    return p;
+  });
+  await incrementSubmissions(session.companyId);
+  io.to('session:' + req.params.code).emit('participant:finished', result);
+  res.json({ ok: true });
+});
+
+// Ручная проверка бланка преподавателем: массив true/false/null по каждому вопросу + общий комментарий.
+app.post('/api/drawing-sessions/:code/grade', checkAuth, async (req, res) => {
+  const { participantId: pid, grades, gradeComment } = req.body;
+  const result = await db.update((d) => {
+    const session = safeGet(d.sessions, req.params.code);
+    if (!session || session.companyId !== req.companyId || session.type !== 'drawing') return null;
+    const p = safeGet(session.participants, pid);
+    if (!p) return null;
+    p.grades = Array.isArray(grades) ? grades.map(g => (g === true ? true : g === false ? false : null)) : null;
+    p.gradeComment = (gradeComment || '').trim().slice(0, 1000);
+    p.graded = true;
+    return p;
+  });
+  if (!result) return res.status(404).json({ error: 'Участник или сессия не найдены' });
+  res.json({ ok: true });
+});
+
+app.post('/api/drawing-sessions/:code/end', checkAuth, async (req, res) => {
+  await db.update((d) => {
+    const s = safeGet(d.sessions, req.params.code);
+    if (s && s.companyId === req.companyId) {
+      s.ended = true;
+    }
+  });
+  io.to('session:' + req.params.code).emit('session:ended');
+  res.json({ ok: true });
+});
+
+app.get('/api/drawing-sessions/:code/export', checkAuth, (req, res) => {
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.companyId !== req.companyId || session.type !== 'drawing') return res.status(404).send('Сессия не найдена');
+  const task = safeGet(data.drawingTasks, session.drawingTaskId);
+  const questions = task ? task.questions : [];
+  const rows = Object.values(session.participants).map(p => {
+    const row = {
+      'Имя': p.name,
+      'Деталь / задание №': p.partInfo || '',
+      'Статус': p.finished ? 'Сдал' : 'В процессе',
+      'Проверено': p.graded ? 'Да' : 'Нет',
+      'Баллы': p.grades ? p.grades.filter(g => g === true).length : '—',
+      'Всего пунктов': questions.length
+    };
+    questions.forEach((q, i) => {
+      row[`Ответ: ${q.text}`] = p.answers ? (p.answers[i] || '') : '';
+      if (p.grades) row[`Оценка: ${q.text}`] = p.grades[i] === true ? 'Зачёт' : p.grades[i] === false ? 'Незачёт' : '—';
+    });
+    row['Комментарий проверяющего'] = p.gradeComment || '';
+    return row;
+  });
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, ws, 'Результаты');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', `attachment; filename="drawing_results_${req.params.code}.xlsx"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
+});
+
 app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
@@ -1569,7 +1857,8 @@ app.get('/api/admin/overview', checkAdmin, (req, res) => {
     companies: Object.keys(data.companies).length,
     tests: Object.keys(data.tests).length,
     sessions: Object.keys(data.sessions).length,
-    labs: Object.keys(data.labs).length
+    labs: Object.keys(data.labs).length,
+    drawingTasks: Object.keys(data.drawingTasks).length
   });
 });
 
@@ -1632,6 +1921,7 @@ app.delete('/api/admin/companies/:id', checkAdmin, async (req, res) => {
     Object.keys(d.tests).forEach(id => { if (d.tests[id].companyId === cid) delete d.tests[id]; });
     Object.keys(d.sessions).forEach(code => { if (d.sessions[code].companyId === cid) delete d.sessions[code]; });
     Object.keys(d.labs).forEach(id => { if (d.labs[id].companyId === cid) delete d.labs[id]; });
+    Object.keys(d.drawingTasks).forEach(id => { if (d.drawingTasks[id].companyId === cid) delete d.drawingTasks[id]; });
   });
   res.json({ ok: true });
 });
@@ -1680,7 +1970,8 @@ app.post('/api/admin/restore', checkAdmin, express.json({ limit: '25mb' }), asyn
     companies: Object.keys(restored.companies).length,
     tests: Object.keys(restored.tests).length,
     sessions: Object.keys(restored.sessions).length,
-    labs: Object.keys(restored.labs).length
+    labs: Object.keys(restored.labs).length,
+    drawingTasks: Object.keys(restored.drawingTasks).length
   });
 });
 
@@ -1690,6 +1981,14 @@ async function seedLabs() {
     SEED_LABS.forEach(l => { d.labs[l.id] = { ...l, shared: true }; });
   });
   console.log(`[labs] Синхронизировано общих тренажёров: ${SEED_LABS.length}`);
+}
+
+async function seedDrawingTasks() {
+  await db.update((d) => {
+    if (!d.drawingTasks) d.drawingTasks = {};
+    SEED_DRAWING_TASKS.forEach(t => { d.drawingTasks[t.id] = { ...t, shared: true }; });
+  });
+  console.log(`[drawing-tasks] Синхронизировано общих заданий: ${SEED_DRAWING_TASKS.length}`);
 }
 
 // ==================== ГЛОБАЛЬНАЯ ОБРАБОТКА ОШИБОК ====================
@@ -1713,6 +2012,7 @@ process.on('unhandledRejection', (reason) => {
 async function start() {
   await db.initCache();
   await seedLabs();
+  await seedDrawingTasks();
   server.listen(PORT, '0.0.0.0', () => {
     console.log('');
     console.log('=== Приложение для тестирования запущено ===');

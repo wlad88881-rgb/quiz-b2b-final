@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Задание по чертежу</title>
+<meta name="theme-color" content="#2C3E50">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<style>
+  :root { --navy: #2C3E50; --orange: #F07C00; --gray: #F4F4F4; }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  html, body { height: 100%; }
+  body { background: var(--gray); display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; padding: 16px; }
+  .wrap { max-width: 620px; width: 100%; background: #fff; border-radius: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); padding: 24px; margin: 20px 0 40px; }
+  .hidden { display: none !important; }
+  h1 { font-size: 20px; color: var(--navy); margin-bottom: 6px; }
+  .sub { color: #888; font-size: 14px; margin-bottom: 18px; line-height: 1.5; }
+  .muted { color: #888; font-size: 13px; }
+
+  input[type="text"], textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 10px; font-size: 16px; margin-bottom: 12px; font-family: inherit; }
+  textarea { resize: vertical; min-height: 52px; line-height: 1.4; }
+  .btn { display: inline-block; background: var(--orange); color: #fff; border: none; padding: 13px 20px; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; width: 100%; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn.navy { background: var(--navy); }
+
+  .error-box { background: #fdecea; color: #d64545; padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+  .info-box { background: #eef4fb; color: #2C3E50; padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+  .ok-box { background: #e6f4ea; color: #2e9e4f; padding: 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+
+  .field-label { font-size: 13.5px; font-weight: 700; color: var(--navy); margin-bottom: 6px; display: block; }
+  .q-block { margin-bottom: 16px; }
+  .q-num { font-size: 12px; color: var(--orange); font-weight: 700; margin-bottom: 4px; letter-spacing: 0.3px; }
+
+  .center { text-align: center; }
+  .spinner { width: 34px; height: 34px; border: 3px solid #eee; border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 30px auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div id="screen-loading" class="center">
+    <div class="spinner"></div>
+    <div class="muted">Загрузка...</div>
+  </div>
+
+  <div id="screen-error" class="hidden">
+    <h1>Не получилось</h1>
+    <div class="error-box" id="error-text"></div>
+  </div>
+
+  <div id="screen-join" class="hidden">
+    <h1 id="join-title"></h1>
+    <div class="sub" id="join-intro"></div>
+    <div class="info-box hidden" id="scheduled-banner"></div>
+    <label class="field-label">Ф.И.О.</label>
+    <input type="text" id="student-name" placeholder="Фамилия Имя" maxlength="60">
+    <label class="field-label">Номер задания / деталь для анализа</label>
+    <input type="text" id="student-part" placeholder="например: чертёж №14, вал-шестерня" maxlength="120">
+    <div class="error-box hidden" id="join-error"></div>
+    <button class="btn" id="join-btn" onclick="joinTask()">Начать</button>
+  </div>
+
+  <div id="screen-form" class="hidden">
+    <h1 id="form-title"></h1>
+    <div class="sub" id="form-intro"></div>
+    <div id="questions-container"></div>
+    <div class="error-box hidden" id="submit-error"></div>
+    <button class="btn navy" id="submit-btn" onclick="submitTask()">Сдать бланк</button>
+  </div>
+
+  <div id="screen-done" class="hidden">
+    <div class="ok-box">
+      <strong>Бланк сдан.</strong><br>
+      Преподаватель проверит ваши ответы. Результат можно узнать у него.
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const CODE = location.pathname.split('/').filter(Boolean).pop();
+
+  const state = {
+    participantId: null,
+    questions: []
+  };
+
+  function showScreen(id) {
+    ['screen-loading','screen-error','screen-join','screen-form','screen-done'].forEach(s => {
+      document.getElementById(s).classList.toggle('hidden', s !== id);
+    });
+  }
+
+  function showError(msg) {
+    document.getElementById('error-text').textContent = msg;
+    showScreen('screen-error');
+  }
+
+  async function init() {
+    try {
+      const res = await fetch(`/api/drawing-sessions/${CODE}/info`);
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 410) { showError('Задание завершено преподавателем.'); return; }
+        if (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED') { showError(data.message || 'Доступ временно недоступен.'); return; }
+        showError(res.status === 404 ? 'Сессия не найдена. Проверьте код или QR-код.' : (data.error || 'Ошибка загрузки.'));
+        return;
+      }
+      document.getElementById('join-title').textContent = data.testTitle;
+      document.getElementById('join-intro').textContent = data.intro || 'Заполните бланк по чертежу.';
+      if (data.scheduledAt && data.scheduledAt > Date.now()) {
+        showScheduledBanner(data.scheduledAt);
+      }
+      showScreen('screen-join');
+    } catch (e) {
+      showError('Не удалось подключиться. Проверьте интернет-соединение.');
+    }
+  }
+
+  let scheduledPollTimer = null;
+  function showScheduledBanner(scheduledAt) {
+    const banner = document.getElementById('scheduled-banner');
+    const dt = new Date(scheduledAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    banner.textContent = `⏰ Задание начнётся ${dt}. Страница обновится автоматически.`;
+    banner.classList.remove('hidden');
+    document.getElementById('join-btn').disabled = true;
+
+    if (scheduledPollTimer) clearInterval(scheduledPollTimer);
+    scheduledPollTimer = setInterval(async () => {
+      if (Date.now() < scheduledAt) return;
+      try {
+        const res = await fetch(`/api/drawing-sessions/${CODE}/info`);
+        const data = await res.json();
+        if (res.ok && (!data.scheduledAt || data.scheduledAt <= Date.now())) {
+          clearInterval(scheduledPollTimer);
+          scheduledPollTimer = null;
+          banner.classList.add('hidden');
+          document.getElementById('join-btn').disabled = false;
+        }
+      } catch (e) { /* попробуем на следующем тике */ }
+    }, 5000);
+  }
+
+  async function joinTask() {
+    const name = document.getElementById('student-name').value.trim();
+    const partInfo = document.getElementById('student-part').value.trim();
+    const errEl = document.getElementById('join-error');
+    errEl.classList.add('hidden');
+    if (!name) {
+      errEl.textContent = 'Введите Ф.И.О.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const btn = document.getElementById('join-btn');
+    btn.disabled = true;
+    try {
+      const res = await fetch(`/api/drawing-sessions/${CODE}/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, partInfo })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        errEl.textContent = (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED' || data.error === 'NOT_STARTED') ? (data.message || 'Ошибка') : (data.error || 'Ошибка');
+        errEl.classList.remove('hidden');
+        btn.disabled = false;
+        if (data.error === 'NOT_STARTED' && data.scheduledAt) showScheduledBanner(data.scheduledAt);
+        return;
+      }
+      state.participantId = data.participantId;
+      state.questions = data.questions;
+      document.getElementById('form-title').textContent = data.testTitle;
+      document.getElementById('form-intro').textContent = data.intro || '';
+      renderForm();
+      showScreen('screen-form');
+    } catch (e) {
+      errEl.textContent = 'Не удалось подключиться. Проверьте интернет-соединение.';
+      errEl.classList.remove('hidden');
+      btn.disabled = false;
+    }
+  }
+
+  function renderForm() {
+    const container = document.getElementById('questions-container');
+    container.innerHTML = '';
+    state.questions.forEach((q, i) => {
+      const block = document.createElement('div');
+      block.className = 'q-block';
+      block.innerHTML = `
+        <div class="q-num">${i + 1} / ${state.questions.length}</div>
+        <label class="field-label" for="ans-${i}"></label>
+        <textarea id="ans-${i}" rows="2" placeholder="Ваш ответ"></textarea>
+      `;
+      block.querySelector('.field-label').textContent = q.text;
+      container.appendChild(block);
+    });
+  }
+
+  async function submitTask() {
+    const errEl = document.getElementById('submit-error');
+    errEl.classList.add('hidden');
+    const answers = state.questions.map((q, i) => document.getElementById('ans-' + i).value.trim());
+    const btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    try {
+      const res = await fetch(`/api/drawing-sessions/${CODE}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participantId: state.participantId, answers })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        errEl.textContent = data.error || 'Не удалось отправить бланк. Попробуйте ещё раз.';
+        errEl.classList.remove('hidden');
+        btn.disabled = false;
+        return;
+      }
+      showScreen('screen-done');
+    } catch (e) {
+      errEl.textContent = 'Не удалось подключиться. Проверьте интернет-соединение.';
+      errEl.classList.remove('hidden');
+      btn.disabled = false;
+    }
+  }
+
+  init();
+</script>
+</body>
+</html>

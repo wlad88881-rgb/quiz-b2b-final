@@ -164,6 +164,7 @@
     <div class="tabs">
       <button class="tab-btn active" id="tab-btn-tests" onclick="switchTab('tests')">📚 Тесты</button>
       <button class="tab-btn" id="tab-btn-labs" onclick="switchTab('labs')">🧪 Тренажёры</button>
+      <button class="tab-btn" id="tab-btn-drawing" onclick="switchTab('drawing')">📐 Чертежи</button>
       <button class="tab-btn" id="tab-btn-stats" onclick="switchTab('stats')">📊 Статистика</button>
     </div>
 
@@ -185,6 +186,13 @@
         </div>
         <h2 style="font-size:18px; margin-bottom:12px;">Мои тренажёры</h2>
         <div id="labs-list"></div>
+      </div>
+      <div id="tab-drawing" class="hidden">
+        <div class="row" style="margin-bottom:16px;">
+          <button class="btn" onclick="showDrawingEditor()">+ Новое задание</button>
+        </div>
+        <h2 style="font-size:18px; margin-bottom:12px;">Задания по чертежам</h2>
+        <div id="drawing-list"></div>
       </div>
       <div id="tab-stats" class="hidden">
         <h2 style="font-size:18px; margin-bottom:12px;">Статистика по тестам</h2>
@@ -272,7 +280,7 @@
       </div>
       <div id="no-participants" class="muted" style="text-align:center; padding:30px 0;">Пока никто не присоединился.</div>
       <table id="results-table" class="hidden">
-        <thead><tr><th>Участник</th><th>Статус</th><th>Результат</th><th>Переключения вкладки</th></tr></thead>
+        <thead><tr><th>Участник</th><th>Статус</th><th>Результат</th><th id="results-th-4">Переключения вкладки</th></tr></thead>
         <tbody id="results-body"></tbody>
       </table>
     </div>
@@ -500,8 +508,10 @@
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.id === 'tab-btn-' + tab));
     document.getElementById('tab-tests').classList.toggle('hidden', tab !== 'tests');
     document.getElementById('tab-labs').classList.toggle('hidden', tab !== 'labs');
+    document.getElementById('tab-drawing').classList.toggle('hidden', tab !== 'drawing');
     document.getElementById('tab-stats').classList.toggle('hidden', tab !== 'stats');
     if (tab === 'labs') loadLabsList();
+    if (tab === 'drawing') loadDrawingList();
     if (tab === 'stats') showStatsList();
   }
 
@@ -751,12 +761,13 @@
 
   function startSession(testId) { openSessionModal('test', testId); }
   function startLabSession(labId) { openSessionModal('lab', labId); }
+  function startDrawingSession(taskId) { openSessionModal('drawing', taskId); }
 
   function openSessionModal(type, id) {
     pendingSessionType = type;
     pendingSessionId = id;
     document.getElementById('session-time-limit').value = '';
-    document.getElementById('session-timelimit-wrap').classList.toggle('hidden', type === 'lab');
+    document.getElementById('session-timelimit-wrap').classList.toggle('hidden', type !== 'test');
     document.querySelector('input[name="session-when"][value="now"]').checked = true;
     document.getElementById('session-schedule-at').classList.add('hidden');
     document.getElementById('session-schedule-at').value = '';
@@ -872,8 +883,8 @@
     const id = pendingSessionId;
     closeSessionModal();
 
-    const endpoint = type === 'lab' ? '/api/lab-sessions' : '/api/sessions';
-    const body = type === 'lab' ? { labId: id, scheduledAt } : { testId: id, timeLimit, scheduledAt };
+    const endpoint = type === 'lab' ? '/api/lab-sessions' : type === 'drawing' ? '/api/drawing-sessions' : '/api/sessions';
+    const body = type === 'lab' ? { labId: id, scheduledAt } : type === 'drawing' ? { drawingTaskId: id, scheduledAt } : { testId: id, timeLimit, scheduledAt };
     const res = await authFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -930,7 +941,7 @@
   // завершившие тест — по проценту результата (выше — выше в списке), при равном
   // проценте раньше сдавший идёт первым; ещё не завершившие — ниже, в порядке захода.
   function upsertParticipantRow(p) {
-    participantsMap[p.id] = p;
+    participantsMap[p.id] = Object.assign({}, participantsMap[p.id] || {}, p);
     document.getElementById('no-participants').classList.add('hidden');
     document.getElementById('results-table').classList.remove('hidden');
     renderParticipantsTable();
@@ -949,6 +960,20 @@
       return (a.joinedAt || 0) - (b.joinedAt || 0);
     });
     const body = document.getElementById('results-body');
+    if (currentSessionType === 'drawing') {
+      body.innerHTML = list.map(p => {
+        const statusText = p.finished ? 'Сдал бланк' : 'Заполняет';
+        let resultText = '—';
+        if (p.finished) {
+          resultText = p.graded
+            ? `Проверено (${(p.grades || []).filter(g => g === true).length}/${(p.grades || []).length})`
+            : '<span style="color:var(--orange); font-weight:600;">Не проверено</span>';
+        }
+        const openBtn = p.finished ? `<button class="btn outline small" onclick="openDrawingReview('${p.id}')">Проверить</button>` : '';
+        return `<tr id="prow-${p.id}"><td>${escapeHtml(p.name)}${p.partInfo ? `<div class="muted" style="font-size:12px;">${escapeHtml(p.partInfo)}</div>` : ''}</td><td>${statusText}</td><td>${resultText}</td><td>${openBtn}</td></tr>`;
+      }).join('');
+      return;
+    }
     body.innerHTML = list.map(p => {
       const statusText = p.finished ? 'Завершил' : 'Проходит тест';
       const resultText = (p.finished && p.total) ? `${p.score}/${p.total} (${Math.round(p.score / p.total * 100)}%)` : '—';
@@ -974,6 +999,9 @@
     document.getElementById('session-stats-panel').classList.add('hidden');
     document.getElementById('session-stats-chart').innerHTML = '';
 
+    document.getElementById('results-th-4').textContent = session.type === 'drawing' ? 'Проверка' : 'Переключения вкладки';
+    document.querySelector('#screen-session button[onclick="toggleSessionStats()"]').classList.toggle('hidden', session.type === 'drawing');
+
     currentSessionCode = session.code;
     updateScheduledBanner(session.scheduledAt || null);
 
@@ -997,10 +1025,13 @@
     }
   }
 
+  function sessionEndpointBase() {
+    return currentSessionType === 'lab' ? '/api/lab-sessions/' : currentSessionType === 'drawing' ? '/api/drawing-sessions/' : '/api/sessions/';
+  }
+
   async function startSessionNow() {
     if (!currentSessionCode) return;
-    const endpoint = currentSessionType === 'lab' ? '/api/lab-sessions/' : '/api/sessions/';
-    await authFetch(endpoint + currentSessionCode + '/start-now', { method: 'POST' });
+    await authFetch(sessionEndpointBase() + currentSessionCode + '/start-now', { method: 'POST' });
     updateScheduledBanner(null);
   }
 
@@ -1012,8 +1043,7 @@
   async function endSession() {
     if (!currentSessionCode) return;
     if (!confirm('Завершить тестирование? Участники больше не смогут отправлять ответы.')) return;
-    const endpoint = currentSessionType === 'lab' ? '/api/lab-sessions/' : '/api/sessions/';
-    await authFetch(endpoint + currentSessionCode + '/end', { method: 'POST' });
+    await authFetch(sessionEndpointBase() + currentSessionCode + '/end', { method: 'POST' });
     document.getElementById('session-status').textContent = 'Завершено';
     document.getElementById('session-status').classList.remove('live');
     document.getElementById('end-session-btn').disabled = true;
@@ -1022,8 +1052,7 @@
   function exportResults() {
     if (!currentSessionCode) return;
     const token = localStorage.getItem('b2bToken');
-    const endpoint = currentSessionType === 'lab' ? '/api/lab-sessions/' : '/api/sessions/';
-    window.location.href = endpoint + currentSessionCode + '/export?companyId=' + encodeURIComponent(token);
+    window.location.href = sessionEndpointBase() + currentSessionCode + '/export?companyId=' + encodeURIComponent(token);
   }
 
   function openPresentView() {
@@ -1215,6 +1244,246 @@
   function deleteLab(id) {
     if (!confirm('Удалить тренажёр?')) return;
     authFetch('/api/labs/' + id, { method: 'DELETE' }).then(() => loadLabsList());
+  }
+
+  // ==================== ЗАДАНИЯ ПО ЧЕРТЕЖАМ ====================
+  // Открытые текстовые вопросы (аналог бумажного бланка) + сессия с QR-входом (как в
+  // тестах/тренажёрах), но без автопроверки — ответы проверяет преподаватель вручную
+  // на экране screen-drawing-review.
+
+  const DRAWING_TEMPLATE_QUESTIONS = [
+    'Название детали',
+    'Обозначение (номер) чертежа',
+    'Материал и стандарт (марка, ГОСТ)',
+    'Вид заготовки (прокат, поковка, отливка, штамповка и т.п.)',
+    'Масса детали и масштаб изображения',
+    'Габаритные размеры (длина × ширина/высота — наибольшие)',
+    'Самый точный размер, поле допуска и величина допуска',
+    'Наименьшая шероховатость поверхности и её расположение',
+    'Допуски формы и расположения поверхностей (если указаны)',
+    'Термическая / химико-термическая обработка',
+    'Количество отверстий, их диаметры и глубины',
+    'Фаски, скругления, уклоны (перечислить размеры)',
+    'Разрезы и сечения — для чего служат',
+    'Количество видов на чертеже',
+    'Параметры зубчатого венца (модуль, z, Ø вершин/впадин) — если есть',
+    'Резьбовые элементы: обозначение и количество',
+    'Шпоночный паз: размеры и место расположения',
+    'Основные технические требования (кратко)'
+  ];
+
+  let editingDrawingTaskId = null;
+
+  async function loadDrawingList() {
+    const res = await authFetch('/api/drawing-tasks');
+    if (!res.ok) return;
+    const tasks = await res.json();
+    const container = document.getElementById('drawing-list');
+    if (tasks.length === 0) {
+      container.innerHTML = '<div class="muted" style="padding:30px 0; text-align:center;">Заданий пока нет.</div>';
+      return;
+    }
+    container.innerHTML = tasks.map(t => `
+      <div class="card row between">
+        <div>
+          <strong>${escapeHtml(t.title)}</strong>${t.shared ? ' <span class="badge live" style="background:#eef4fb;color:#2C3E50;">общий</span>' : ''}
+          <div class="muted">${t.questionCount} пункт${t.questionCount === 1 ? '' : (t.questionCount < 5 ? 'а' : 'ов')} бланка</div>
+        </div>
+        <div class="row">
+          <button class="btn small" onclick="startDrawingSession('${t.id}')">Начать сессию</button>
+          ${t.shared ? '' : `<button class="btn outline small" onclick="editDrawingTask('${t.id}')">Изменить</button>
+          <button class="btn danger small" onclick="deleteDrawingTask('${t.id}')">Удалить</button>`}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function showDrawingEditor() {
+    editingDrawingTaskId = null;
+    renderDrawingEditor({ title: '', intro: '', questions: [] });
+  }
+
+  async function editDrawingTask(id) {
+    const res = await authFetch('/api/drawing-tasks/' + id);
+    if (!res.ok) return;
+    const task = await res.json();
+    editingDrawingTaskId = id;
+    renderDrawingEditor(task);
+  }
+
+  function renderDrawingEditor(task) {
+    document.getElementById('screen-list').classList.add('hidden');
+    document.getElementById('screen-editor').classList.add('hidden');
+    document.getElementById('screen-session').classList.add('hidden');
+    let editor = document.getElementById('screen-drawing-editor');
+    if (!editor) {
+      editor = document.createElement('div');
+      editor.id = 'screen-drawing-editor';
+      document.getElementById('screen-main').appendChild(editor);
+    }
+    editor.innerHTML = `
+      <div class="row between" style="margin-bottom:12px;">
+        <h2 style="margin:0;">${editingDrawingTaskId ? 'Редактирование задания' : 'Новое задание по чертежу'}</h2>
+        <button class="btn outline small" onclick="closeDrawingEditor()">Отмена</button>
+      </div>
+      <input type="text" id="drawing-title" placeholder="Название задания" value="${escapeHtml(task.title || '')}">
+      <textarea id="drawing-intro" placeholder="Краткое вступление для ученика (необязательно)" style="min-height:50px;">${escapeHtml(task.intro || '')}</textarea>
+      <div id="drawing-questions-container"></div>
+      <div class="row" style="margin-top:6px;">
+        <button class="btn outline small" onclick="addDrawingQuestion()">+ Пункт бланка</button>
+        ${(!task.questions || task.questions.length === 0) ? '<button class="btn outline small" onclick="fillDrawingTemplate()">Загрузить стандартный бланк (18 пунктов)</button>' : ''}
+      </div>
+      <button class="btn" style="margin-top:14px;" onclick="saveDrawingTask()">Сохранить задание</button>
+      <div id="drawing-save-error" class="error"></div>
+    `;
+    editor.classList.remove('hidden');
+    const qContainer = editor.querySelector('#drawing-questions-container');
+    qContainer.innerHTML = '';
+    (task.questions || []).forEach(q => addDrawingQuestion(q.text));
+  }
+
+  function closeDrawingEditor() {
+    const editor = document.getElementById('screen-drawing-editor');
+    if (editor) editor.classList.add('hidden');
+    document.getElementById('screen-list').classList.remove('hidden');
+    switchTab('drawing');
+  }
+
+  function addDrawingQuestion(existingText) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style.marginBottom = '8px';
+    row.innerHTML = `
+      <input type="text" class="drawing-q-text" placeholder="Текст пункта бланка (например, «Материал и стандарт»)" style="flex:1;" value="${existingText ? escapeHtml(existingText) : ''}">
+      <button class="btn outline small" onclick="this.closest('.row').remove()">✕</button>
+    `;
+    document.getElementById('drawing-questions-container').appendChild(row);
+  }
+
+  function fillDrawingTemplate() {
+    const container = document.getElementById('drawing-questions-container');
+    container.innerHTML = '';
+    DRAWING_TEMPLATE_QUESTIONS.forEach(t => addDrawingQuestion(t));
+  }
+
+  async function saveDrawingTask() {
+    const title = document.getElementById('drawing-title').value.trim();
+    const intro = document.getElementById('drawing-intro').value.trim();
+    const errorEl = document.getElementById('drawing-save-error');
+    errorEl.textContent = '';
+    if (!title) { errorEl.textContent = 'Введите название задания'; return; }
+    const qInputs = document.querySelectorAll('#drawing-questions-container .drawing-q-text');
+    const questions = [];
+    for (const input of qInputs) {
+      const text = input.value.trim();
+      if (text) questions.push({ text });
+    }
+    if (questions.length === 0) { errorEl.textContent = 'Добавьте хотя бы один пункт бланка'; return; }
+
+    const payload = { title, intro, questions };
+    const url = editingDrawingTaskId ? '/api/drawing-tasks/' + editingDrawingTaskId : '/api/drawing-tasks';
+    const method = editingDrawingTaskId ? 'PUT' : 'POST';
+    const res = await authFetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) { closeDrawingEditor(); return; }
+    if (res.status !== 403 || (data.error !== 'BLOCKED' && data.error !== 'TRIAL_ENDED')) {
+      errorEl.textContent = data.error || 'Ошибка сохранения задания';
+    }
+  }
+
+  function deleteDrawingTask(id) {
+    if (!confirm('Удалить задание?')) return;
+    authFetch('/api/drawing-tasks/' + id, { method: 'DELETE' }).then(() => loadDrawingList());
+  }
+
+  // ---- Проверка сданных бланков ----
+
+  let drawingReviewParticipantId = null;
+
+  async function openDrawingReview(participantId) {
+    if (!currentSessionCode) return;
+    const res = await authFetch('/api/drawing-sessions/' + currentSessionCode);
+    if (!res.ok) return;
+    const { session, task } = await res.json();
+    const p = session.participants[participantId];
+    if (!p || !task) return;
+    drawingReviewParticipantId = participantId;
+
+    document.getElementById('screen-list').classList.add('hidden');
+    document.getElementById('screen-session').classList.add('hidden');
+    let screen = document.getElementById('screen-drawing-review');
+    if (!screen) {
+      screen = document.createElement('div');
+      screen.id = 'screen-drawing-review';
+      document.getElementById('screen-main').appendChild(screen);
+    }
+    screen.innerHTML = `
+      <div class="row between" style="margin-bottom:12px;">
+        <h2 style="margin:0;">Проверка бланка — ${escapeHtml(p.name)}</h2>
+        <button class="btn outline small" onclick="closeDrawingReview()">← К сессии</button>
+      </div>
+      ${p.partInfo ? `<div class="muted" style="margin-bottom:12px;">Деталь / задание №: ${escapeHtml(p.partInfo)}</div>` : ''}
+      <div id="drawing-review-items"></div>
+      <label class="muted" style="display:block; margin:14px 0 6px;">Комментарий проверяющего (необязательно)</label>
+      <textarea id="drawing-review-comment" style="min-height:60px;">${escapeHtml(p.gradeComment || '')}</textarea>
+      <button class="btn" style="margin-top:12px;" onclick="saveDrawingGrade()">Сохранить проверку</button>
+      <div id="drawing-review-error" class="error"></div>
+    `;
+    screen.classList.remove('hidden');
+
+    const items = screen.querySelector('#drawing-review-items');
+    items.innerHTML = '';
+    task.questions.forEach((q, i) => {
+      const given = (p.grades && p.grades[i] === true) ? 'ok' : (p.grades && p.grades[i] === false) ? 'no' : '';
+      const div = document.createElement('div');
+      div.className = 'card';
+      div.style.background = '#fafbfc';
+      div.innerHTML = `
+        <div class="muted" style="font-weight:600; margin-bottom:4px;">${i + 1}. ${escapeHtml(q.text)}</div>
+        <div style="padding:8px 10px; background:#fff; border:1px solid #eee; border-radius:8px; margin-bottom:8px; white-space:pre-wrap; font-size:14px;">${escapeHtml((p.answers && p.answers[i]) || '(пусто)')}</div>
+        <div class="row" style="gap:8px;">
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13.5px;">
+            <input type="radio" name="grade-${i}" value="ok" ${given === 'ok' ? 'checked' : ''}> Зачёт
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13.5px;">
+            <input type="radio" name="grade-${i}" value="no" ${given === 'no' ? 'checked' : ''}> Незачёт
+          </label>
+        </div>
+      `;
+      items.appendChild(div);
+    });
+  }
+
+  async function saveDrawingGrade() {
+    if (!currentSessionCode || !drawingReviewParticipantId) return;
+    const items = document.querySelectorAll('#drawing-review-items > .card');
+    const grades = Array.from(items).map(div => {
+      const checked = div.querySelector('input[type="radio"]:checked');
+      if (!checked) return null;
+      return checked.value === 'ok';
+    });
+    const gradeComment = document.getElementById('drawing-review-comment').value.trim();
+    const errorEl = document.getElementById('drawing-review-error');
+    errorEl.textContent = '';
+    const res = await authFetch('/api/drawing-sessions/' + currentSessionCode + '/grade', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ participantId: drawingReviewParticipantId, grades, gradeComment })
+    });
+    if (!res.ok) { errorEl.textContent = 'Не удалось сохранить проверку'; return; }
+    closeDrawingReview();
+  }
+
+  function closeDrawingReview() {
+    const screen = document.getElementById('screen-drawing-review');
+    if (screen) screen.classList.add('hidden');
+    document.getElementById('screen-session').classList.remove('hidden');
+    // Обновляем строку участника в таблице сессии, если проверка была сохранена.
+    if (currentSessionCode) {
+      authFetch('/api/drawing-sessions/' + currentSessionCode).then(r => r.ok ? r.json() : null).then(d => {
+        if (d && d.session) Object.values(d.session.participants).forEach(p => upsertParticipantRow(p));
+      });
+    }
   }
 
   // ==================== СТАТИСТИКА ====================

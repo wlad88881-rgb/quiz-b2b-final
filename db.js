@@ -35,7 +35,7 @@ if (!fs.existsSync(DATA_DIR)) {
 let cache = null;
 
 function defaultData() {
-  return { companies: {}, tests: {}, sessions: {}, labs: {}, translations: {} };
+  return { companies: {}, tests: {}, sessions: {}, labs: {}, drawingTasks: {}, translations: {} };
 }
 
 // Гарантирует, что во всех ожидаемых ключах лежат объекты, а не undefined —
@@ -46,6 +46,7 @@ function normalize(data) {
   if (!d.tests || typeof d.tests !== 'object') d.tests = {};
   if (!d.sessions || typeof d.sessions !== 'object') d.sessions = {};
   if (!d.labs || typeof d.labs !== 'object') d.labs = {};
+  if (!d.drawingTasks || typeof d.drawingTasks !== 'object') d.drawingTasks = {};
   if (!d.translations || typeof d.translations !== 'object') d.translations = {};
   return d;
 }
