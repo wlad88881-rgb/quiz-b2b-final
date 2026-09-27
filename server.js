@@ -863,8 +863,8 @@ app.get('/api/sessions/:code/present', async (req, res) => {
   const data = db.load();
   const session = safeGet(data.sessions, req.params.code);
   if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
-  const isLab = session.type === 'lab';
-  const url = `${getBaseUrl()}/${isLab ? 'l' : 's'}/${session.code}`;
+  const pathPrefix = session.type === 'lab' ? 'l' : session.type === 'drawing' ? 'd' : 's';
+  const url = `${getBaseUrl()}/${pathPrefix}/${session.code}`;
   try {
     const qrDataUrl = await QRCode.toDataURL(url, { width: 500, margin: 1 });
     res.json({
@@ -872,7 +872,7 @@ app.get('/api/sessions/:code/present', async (req, res) => {
       code: session.code,
       url,
       qrDataUrl,
-      type: isLab ? 'lab' : 'test',
+      type: session.type || 'test',
       ended: !!session.ended,
       scheduledAt: session.scheduledAt || null
     });
@@ -1879,6 +1879,41 @@ app.post('/api/drawing-sessions/:code/submit', async (req, res) => {
   await incrementSubmissions(session.companyId);
   io.to('session:' + req.params.code).emit('participant:finished', result);
   res.json({ ok: true });
+});
+
+// Публичный маршрут — ученик проверяет свой результат по той же ссылке после проверки
+// преподавателем. Правильные ответы отдаём только когда бланк уже проверен (graded),
+// чтобы не спалить ключ одноклассникам, которые ещё заполняют тот же бланк.
+app.get('/api/drawing-sessions/:code/result', (req, res) => {
+  const { participantId: pid } = req.query;
+  if (!pid) return res.status(400).json({ error: 'Не указан участник' });
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.type !== 'drawing') return res.status(404).json({ error: 'Сессия не найдена' });
+  const p = safeGet(session.participants, pid);
+  if (!p) return res.status(404).json({ error: 'Участник не найден' });
+  if (!p.finished) return res.json({ finished: false });
+  if (!p.graded) return res.json({ finished: true, graded: false });
+
+  const task = safeGet(data.drawingTasks, session.drawingTaskId);
+  const match = task ? matchAnswerKey(data, session.companyId, p.partInfo) : null;
+  const resolvedAnswers = task ? resolveKeyAnswers(task.questions, match ? match.key : null) : null;
+
+  const items = (task ? task.questions : []).map((q, i) => ({
+    text: q.text,
+    given: (p.answers && p.answers[i]) || '',
+    correct: p.grades ? p.grades[i] : null,
+    correctAnswer: (resolvedAnswers && resolvedAnswers[i]) || q.correctAnswer || null
+  }));
+  const score = (p.grades || []).filter(g => g === true).length;
+  res.json({
+    finished: true,
+    graded: true,
+    score,
+    total: items.length,
+    gradeComment: p.gradeComment || '',
+    items
+  });
 });
 
 // Ручная проверка бланка преподавателем: массив true/false/null по каждому вопросу + общий комментарий.

@@ -72,16 +72,29 @@
   </div>
 
   <div id="screen-done" class="hidden">
-    <div class="ok-box">
-      <strong>Бланк сдан.</strong><br>
-      Преподаватель проверит ваши ответы. Результат можно узнать у него.
-    </div>
+    <div id="done-status"></div>
+    <div id="result-items"></div>
+    <button class="btn outline small hidden" id="refresh-btn" onclick="checkResult()" style="width:auto; padding:10px 16px; background:#fff; color:var(--navy); border:1px solid #ddd;">Обновить</button>
   </div>
 
 </div>
 
+<style>
+  .btn.outline.small { }
+  .result-row { margin-bottom: 14px; }
+  .result-row .rq { font-size: 13px; font-weight: 700; color: var(--navy); margin-bottom: 6px; }
+  .result-cols { display: flex; gap: 10px; flex-wrap: wrap; }
+  .result-col { flex: 1; min-width: 160px; }
+  .result-col-label { font-size: 11px; color: #999; margin-bottom: 3px; }
+  .result-box { padding: 8px 10px; background: #fafbfc; border: 1px solid #eee; border-radius: 8px; font-size: 14px; white-space: pre-wrap; min-height: 18px; }
+  .verdict { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 20px; margin-top: 6px; }
+  .verdict.ok { background: #e6f4ea; color: #2e9e4f; }
+  .verdict.no { background: #fdecea; color: #d64545; }
+</style>
+
 <script>
   const CODE = location.pathname.split('/').filter(Boolean).pop();
+  const LS_KEY = 'drawingParticipant_' + CODE;
 
   const state = {
     participantId: null,
@@ -100,6 +113,13 @@
   }
 
   async function init() {
+    const savedId = localStorage.getItem(LS_KEY);
+    if (savedId) {
+      state.participantId = savedId;
+      showScreen('screen-done');
+      await checkResult();
+      return;
+    }
     try {
       const res = await fetch(`/api/drawing-sessions/${CODE}/info`);
       const data = await res.json();
@@ -218,12 +238,71 @@
         btn.disabled = false;
         return;
       }
+      localStorage.setItem(LS_KEY, state.participantId);
       showScreen('screen-done');
+      await checkResult();
     } catch (e) {
       errEl.textContent = 'Не удалось подключиться. Проверьте интернет-соединение.';
       errEl.classList.remove('hidden');
       btn.disabled = false;
     }
+  }
+
+  async function checkResult() {
+    const statusEl = document.getElementById('done-status');
+    const itemsEl = document.getElementById('result-items');
+    const refreshBtn = document.getElementById('refresh-btn');
+    try {
+      const res = await fetch(`/api/drawing-sessions/${CODE}/result?participantId=${encodeURIComponent(state.participantId)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        statusEl.innerHTML = `<div class="error-box">${data.error || 'Не удалось получить результат.'}</div>`;
+        itemsEl.innerHTML = '';
+        refreshBtn.classList.add('hidden');
+        return;
+      }
+      if (!data.graded) {
+        statusEl.innerHTML = `
+          <div class="ok-box">
+            <strong>Бланк сдан.</strong><br>
+            Преподаватель ещё не проверил бланк. Загляните позже по этой же ссылке.
+          </div>`;
+        itemsEl.innerHTML = '';
+        refreshBtn.classList.remove('hidden');
+        return;
+      }
+      refreshBtn.classList.add('hidden');
+      statusEl.innerHTML = `
+        <div class="ok-box">
+          <strong>Проверено: ${data.score} / ${data.total}</strong>
+          ${data.gradeComment ? `<div style="margin-top:8px;">${escapeHtml(data.gradeComment)}</div>` : ''}
+        </div>`;
+      itemsEl.innerHTML = data.items.map((it, i) => `
+        <div class="result-row">
+          <div class="rq">${i + 1}. ${escapeHtml(it.text)}</div>
+          <div class="result-cols">
+            <div class="result-col">
+              <div class="result-col-label">Ваш ответ</div>
+              <div class="result-box">${escapeHtml(it.given || '(пусто)')}</div>
+            </div>
+            <div class="result-col">
+              <div class="result-col-label">Правильный ответ</div>
+              <div class="result-box">${escapeHtml(it.correctAnswer || '—')}</div>
+            </div>
+          </div>
+          <span class="verdict ${it.correct === true ? 'ok' : 'no'}">${it.correct === true ? '✓ Зачёт' : '✕ Незачёт'}</span>
+        </div>
+      `).join('');
+    } catch (e) {
+      statusEl.innerHTML = `<div class="error-box">Не удалось подключиться. Попробуйте обновить страницу.</div>`;
+      refreshBtn.classList.remove('hidden');
+    }
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s == null ? '' : String(s);
+    return div.innerHTML;
   }
 
   init();
