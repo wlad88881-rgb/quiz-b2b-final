@@ -1482,14 +1482,29 @@
 
   let drawingReviewParticipantId = null;
 
+  function resolveKeyAnswersClient(taskQuestions, key) {
+    if (!key) return null;
+    return taskQuestions.map(q => {
+      const norm = normalizeForMatch(q.text);
+      let found = key.questions.find(kq => normalizeForMatch(kq.text) === norm);
+      if (!found) found = key.questions.find(kq => answerSimilarity(kq.text, q.text) >= 0.7);
+      return found ? found.answer : null;
+    });
+  }
+
+  let drawingReviewCtx = null; // { task, answerKeys, resolvedAnswers, p }
+
   async function openDrawingReview(participantId) {
     if (!currentSessionCode) return;
     const res = await authFetch('/api/drawing-sessions/' + currentSessionCode);
     if (!res.ok) return;
-    const { session, task } = await res.json();
+    const { session, task, answerKeys, matches } = await res.json();
     const p = session.participants[participantId];
     if (!p || !task) return;
     drawingReviewParticipantId = participantId;
+
+    const match = (matches && matches[participantId]) || null;
+    const selectedKeyId = match ? match.keyId : '';
 
     document.getElementById('screen-list').classList.add('hidden');
     document.getElementById('screen-session').classList.add('hidden');
@@ -1499,12 +1514,27 @@
       screen.id = 'screen-drawing-review';
       document.getElementById('screen-main').appendChild(screen);
     }
+    const keyOptions = (answerKeys || []).map(k =>
+      `<option value="${k.id}" ${k.id === selectedKeyId ? 'selected' : ''}>${escapeHtml(k.title)}</option>`
+    ).join('');
+    const matchNote = match
+      ? `<span style="font-size:12px; color:#2e9e4f;">— подобрано автоматически по «${escapeHtml(p.partInfo || '')}» (совпадение ~${Math.round(match.confidence * 100)}%), проверьте деталь ниже</span>`
+      : `<span style="font-size:12px; color:#d64545;">— не удалось подобрать автоматически по «${escapeHtml(p.partInfo || '')}», выберите деталь вручную</span>`;
+
     screen.innerHTML = `
       <div class="row between" style="margin-bottom:12px;">
         <h2 style="margin:0;">Проверка бланка — ${escapeHtml(p.name)}</h2>
         <button class="btn outline small" onclick="closeDrawingReview()">← К сессии</button>
       </div>
-      ${p.partInfo ? `<div class="muted" style="margin-bottom:12px;">Деталь / задание №: ${escapeHtml(p.partInfo)}</div>` : ''}
+      ${p.partInfo ? `<div class="muted" style="margin-bottom:8px;">Деталь / задание №: ${escapeHtml(p.partInfo)}</div>` : ''}
+      <div style="margin-bottom:14px;">
+        <label class="muted" style="display:block; margin-bottom:4px; font-size:13px;">Ключ ответов для сверки</label>
+        <select id="drawing-key-select" onchange="rerenderDrawingReview()" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:10px; font-size:14px;">
+          <option value="">— без ключа —</option>
+          ${keyOptions}
+        </select>
+        <div style="margin-top:4px;">${matchNote}</div>
+      </div>
       <div id="drawing-review-items"></div>
       <label class="muted" style="display:block; margin:14px 0 6px;">Комментарий проверяющего (необязательно)</label>
       <textarea id="drawing-review-comment" style="min-height:60px;">${escapeHtml(p.gradeComment || '')}</textarea>
@@ -1513,18 +1543,30 @@
     `;
     screen.classList.remove('hidden');
 
-    const items = screen.querySelector('#drawing-review-items');
+    drawingReviewCtx = { task, answerKeys: answerKeys || [], p };
+    rerenderDrawingReview();
+  }
+
+  function rerenderDrawingReview() {
+    if (!drawingReviewCtx) return;
+    const { task, answerKeys, p } = drawingReviewCtx;
+    const keyId = document.getElementById('drawing-key-select').value;
+    const selectedKey = keyId ? answerKeys.find(k => k.id === keyId) : null;
+    const resolvedAnswers = selectedKey ? resolveKeyAnswersClient(task.questions, selectedKey) : null;
+
+    const items = document.getElementById('drawing-review-items');
     items.innerHTML = '';
     task.questions.forEach((q, i) => {
       const given = (p.grades && p.grades[i] === true) ? 'ok' : (p.grades && p.grades[i] === false) ? 'no' : '';
       const answerText = (p.answers && p.answers[i]) || '';
+      const correctAnswer = (resolvedAnswers && resolvedAnswers[i]) || q.correctAnswer || '';
       let autoSuggest = given; // если уже проверено раньше — не перетираем сохранённый вердикт
       let pctBadge = '';
       if (!p.graded) {
         if (!answerText) {
           autoSuggest = 'no';
-        } else if (q.correctAnswer) {
-          const sim = answerSimilarity(answerText, q.correctAnswer);
+        } else if (correctAnswer) {
+          const sim = answerSimilarity(answerText, correctAnswer);
           const pct = Math.round(sim * 100);
           autoSuggest = sim >= 0.55 ? 'ok' : autoSuggest;
           pctBadge = `<span style="font-size:11px; padding:2px 7px; border-radius:20px; background:${sim >= 0.55 ? '#e6f4ea' : '#fdecea'}; color:${sim >= 0.55 ? '#2e9e4f' : '#d64545'}; white-space:nowrap;">~${pct}% совпадение</span>`;
@@ -1545,7 +1587,7 @@
           </div>
           <div style="flex:1; min-width:180px;">
             <div style="font-size:11px; color:#999; margin-bottom:3px;">Правильный ответ (ключ)</div>
-            <div style="padding:8px 10px; background:#fff; border:1px solid #d6e6d6; border-radius:8px; white-space:pre-wrap; font-size:14px; min-height:20px; ${q.correctAnswer ? '' : 'color:#bbb;'}">${escapeHtml(q.correctAnswer || 'не задан')}</div>
+            <div style="padding:8px 10px; background:#fff; border:1px solid #d6e6d6; border-radius:8px; white-space:pre-wrap; font-size:14px; min-height:20px; ${correctAnswer ? '' : 'color:#bbb;'}">${escapeHtml(correctAnswer || 'не задан')}</div>
           </div>
         </div>
         <div class="row" style="gap:8px;">
@@ -1582,6 +1624,7 @@
   }
 
   function closeDrawingReview() {
+    drawingReviewCtx = null;
     const screen = document.getElementById('screen-drawing-review');
     if (screen) screen.classList.add('hidden');
     document.getElementById('screen-session').classList.remove('hidden');

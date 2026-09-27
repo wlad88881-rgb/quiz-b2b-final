@@ -13,6 +13,7 @@ const rateLimit = require('express-rate-limit');
 const db = require('./db');
 const { SEED_LABS } = require('./labs-content');
 const { SEED_DRAWING_TASKS } = require('./drawing-content');
+const { SEED_ANSWER_KEYS } = require('./drawing-answer-keys-content');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -1567,6 +1568,60 @@ app.get('/api/drawing-tasks/:id', checkAuth, (req, res) => {
   res.json(task);
 });
 
+function normalizeForMatch(s) {
+  return (s || '').toString().toLowerCase().replace(/ё/g, 'е')
+    .replace(/[.,;:()«»"'`\-_/\\№#]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function textSimilarity(a, b) {
+  const na = normalizeForMatch(a), nb = normalizeForMatch(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  if (na.includes(nb) || nb.includes(na)) return 0.9;
+  const wa = new Set(na.split(' ').filter(Boolean));
+  const wb = new Set(nb.split(' ').filter(Boolean));
+  if (wa.size === 0 || wb.size === 0) return 0;
+  let inter = 0;
+  wa.forEach(w => { if (wb.has(w)) inter++; });
+  const union = new Set([...wa, ...wb]).size;
+  return union ? inter / union : 0;
+}
+
+// Сопоставляет то, что ученик вписал в поле «Деталь / задание №» при входе, с одним из
+// готовых ключей ответов (сначала по номеру детали, затем по похожести названия).
+// Возвращает { key, confidence } или null, если ничего похожего не нашлось —
+// в этом случае преподаватель выбирает деталь вручную на экране проверки.
+function matchAnswerKey(data, companyId, partInfo) {
+  const keys = Object.values(data.answerKeys).filter(k => k.shared || k.companyId === companyId);
+  if (keys.length === 0 || !partInfo || !partInfo.trim()) return null;
+
+  const numMatch = partInfo.match(/(\d{1,3})/);
+  if (numMatch) {
+    const num = parseInt(numMatch[1], 10);
+    const byNumber = keys.find(k => k.number === num);
+    if (byNumber) return { key: byNumber, confidence: 1 };
+  }
+
+  let best = null, bestScore = 0;
+  keys.forEach(k => {
+    const score = Math.max(textSimilarity(partInfo, k.name), textSimilarity(partInfo, k.title));
+    if (score > bestScore) { bestScore = score; best = k; }
+  });
+  if (best && bestScore >= 0.5) return { key: best, confidence: bestScore };
+  return null;
+}
+
+// Сопоставляет вопросы задания (task.questions) с вопросами ключа по тексту, а не по
+// порядку/id — так матчинг переживает правки текста пункта бланка преподавателем.
+function resolveKeyAnswers(taskQuestions, key) {
+  if (!key) return null;
+  return taskQuestions.map(q => {
+    const found = key.questions.find(kq => normalizeForMatch(kq.text) === normalizeForMatch(q.text))
+      || key.questions.find(kq => textSimilarity(kq.text, q.text) >= 0.7);
+    return found ? found.answer : null;
+  });
+}
+
 function validateDrawingTaskPayload(body) {
   const { title, questions } = body;
   if (!title || !title.trim()) return 'Введите название задания';
@@ -1726,7 +1781,21 @@ app.get('/api/drawing-sessions/:code', checkAuth, (req, res) => {
     return res.status(404).json({ error: 'Сессия не найдена' });
   }
   const task = safeGet(data.drawingTasks, session.drawingTaskId);
-  res.json({ session, task: task || null });
+
+  const answerKeys = Object.values(data.answerKeys)
+    .filter(k => k.shared || k.companyId === req.companyId)
+    .sort((a, b) => (a.number || 0) - (b.number || 0))
+    .map(k => ({ id: k.id, title: k.title, number: k.number, name: k.name, questions: k.questions }));
+
+  const matches = {};
+  if (task) {
+    Object.values(session.participants).forEach(p => {
+      const m = matchAnswerKey(data, req.companyId, p.partInfo);
+      matches[p.id] = m ? { keyId: m.key.id, keyTitle: m.key.title, confidence: m.confidence } : null;
+    });
+  }
+
+  res.json({ session, task: task || null, answerKeys, matches });
 });
 
 // Публичный маршрут — вызывает страница ученика (/d/:code) до присоединения, без авторизации компании.
@@ -2039,6 +2108,14 @@ async function seedDrawingTasks() {
   console.log(`[drawing-tasks] Синхронизировано общих заданий: ${SEED_DRAWING_TASKS.length}`);
 }
 
+async function seedAnswerKeys() {
+  await db.update((d) => {
+    if (!d.answerKeys) d.answerKeys = {};
+    SEED_ANSWER_KEYS.forEach(k => { d.answerKeys[k.id] = { ...k, shared: true }; });
+  });
+  console.log(`[answer-keys] Синхронизировано ключей ответов: ${SEED_ANSWER_KEYS.length}`);
+}
+
 // ==================== ГЛОБАЛЬНАЯ ОБРАБОТКА ОШИБОК ====================
 // Ловит любую ошибку, брошенную (или переданную через next(err)) внутри
 // обработчиков маршрутов, чтобы один сбойный запрос не ронял весь процесс.
@@ -2061,6 +2138,7 @@ async function start() {
   await db.initCache();
   await seedLabs();
   await seedDrawingTasks();
+  await seedAnswerKeys();
   server.listen(PORT, '0.0.0.0', () => {
     console.log('');
     console.log('=== Приложение для тестирования запущено ===');
