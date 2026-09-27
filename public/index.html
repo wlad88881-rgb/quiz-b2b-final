@@ -1133,7 +1133,11 @@
       </div>
       <input type="text" id="lab-title" placeholder="Название тренажёра" value="${escapeHtml(lab.title || '')}">
       <textarea id="lab-intro" placeholder="Краткое вступление для студента (необязательно)" style="min-height:60px;">${escapeHtml(lab.intro || '')}</textarea>
+      <div class="info-box" style="background:#eef4fb; color:#2C3E50; padding:12px 14px; border-radius:10px; font-size:13.5px; margin-bottom:14px; line-height:1.5;">
+        💡 Отдельного поля «неправильный ответ» нет — все неисправности, которые вы добавите в этот тренажёр, автоматически становятся вариантами ответа друг для друга. Студент увидит их все и выбирает, к какой относится показанный случай. Добавьте минимум 2 неисправности, чтобы был выбор, и по несколько «вариаций показаний» на каждую — для разнообразия случаев.
+      </div>
       <div id="faults-container"></div>
+      <div id="faults-counter" class="muted" style="margin:8px 0; font-size:13px;"></div>
       <button class="btn outline small" onclick="addFault()">+ Неисправность</button>
       <button class="btn" style="margin-top:14px;" onclick="saveLab()">Сохранить тренажёр</button>
       <div id="lab-save-error" class="error"></div>
@@ -1143,6 +1147,22 @@
     faultsContainer.innerHTML = '';
     (lab.faults || []).forEach(f => addFault(f));
     if (!lab.faults || lab.faults.length === 0) addFault();
+    updateFaultsCounter();
+  }
+
+  function updateFaultsCounter() {
+    const counterEl = document.getElementById('faults-counter');
+    if (!counterEl) return;
+    const n = document.querySelectorAll('#faults-container > .question-block').length;
+    if (n === 0) {
+      counterEl.textContent = '';
+    } else if (n === 1) {
+      counterEl.innerHTML = '⚠️ Пока 1 неисправность — студенту не из чего будет выбирать (нужно минимум 2).';
+      counterEl.style.color = '#d64545';
+    } else {
+      counterEl.textContent = `Сейчас в тренажёре ${n} неисправност${n < 5 ? 'и' : 'ей'} — столько вариантов ответа увидит студент на каждый случай.`;
+      counterEl.style.color = '#888';
+    }
   }
 
   function closeLabEditor() {
@@ -1157,8 +1177,8 @@
     wrap.className = 'question-block';
     wrap.innerHTML = `
       <div class="row between">
-        <label style="font-weight:700; color:#2C3E50;">Неисправность</label>
-        <button class="btn outline small" onclick="this.closest('.question-block').remove()">✕</button>
+        <label style="font-weight:700; color:#2C3E50;">Неисправность <span class="muted" style="font-weight:400;">(один из вариантов ответа)</span></label>
+        <button class="btn outline small" onclick="this.closest('.question-block').remove(); updateFaultsCounter();">✕</button>
       </div>
       <input type="text" class="fault-label" placeholder="Название диагноза (например, «Недостаток смазки»)" value="${existing ? escapeHtml(existing.label) : ''}">
       <textarea class="fault-explain" placeholder="Объяснение для разбора после сдачи" style="min-height:50px;">${existing ? escapeHtml(existing.explain) : ''}</textarea>
@@ -1169,6 +1189,7 @@
     const varContainer = wrap.querySelector('.variations-container');
     (existing ? existing.variations : []).forEach(v => addVariation(wrap, v));
     if (!existing || !existing.variations || existing.variations.length === 0) addVariation(wrap);
+    updateFaultsCounter();
   }
 
   function addVariation(faultBlock, existing) {
@@ -1207,6 +1228,7 @@
 
     const faultBlocks = document.querySelectorAll('#faults-container > .question-block');
     if (faultBlocks.length === 0) { errorEl.textContent = 'Добавьте хотя бы одну неисправность'; return; }
+    if (faultBlocks.length === 1 && !confirm('В тренажёре всего 1 неисправность — студенту не из чего будет выбирать (нужно минимум 2 для содержательной проверки). Сохранить всё равно?')) return;
     const faults = [];
     for (const fb of faultBlocks) {
       const label = fb.querySelector('.fault-label').value.trim();
@@ -1329,9 +1351,12 @@
       <input type="text" id="drawing-title" placeholder="Название задания" value="${escapeHtml(task.title || '')}">
       <textarea id="drawing-intro" placeholder="Краткое вступление для ученика (необязательно)" style="min-height:50px;">${escapeHtml(task.intro || '')}</textarea>
       <div id="drawing-questions-container"></div>
-      <div class="row" style="margin-top:6px;">
+      <div class="row" style="margin-top:6px; flex-wrap:wrap;">
         <button class="btn outline small" onclick="addDrawingQuestion()">+ Пункт бланка</button>
         ${(!task.questions || task.questions.length === 0) ? '<button class="btn outline small" onclick="fillDrawingTemplate()">Загрузить стандартный бланк (18 пунктов)</button>' : ''}
+        <button class="btn outline small" onclick="downloadDrawingTemplate()">📥 Скачать шаблон Excel</button>
+        <button class="btn outline small" onclick="document.getElementById('drawing-import-file').click()">📤 Импорт из Excel</button>
+        <input type="file" id="drawing-import-file" accept=".xlsx,.xls" class="hidden" onchange="importDrawingFromExcel()">
       </div>
       <button class="btn" style="margin-top:14px;" onclick="saveDrawingTask()">Сохранить задание</button>
       <div id="drawing-save-error" class="error"></div>
@@ -1339,7 +1364,7 @@
     editor.classList.remove('hidden');
     const qContainer = editor.querySelector('#drawing-questions-container');
     qContainer.innerHTML = '';
-    (task.questions || []).forEach(q => addDrawingQuestion(q.text));
+    (task.questions || []).forEach(q => addDrawingQuestion(q.text, q.correctAnswer));
   }
 
   function closeDrawingEditor() {
@@ -1349,13 +1374,17 @@
     switchTab('drawing');
   }
 
-  function addDrawingQuestion(existingText) {
+  function addDrawingQuestion(existingText, existingCorrect) {
     const row = document.createElement('div');
-    row.className = 'row';
+    row.className = 'card';
+    row.style.background = '#fafbfc';
     row.style.marginBottom = '8px';
     row.innerHTML = `
-      <input type="text" class="drawing-q-text" placeholder="Текст пункта бланка (например, «Материал и стандарт»)" style="flex:1;" value="${existingText ? escapeHtml(existingText) : ''}">
-      <button class="btn outline small" onclick="this.closest('.row').remove()">✕</button>
+      <div class="row between">
+        <input type="text" class="drawing-q-text" placeholder="Текст пункта бланка (например, «Материал и стандарт»)" style="flex:1;" value="${existingText ? escapeHtml(existingText) : ''}">
+        <button class="btn outline small" onclick="this.closest('.card').remove()">✕</button>
+      </div>
+      <input type="text" class="drawing-q-correct" placeholder="Ключ ответа для проверки (необязательно, под конкретный чертёж)" value="${existingCorrect ? escapeHtml(existingCorrect) : ''}">
     `;
     document.getElementById('drawing-questions-container').appendChild(row);
   }
@@ -1366,17 +1395,50 @@
     DRAWING_TEMPLATE_QUESTIONS.forEach(t => addDrawingQuestion(t));
   }
 
+  function downloadDrawingTemplate() {
+    const token = localStorage.getItem('b2bToken');
+    window.location.href = '/api/drawing-import-template?companyId=' + encodeURIComponent(token);
+  }
+
+  async function importDrawingFromExcel() {
+    const fileInput = document.getElementById('drawing-import-file');
+    const file = fileInput.files[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    let res, data;
+    try {
+      res = await authFetch('/api/drawing-tasks/import', { method: 'POST', body: formData });
+      data = await res.json();
+    } catch (e) {
+      alert('Не удалось загрузить файл. Проверьте соединение и попробуйте снова.');
+      fileInput.value = '';
+      return;
+    }
+    fileInput.value = '';
+    if (!res.ok) { alert(data.error || 'Ошибка импорта файла'); return; }
+    if (!document.getElementById('drawing-title').value.trim()) {
+      document.getElementById('drawing-title').value = file.name.replace(/\.(xlsx|xls)$/i, '');
+    }
+    document.getElementById('drawing-questions-container').innerHTML = '';
+    data.questions.forEach(q => addDrawingQuestion(q.text, q.correctAnswer));
+    if (data.skipped && data.skipped.length) {
+      alert(`Импортировано: ${data.questions.length}. Пропущено строк: ${data.skipped.length} (пустой текст вопроса).`);
+    }
+  }
+
   async function saveDrawingTask() {
     const title = document.getElementById('drawing-title').value.trim();
     const intro = document.getElementById('drawing-intro').value.trim();
     const errorEl = document.getElementById('drawing-save-error');
     errorEl.textContent = '';
     if (!title) { errorEl.textContent = 'Введите название задания'; return; }
-    const qInputs = document.querySelectorAll('#drawing-questions-container .drawing-q-text');
+    const qRows = document.querySelectorAll('#drawing-questions-container > .card');
     const questions = [];
-    for (const input of qInputs) {
-      const text = input.value.trim();
-      if (text) questions.push({ text });
+    for (const row of qRows) {
+      const text = row.querySelector('.drawing-q-text').value.trim();
+      const correctAnswer = row.querySelector('.drawing-q-correct').value.trim();
+      if (text) questions.push({ text, correctAnswer });
     }
     if (questions.length === 0) { errorEl.textContent = 'Добавьте хотя бы один пункт бланка'; return; }
 
@@ -1397,6 +1459,26 @@
   }
 
   // ---- Проверка сданных бланков ----
+
+  // Нечёткое сравнение ответа ученика с ключом: без учёта регистра, пунктуации,
+  // порядка слов — только как подсказка преподавателю, не как автоматический вердикт.
+  function normalizeForMatch(s) {
+    return (s || '').toString().toLowerCase().replace(/ё/g, 'е')
+      .replace(/[.,;:()«»"'`\-_/\\]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  function answerSimilarity(given, correct) {
+    const na = normalizeForMatch(given), nb = normalizeForMatch(correct);
+    if (!na || !nb) return 0;
+    if (na === nb) return 1;
+    if (na.includes(nb) || nb.includes(na)) return 0.9;
+    const wa = new Set(na.split(' ').filter(Boolean));
+    const wb = new Set(nb.split(' ').filter(Boolean));
+    if (wa.size === 0 || wb.size === 0) return 0;
+    let inter = 0;
+    wa.forEach(w => { if (wb.has(w)) inter++; });
+    const union = new Set([...wa, ...wb]).size;
+    return union ? inter / union : 0;
+  }
 
   let drawingReviewParticipantId = null;
 
@@ -1435,18 +1517,43 @@
     items.innerHTML = '';
     task.questions.forEach((q, i) => {
       const given = (p.grades && p.grades[i] === true) ? 'ok' : (p.grades && p.grades[i] === false) ? 'no' : '';
+      const answerText = (p.answers && p.answers[i]) || '';
+      let autoSuggest = given; // если уже проверено раньше — не перетираем сохранённый вердикт
+      let pctBadge = '';
+      if (!p.graded) {
+        if (!answerText) {
+          autoSuggest = 'no';
+        } else if (q.correctAnswer) {
+          const sim = answerSimilarity(answerText, q.correctAnswer);
+          const pct = Math.round(sim * 100);
+          autoSuggest = sim >= 0.55 ? 'ok' : autoSuggest;
+          pctBadge = `<span style="font-size:11px; padding:2px 7px; border-radius:20px; background:${sim >= 0.55 ? '#e6f4ea' : '#fdecea'}; color:${sim >= 0.55 ? '#2e9e4f' : '#d64545'}; white-space:nowrap;">~${pct}% совпадение</span>`;
+        }
+      }
       const div = document.createElement('div');
       div.className = 'card';
       div.style.background = '#fafbfc';
       div.innerHTML = `
-        <div class="muted" style="font-weight:600; margin-bottom:4px;">${i + 1}. ${escapeHtml(q.text)}</div>
-        <div style="padding:8px 10px; background:#fff; border:1px solid #eee; border-radius:8px; margin-bottom:8px; white-space:pre-wrap; font-size:14px;">${escapeHtml((p.answers && p.answers[i]) || '(пусто)')}</div>
+        <div class="row between" style="margin-bottom:8px;">
+          <div class="muted" style="font-weight:600;">${i + 1}. ${escapeHtml(q.text)}</div>
+          ${pctBadge}
+        </div>
+        <div class="row" style="gap:10px; align-items:stretch; flex-wrap:wrap; margin-bottom:8px;">
+          <div style="flex:1; min-width:180px;">
+            <div style="font-size:11px; color:#999; margin-bottom:3px;">Ответ ученика</div>
+            <div style="padding:8px 10px; background:#fff; border:1px solid #eee; border-radius:8px; white-space:pre-wrap; font-size:14px; min-height:20px;">${escapeHtml(answerText || '(пусто)')}</div>
+          </div>
+          <div style="flex:1; min-width:180px;">
+            <div style="font-size:11px; color:#999; margin-bottom:3px;">Правильный ответ (ключ)</div>
+            <div style="padding:8px 10px; background:#fff; border:1px solid #d6e6d6; border-radius:8px; white-space:pre-wrap; font-size:14px; min-height:20px; ${q.correctAnswer ? '' : 'color:#bbb;'}">${escapeHtml(q.correctAnswer || 'не задан')}</div>
+          </div>
+        </div>
         <div class="row" style="gap:8px;">
           <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13.5px;">
-            <input type="radio" name="grade-${i}" value="ok" ${given === 'ok' ? 'checked' : ''}> Зачёт
+            <input type="radio" name="grade-${i}" value="ok" ${autoSuggest === 'ok' ? 'checked' : ''}> Зачёт
           </label>
           <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13.5px;">
-            <input type="radio" name="grade-${i}" value="no" ${given === 'no' ? 'checked' : ''}> Незачёт
+            <input type="radio" name="grade-${i}" value="no" ${autoSuggest === 'no' ? 'checked' : ''}> Незачёт
           </label>
         </div>
       `;

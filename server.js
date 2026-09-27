@@ -1577,6 +1577,51 @@ function validateDrawingTaskPayload(body) {
   return null;
 }
 
+app.get('/api/drawing-import-template', checkAuth, (req, res) => {
+  const headers = ['Пункт бланка (вопрос)', 'Правильный ответ (ключ, необязательно)'];
+  const rows = SEED_DRAWING_TASKS[0].questions.map(q => [q.text, '']);
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  ws['!cols'] = [{ wch: 55 }, { wch: 45 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Бланк');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', 'attachment; filename="shablon_chertezh.xlsx"');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
+});
+
+// Импорт из Excel: две колонки — текст пункта и (опционально) ключ ответа под конкретный
+// чертёж. Ничего не сохраняет сам — просто возвращает распознанные пункты, дальше
+// преподаватель проверяет их в редакторе задания и жмёт «Сохранить» как обычно.
+app.post('/api/drawing-tasks/import', checkAuth, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
+  let rows;
+  try {
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  } catch (e) {
+    return res.status(400).json({ error: 'Не удалось прочитать файл. Убедитесь, что это .xlsx или .xls' });
+  }
+  if (rows.length < 2) {
+    return res.status(400).json({ error: 'В файле нет строк с вопросами под заголовком.' });
+  }
+  const questions = [];
+  const skipped = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.every(c => String(c).trim() === '')) continue;
+    const text = String(row[0] || '').trim();
+    const correctAnswer = String(row[1] || '').trim();
+    if (!text) { skipped.push({ row: i + 1, reason: 'пустой текст вопроса' }); continue; }
+    questions.push({ text, correctAnswer });
+  }
+  if (questions.length === 0) {
+    return res.status(400).json({ error: 'Не удалось распознать ни одного пункта. Проверьте формат файла (скачайте шаблон).', skipped });
+  }
+  res.json({ questions, skipped });
+});
+
 app.post('/api/drawing-tasks', checkAuth, async (req, res) => {
   const err = validateDrawingTaskPayload(req.body);
   if (err) return res.status(400).json({ error: err });
@@ -1589,7 +1634,8 @@ app.post('/api/drawing-tasks', checkAuth, async (req, res) => {
     intro: (req.body.intro || '').trim(),
     questions: req.body.questions.map((q, qi) => ({
       id: q.id || ('q' + qi + '_' + id),
-      text: q.text.trim()
+      text: q.text.trim(),
+      correctAnswer: (q.correctAnswer || '').trim()
     })),
     createdAt: Date.now(),
     custom: true
@@ -1608,7 +1654,8 @@ app.put('/api/drawing-tasks/:id', checkAuth, async (req, res) => {
     existing.intro = (req.body.intro || '').trim();
     existing.questions = req.body.questions.map((q, qi) => ({
       id: q.id || ('q' + qi + '_' + req.params.id),
-      text: q.text.trim()
+      text: q.text.trim(),
+      correctAnswer: (q.correctAnswer || '').trim()
     }));
     return existing;
   });
@@ -1810,6 +1857,7 @@ app.get('/api/drawing-sessions/:code/export', checkAuth, (req, res) => {
     };
     questions.forEach((q, i) => {
       row[`Ответ: ${q.text}`] = p.answers ? (p.answers[i] || '') : '';
+      if (q.correctAnswer) row[`Ключ: ${q.text}`] = q.correctAnswer;
       if (p.grades) row[`Оценка: ${q.text}`] = p.grades[i] === true ? 'Зачёт' : p.grades[i] === false ? 'Незачёт' : '—';
     });
     row['Комментарий проверяющего'] = p.gradeComment || '';
