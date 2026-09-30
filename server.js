@@ -14,6 +14,7 @@ const db = require('./db');
 const { SEED_LABS } = require('./labs-content');
 const { SEED_DRAWING_TASKS } = require('./drawing-content');
 const { SEED_ANSWER_KEYS } = require('./drawing-answer-keys-content');
+const { computeAnswer: computeToleranceAnswer, SEED_TOLERANCE_TASK } = require('./tolerance-content');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -863,7 +864,7 @@ app.get('/api/sessions/:code/present', async (req, res) => {
   const data = db.load();
   const session = safeGet(data.sessions, req.params.code);
   if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
-  const pathPrefix = session.type === 'lab' ? 'l' : session.type === 'drawing' ? 'd' : 's';
+  const pathPrefix = session.type === 'lab' ? 'l' : session.type === 'drawing' ? 'd' : session.type === 'tolerance' ? 'k' : 's';
   const url = `${getBaseUrl()}/${pathPrefix}/${session.code}`;
   try {
     const qrDataUrl = await QRCode.toDataURL(url, { width: 500, margin: 1 });
@@ -1542,6 +1543,10 @@ app.get('/d/:code', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'drawing-student.html'));
 });
 
+app.get('/k/:code', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'tolerance-student.html'));
+});
+
 // ==================== ЗАДАНИЯ ПО ЧЕРТЕЖАМ (открытые вопросы, ручная проверка) ====================
 // Структура и роуты намеренно зеркалят /api/labs и /api/lab-sessions выше, но вместо
 // автопроверки по вариантам ответа — свободный текст, который заполняет ученик,
@@ -1976,6 +1981,266 @@ app.get('/api/drawing-sessions/:code/export', checkAuth, (req, res) => {
   res.send(buf);
 });
 
+// ==================== КВАЛИТЕТЫ (расчёт допусков, автопроверка) ====================
+// В отличие от чертежей и тренажёров, здесь правильный ответ вычисляется по формуле
+// (см. tolerance-content.js), поэтому проверка полностью автоматическая. Раздача
+// вариантов — по очереди подключения (round-robin по индексу присоединения), а не
+// случайно: session.nextVariantIndex увеличивается на 1 при каждом join.
+
+const TOL_UM_EPS = 0.01;   // допуск сравнения в мкм (защита от погрешности округления)
+const TOL_MM_EPS = 0.0006; // допуск сравнения в мм (~0.5 мкм)
+
+function parseNum(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = parseFloat(String(v).replace(',', '.').replace(/\s/g, ''));
+  return isNaN(n) ? null : n;
+}
+
+function fieldLabels(kind) {
+  return kind === 'hole'
+    ? { devMax: 'ES', devMin: 'EI', limMax: 'Dmax', limMin: 'Dmin', typeName: 'Отверстие' }
+    : { devMax: 'es', devMin: 'ei', limMax: 'dmax', limMin: 'dmin', typeName: 'Вал' };
+}
+
+app.get('/api/tolerance-tasks', checkAuth, (req, res) => {
+  const data = db.load();
+  const list = Object.values(data.toleranceTasks)
+    .filter(t => t.shared || t.companyId === req.companyId)
+    .map(t => ({ id: t.id, title: t.title, intro: t.intro, variantCount: t.variants.length, shared: !!t.shared }));
+  res.json(list);
+});
+
+app.post('/api/tolerance-sessions', checkAuth, async (req, res) => {
+  const { toleranceTaskId } = req.body;
+  const data = db.load();
+  const task = safeGet(data.toleranceTasks, toleranceTaskId);
+  if (!task || (!task.shared && task.companyId !== req.companyId)) return res.status(404).json({ error: 'Задание не найдено' });
+  let scheduledAt = null;
+  if (req.body.scheduledAt) {
+    const ts = parseInt(req.body.scheduledAt, 10);
+    if (!isNaN(ts) && ts > Date.now()) scheduledAt = ts;
+  }
+  let code;
+  do { code = nanoid(); } while (safeGet(data.sessions, code));
+  const session = {
+    code,
+    companyId: req.companyId,
+    type: 'tolerance',
+    toleranceTaskId,
+    testTitle: task.title,
+    startedAt: Date.now(),
+    scheduledAt,
+    ended: false,
+    nextVariantIndex: 0,
+    participants: {}
+  };
+  await db.update((d) => { d.sessions[code] = session; });
+  const url = `${getBaseUrl()}/k/${code}`;
+  const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
+  res.json({ session, url, qrDataUrl });
+});
+
+app.post('/api/tolerance-sessions/:code/start-now', checkAuth, async (req, res) => {
+  const result = await db.update((d) => {
+    const session = safeGet(d.sessions, req.params.code);
+    if (!session || session.companyId !== req.companyId) return null;
+    session.scheduledAt = null;
+    return session;
+  });
+  if (!result) return res.status(404).json({ error: 'Сессия не найдена' });
+  res.json({ ok: true });
+});
+
+app.get('/api/tolerance-sessions/:code', checkAuth, (req, res) => {
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.companyId !== req.companyId || session.type !== 'tolerance') {
+    return res.status(404).json({ error: 'Сессия не найдена' });
+  }
+  const task = safeGet(data.toleranceTasks, session.toleranceTaskId);
+  res.json({ session, task: task || null });
+});
+
+app.get('/api/tolerance-sessions/:code/info', (req, res) => {
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.type !== 'tolerance') return res.status(404).json({ error: 'Сессия не найдена' });
+  if (session.ended) return res.status(410).json({ error: 'Задание завершено' });
+  const trialMsg = trialBlockedForCompany(data, session.companyId);
+  if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
+  const task = safeGet(data.toleranceTasks, session.toleranceTaskId);
+  res.json({
+    testTitle: session.testTitle,
+    intro: task ? task.intro : '',
+    scheduledAt: session.scheduledAt || null
+  });
+});
+
+app.post('/api/tolerance-sessions/:code/join', joinLimiter, async (req, res) => {
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Введите имя' });
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.type !== 'tolerance') return res.status(404).json({ error: 'Сессия не найдена' });
+  if (session.ended) return res.status(410).json({ error: 'Задание завершено' });
+  if (session.scheduledAt && Date.now() < session.scheduledAt) {
+    return res.status(403).json({
+      error: 'NOT_STARTED',
+      message: `Задание ещё не началось. Начало запланировано на ${new Date(session.scheduledAt).toLocaleString('ru-RU')}.`,
+      scheduledAt: session.scheduledAt
+    });
+  }
+  const trialMsg = trialBlockedForCompany(data, session.companyId);
+  if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
+  const task = safeGet(data.toleranceTasks, session.toleranceTaskId);
+  if (!task || task.variants.length === 0) return res.status(404).json({ error: 'Задание не найдено' });
+
+  const pid = participantId();
+  let variant;
+  await db.update((d) => {
+    const s = d.sessions[req.params.code];
+    const idx = (s.nextVariantIndex || 0) % task.variants.length;
+    variant = task.variants[idx];
+    s.nextVariantIndex = idx + 1;
+    s.participants[pid] = {
+      id: pid,
+      name: name.trim().slice(0, 80),
+      variantId: variant.id,
+      joinedAt: Date.now(),
+      finished: false,
+      answers: null,
+      correct: null,
+      score: null,
+      graded: false
+    };
+  });
+  io.to('session:' + req.params.code).emit('participant:joined', session.participants[pid] || { id: pid, name: name.trim() });
+  const labels = fieldLabels(variant.kind);
+  res.json({
+    participantId: pid,
+    testTitle: task.title,
+    intro: task.intro,
+    variant: { kind: variant.kind, typeName: labels.typeName, nominal: variant.nominal, field: variant.field },
+    labels
+  });
+});
+
+app.post('/api/tolerance-sessions/:code/submit', async (req, res) => {
+  const { participantId: pid, values } = req.body;
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.type !== 'tolerance') return res.status(404).json({ error: 'Сессия не найдена' });
+  const participant = safeGet(session.participants, pid);
+  if (!participant) return res.status(404).json({ error: 'Участник не найден' });
+  if (participant.finished) return res.status(400).json({ error: 'Ответ уже сдан' });
+  const task = safeGet(data.toleranceTasks, session.toleranceTaskId);
+  const variant = task ? task.variants.find(v => v.id === participant.variantId) : null;
+  if (!variant) return res.status(404).json({ error: 'Вариант не найден' });
+  const correctAnswer = computeToleranceAnswer(variant);
+  if (!correctAnswer) return res.status(500).json({ error: 'Не удалось вычислить эталонный ответ для этого варианта' });
+
+  const given = {
+    devMaxUm: parseNum(values && values.devMaxUm),
+    devMinUm: parseNum(values && values.devMinUm),
+    devMaxMm: parseNum(values && values.devMaxMm),
+    devMinMm: parseNum(values && values.devMinMm),
+    limMaxMm: parseNum(values && values.limMaxMm),
+    limMinMm: parseNum(values && values.limMinMm)
+  };
+  const correct = {
+    devMaxUm: given.devMaxUm !== null && Math.abs(given.devMaxUm - correctAnswer.devMaxUm) <= TOL_UM_EPS,
+    devMinUm: given.devMinUm !== null && Math.abs(given.devMinUm - correctAnswer.devMinUm) <= TOL_UM_EPS,
+    devMaxMm: given.devMaxMm !== null && Math.abs(given.devMaxMm - correctAnswer.devMaxMm) <= TOL_MM_EPS,
+    devMinMm: given.devMinMm !== null && Math.abs(given.devMinMm - correctAnswer.devMinMm) <= TOL_MM_EPS,
+    limMaxMm: given.limMaxMm !== null && Math.abs(given.limMaxMm - correctAnswer.limMaxMm) <= TOL_MM_EPS,
+    limMinMm: given.limMinMm !== null && Math.abs(given.limMinMm - correctAnswer.limMinMm) <= TOL_MM_EPS
+  };
+  const score = Object.values(correct).filter(Boolean).length;
+
+  await db.update((d) => {
+    const p = safeGet(d.sessions[req.params.code].participants, pid);
+    p.finished = true;
+    p.finishedAt = Date.now();
+    p.answers = given;
+    p.correct = correct;
+    p.score = score;
+    p.graded = true; // автопроверка — сразу готово
+  });
+  await incrementSubmissions(session.companyId);
+  io.to('session:' + req.params.code).emit('participant:finished', { id: pid, name: participant.name, finished: true, score, total: 6 });
+  res.json({ ok: true, score, total: 6 });
+});
+
+app.get('/api/tolerance-sessions/:code/result', (req, res) => {
+  const { participantId: pid } = req.query;
+  if (!pid) return res.status(400).json({ error: 'Не указан участник' });
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.type !== 'tolerance') return res.status(404).json({ error: 'Сессия не найдена' });
+  const p = safeGet(session.participants, pid);
+  if (!p) return res.status(404).json({ error: 'Участник не найден' });
+  if (!p.finished) return res.json({ finished: false });
+
+  const task = safeGet(data.toleranceTasks, session.toleranceTaskId);
+  const variant = task ? task.variants.find(v => v.id === p.variantId) : null;
+  const correctAnswer = variant ? computeToleranceAnswer(variant) : null;
+  const labels = variant ? fieldLabels(variant.kind) : null;
+
+  res.json({
+    finished: true,
+    graded: true,
+    score: p.score,
+    total: 6,
+    variant: variant ? { kind: variant.kind, typeName: labels.typeName, nominal: variant.nominal, field: variant.field } : null,
+    labels,
+    given: p.answers,
+    correct: p.correct,
+    correctAnswer
+  });
+});
+
+app.post('/api/tolerance-sessions/:code/end', checkAuth, async (req, res) => {
+  await db.update((d) => {
+    const s = safeGet(d.sessions, req.params.code);
+    if (s && s.companyId === req.companyId) s.ended = true;
+  });
+  io.to('session:' + req.params.code).emit('session:ended');
+  res.json({ ok: true });
+});
+
+app.get('/api/tolerance-sessions/:code/export', checkAuth, (req, res) => {
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.companyId !== req.companyId || session.type !== 'tolerance') return res.status(404).send('Сессия не найдена');
+  const task = safeGet(data.toleranceTasks, session.toleranceTaskId);
+  const rows = Object.values(session.participants).map(p => {
+    const variant = task ? task.variants.find(v => v.id === p.variantId) : null;
+    const labels = variant ? fieldLabels(variant.kind) : {};
+    const ca = variant ? computeToleranceAnswer(variant) : null;
+    return {
+      'Имя': p.name,
+      'Вариант': variant ? `${labels.typeName} Ø${variant.nominal} ${variant.field}` : '—',
+      'Статус': p.finished ? 'Сдал' : 'В процессе',
+      'Балл': p.score !== null ? `${p.score}/6` : '—',
+      [`${labels.devMax || 'ES'} дано (мкм)`]: p.answers ? p.answers.devMaxUm : '',
+      [`${labels.devMax || 'ES'} верно (мкм)`]: ca ? ca.devMaxUm : '',
+      [`${labels.devMin || 'EI'} дано (мкм)`]: p.answers ? p.answers.devMinUm : '',
+      [`${labels.devMin || 'EI'} верно (мкм)`]: ca ? ca.devMinUm : '',
+      [`${labels.limMax || 'Dmax'} дано (мм)`]: p.answers ? p.answers.limMaxMm : '',
+      [`${labels.limMax || 'Dmax'} верно (мм)`]: ca ? ca.limMaxMm : '',
+      [`${labels.limMin || 'Dmin'} дано (мм)`]: p.answers ? p.answers.limMinMm : '',
+      [`${labels.limMin || 'Dmin'} верно (мм)`]: ca ? ca.limMinMm : ''
+    };
+  });
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, ws, 'Результаты');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', `attachment; filename="tolerance_results_${req.params.code}.xlsx"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
+});
+
 app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
@@ -2151,6 +2416,14 @@ async function seedAnswerKeys() {
   console.log(`[answer-keys] Синхронизировано ключей ответов: ${SEED_ANSWER_KEYS.length}`);
 }
 
+async function seedToleranceTasks() {
+  await db.update((d) => {
+    if (!d.toleranceTasks) d.toleranceTasks = {};
+    d.toleranceTasks[SEED_TOLERANCE_TASK.id] = { ...SEED_TOLERANCE_TASK, shared: true };
+  });
+  console.log(`[tolerance-tasks] Синхронизировано заданий по квалитетам: 1 (${SEED_TOLERANCE_TASK.variants.length} вариантов)`);
+}
+
 // ==================== ГЛОБАЛЬНАЯ ОБРАБОТКА ОШИБОК ====================
 // Ловит любую ошибку, брошенную (или переданную через next(err)) внутри
 // обработчиков маршрутов, чтобы один сбойный запрос не ронял весь процесс.
@@ -2174,6 +2447,7 @@ async function start() {
   await seedLabs();
   await seedDrawingTasks();
   await seedAnswerKeys();
+  await seedToleranceTasks();
   server.listen(PORT, '0.0.0.0', () => {
     console.log('');
     console.log('=== Приложение для тестирования запущено ===');

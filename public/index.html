@@ -165,6 +165,7 @@
       <button class="tab-btn active" id="tab-btn-tests" onclick="switchTab('tests')">📚 Тесты</button>
       <button class="tab-btn" id="tab-btn-labs" onclick="switchTab('labs')">🧪 Тренажёры</button>
       <button class="tab-btn" id="tab-btn-drawing" onclick="switchTab('drawing')">📐 Чертежи</button>
+      <button class="tab-btn" id="tab-btn-tolerance" onclick="switchTab('tolerance')">📏 Квалитеты</button>
       <button class="tab-btn" id="tab-btn-stats" onclick="switchTab('stats')">📊 Статистика</button>
     </div>
 
@@ -193,6 +194,11 @@
         </div>
         <h2 style="font-size:18px; margin-bottom:12px;">Задания по чертежам</h2>
         <div id="drawing-list"></div>
+      </div>
+      <div id="tab-tolerance" class="hidden">
+        <h2 style="font-size:18px; margin-bottom:12px;">Задания по квалитетам</h2>
+        <div class="muted" style="margin-bottom:14px; font-size:13.5px; line-height:1.5;">Каждый ученик, подключившись по одному QR, получает свой вариант по очереди — правильный ответ считается автоматически по таблице допусков ГОСТ 25347-82, проверка не нужна.</div>
+        <div id="tolerance-list"></div>
       </div>
       <div id="tab-stats" class="hidden">
         <h2 style="font-size:18px; margin-bottom:12px;">Статистика по тестам</h2>
@@ -509,9 +515,11 @@
     document.getElementById('tab-tests').classList.toggle('hidden', tab !== 'tests');
     document.getElementById('tab-labs').classList.toggle('hidden', tab !== 'labs');
     document.getElementById('tab-drawing').classList.toggle('hidden', tab !== 'drawing');
+    document.getElementById('tab-tolerance').classList.toggle('hidden', tab !== 'tolerance');
     document.getElementById('tab-stats').classList.toggle('hidden', tab !== 'stats');
     if (tab === 'labs') loadLabsList();
     if (tab === 'drawing') loadDrawingList();
+    if (tab === 'tolerance') loadToleranceList();
     if (tab === 'stats') showStatsList();
   }
 
@@ -762,6 +770,7 @@
   function startSession(testId) { openSessionModal('test', testId); }
   function startLabSession(labId) { openSessionModal('lab', labId); }
   function startDrawingSession(taskId) { openSessionModal('drawing', taskId); }
+  function startToleranceSession(taskId) { openSessionModal('tolerance', taskId); }
 
   function openSessionModal(type, id) {
     pendingSessionType = type;
@@ -883,8 +892,8 @@
     const id = pendingSessionId;
     closeSessionModal();
 
-    const endpoint = type === 'lab' ? '/api/lab-sessions' : type === 'drawing' ? '/api/drawing-sessions' : '/api/sessions';
-    const body = type === 'lab' ? { labId: id, scheduledAt } : type === 'drawing' ? { drawingTaskId: id, scheduledAt } : { testId: id, timeLimit, scheduledAt };
+    const endpoint = type === 'lab' ? '/api/lab-sessions' : type === 'drawing' ? '/api/drawing-sessions' : type === 'tolerance' ? '/api/tolerance-sessions' : '/api/sessions';
+    const body = type === 'lab' ? { labId: id, scheduledAt } : type === 'drawing' ? { drawingTaskId: id, scheduledAt } : type === 'tolerance' ? { toleranceTaskId: id, scheduledAt } : { testId: id, timeLimit, scheduledAt };
     const res = await authFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -974,6 +983,14 @@
       }).join('');
       return;
     }
+    if (currentSessionType === 'tolerance') {
+      body.innerHTML = list.map(p => {
+        const statusText = p.finished ? 'Сдал ответ' : 'Решает';
+        const resultText = (p.finished && p.score !== undefined && p.score !== null) ? `${p.score}/6` : '—';
+        return `<tr id="prow-${p.id}"><td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td><td>—</td></tr>`;
+      }).join('');
+      return;
+    }
     body.innerHTML = list.map(p => {
       const statusText = p.finished ? 'Завершил' : 'Проходит тест';
       const resultText = (p.finished && p.total) ? `${p.score}/${p.total} (${Math.round(p.score / p.total * 100)}%)` : '—';
@@ -999,8 +1016,8 @@
     document.getElementById('session-stats-panel').classList.add('hidden');
     document.getElementById('session-stats-chart').innerHTML = '';
 
-    document.getElementById('results-th-4').textContent = session.type === 'drawing' ? 'Проверка' : 'Переключения вкладки';
-    document.querySelector('#screen-session button[onclick="toggleSessionStats()"]').classList.toggle('hidden', session.type === 'drawing');
+    document.getElementById('results-th-4').textContent = session.type === 'drawing' ? 'Проверка' : session.type === 'tolerance' ? '—' : 'Переключения вкладки';
+    document.querySelector('#screen-session button[onclick="toggleSessionStats()"]').classList.toggle('hidden', session.type === 'drawing' || session.type === 'tolerance');
 
     currentSessionCode = session.code;
     updateScheduledBanner(session.scheduledAt || null);
@@ -1026,7 +1043,10 @@
   }
 
   function sessionEndpointBase() {
-    return currentSessionType === 'lab' ? '/api/lab-sessions/' : currentSessionType === 'drawing' ? '/api/drawing-sessions/' : '/api/sessions/';
+    if (currentSessionType === 'lab') return '/api/lab-sessions/';
+    if (currentSessionType === 'drawing') return '/api/drawing-sessions/';
+    if (currentSessionType === 'tolerance') return '/api/tolerance-sessions/';
+    return '/api/sessions/';
   }
 
   async function startSessionNow() {
@@ -1634,6 +1654,30 @@
         if (d && d.session) Object.values(d.session.participants).forEach(p => upsertParticipantRow(p));
       });
     }
+  }
+
+  // ==================== КВАЛИТЕТЫ ====================
+
+  async function loadToleranceList() {
+    const res = await authFetch('/api/tolerance-tasks');
+    if (!res.ok) return;
+    const tasks = await res.json();
+    const container = document.getElementById('tolerance-list');
+    if (tasks.length === 0) {
+      container.innerHTML = '<div class="muted" style="padding:30px 0; text-align:center;">Заданий пока нет.</div>';
+      return;
+    }
+    container.innerHTML = tasks.map(t => `
+      <div class="card row between">
+        <div>
+          <strong>${escapeHtml(t.title)}</strong>${t.shared ? ' <span class="badge live" style="background:#eef4fb;color:#2C3E50;">общий</span>' : ''}
+          <div class="muted">${t.variantCount} вариантов, раздаются по очереди подключения</div>
+        </div>
+        <div class="row">
+          <button class="btn small" onclick="startToleranceSession('${t.id}')">Начать сессию</button>
+        </div>
+      </div>
+    `).join('');
   }
 
   // ==================== СТАТИСТИКА ====================
