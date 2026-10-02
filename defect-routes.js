@@ -160,7 +160,36 @@ module.exports = function registerDefect(ctx) {
     const data = db.load();
     res.json(Object.values(getSets(data))
       .filter(s => s.shared || s.companyId === req.companyId)
-      .map(s => ({ id: s.id, title: s.title, intro: s.intro, taskCount: s.tasks.length, shared: !!s.shared })));
+      .sort((a, b) => (a.shared === b.shared ? (a.createdAt || 0) - (b.createdAt || 0) : (a.shared ? 1 : -1)))
+      .map(s => ({ id: s.id, title: s.title, intro: s.intro, taskCount: s.tasks.length, node: s.tasks[0] ? s.tasks[0].node : '', shared: !!s.shared })));
+  });
+
+  // Выгрузка всех доступных тренажёров одним файлом (удобно править в Excel и загружать обратно).
+  app.get('/api/defect-sets/export-all', checkAuth, (req, res) => {
+    const data = db.load();
+    const own = Object.values(getSets(data)).filter(s => !s.shared && s.companyId === req.companyId);
+    const list = own.length ? own : Object.values(getSets(data)).filter(s => s.shared);
+    const seen = new Set(), tasks = [];
+    list.forEach(s => s.tasks.forEach(t => {
+      let id = t.id, n = 1;
+      while (seen.has(id)) id = t.id + '_' + (++n);
+      seen.add(id); tasks.push({ ...t, id });
+    }));
+    sendXlsx(res, setToWorkbook({ title: 'Все тренажёры', intro: list[0] ? list[0].intro : '', tasks }), 'vse_trenazhery.xlsx');
+  });
+
+  // Копирует все общие тренажёры в «мои» (чтобы менять их и загружать свои фото).
+  app.post('/api/defect-sets/clone-all-shared', checkAuth, async (req, res) => {
+    const n = await db.update((d) => {
+      if (!d.defectTasks) d.defectTasks = {};
+      const shared = Object.values(d.defectTasks).filter(s => s.shared);
+      shared.forEach(src => {
+        const id = participantId();
+        d.defectTasks[id] = { ...JSON.parse(JSON.stringify(src)), id, companyId: req.companyId, shared: false, createdAt: Date.now() };
+      });
+      return shared.length;
+    });
+    res.json({ ok: true, copied: n });
   });
 
   app.get('/api/defect-sets/:id', checkAuth, (req, res) => {
@@ -246,7 +275,23 @@ module.exports = function registerDefect(ctx) {
       const m = XLSX.utils.sheet_to_json(meta, { header: 1, defval: '' });
       m.forEach(r => { if (String(r[0]).trim() === 'Название') metaTitle = str(r[1], 200); if (String(r[0]).trim() === 'Вводная') metaIntro = str(r[1], 1000); });
     }
-    const mode = ['append', 'replace'].includes(req.body.mode) ? req.body.mode : 'new';
+    const mode = ['append', 'replace', 'new'].includes(req.body.mode) ? req.body.mode : 'separate';
+
+    if (mode === 'separate') {
+      // Каждая строка Excel — отдельный тренажёр со своей сессией и своим QR.
+      const created = await db.update((d) => {
+        if (!d.defectTasks) d.defectTasks = {};
+        const ids = [];
+        parsed.forEach((p, i) => {
+          const id = participantId();
+          const t = p.task;
+          d.defectTasks[id] = { id, companyId: req.companyId, shared: false, title: t.title, intro: metaIntro || SEED_DEFECT_SET.intro, tasks: [t], createdAt: Date.now() + i };
+          ids.push(id);
+        });
+        return ids;
+      });
+      return res.json({ ok: true, created: created.length, setId: created[0] });
+    }
 
     const result = await db.update((d) => {
       if (!d.defectTasks) d.defectTasks = {};
@@ -483,10 +528,14 @@ module.exports = function registerDefect(ctx) {
   async function seed() {
     await db.update((d) => {
       if (!d.defectTasks) d.defectTasks = {};
-      const old = d.defectTasks[SEED_DEFECT_SET.id];
-      d.defectTasks[SEED_DEFECT_SET.id] = { ...JSON.parse(JSON.stringify(SEED_DEFECT_SET)), shared: true, createdAt: old ? old.createdAt : Date.now() };
+      delete d.defectTasks[SEED_DEFECT_SET.id]; // прежний «комплект из 10» больше не используется
+      SEED_DEFECT_SET.tasks.forEach((t, i) => {
+        const id = 'defect-' + t.id;
+        const old = d.defectTasks[id];
+        d.defectTasks[id] = { id, shared: true, title: t.title, intro: SEED_DEFECT_SET.intro, tasks: [JSON.parse(JSON.stringify(t))], createdAt: old ? old.createdAt : 1000 + i };
+      });
     });
-    console.log(`[defect] Синхронизирован общий комплект: ${SEED_DEFECT_SET.tasks.length} тренажёров`);
+    console.log(`[defect] Синхронизировано общих тренажёров: ${SEED_DEFECT_SET.tasks.length}`);
   }
 
   return { seed };

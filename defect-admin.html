@@ -86,16 +86,18 @@ async function start() {
   sets = await api('/api/defect-sets');
   const sess = await api('/api/defect-sessions');
   app.innerHTML = `<div class="top"><h1>Акты дефектации — тренажёры</h1>
-    <div class="row"><button class="sec" id="tpl">Шаблон Excel</button><button id="imp">Загрузить из Excel</button><a class="btn sec" href="/">← Основная панель</a></div></div>
-    <div class="card"><h2>Комплекты тренажёров</h2><div id="sets"></div></div>
+    <div class="row"><button class="sec" id="tpl">Шаблон Excel</button><button class="sec" id="expall">Выгрузить все в Excel</button><button id="imp">Загрузить из Excel</button>${window.self !== window.top ? '' : '<a class="btn sec" href="/">← Основная панель</a>'}</div></div>
+    <div class="card"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0">Тренажёры</h2>${sets.some(s => s.shared) ? '<button class="sec" id="cloneall">Скопировать общие в мои (для правки)</button>' : ''}</div><div id="sets"></div></div>
     <div id="detail"></div>
     <div class="card"><h2>Сессии и результаты</h2><div id="sess"></div></div><div id="sview"></div>`;
   $('tpl').onclick = () => download('/api/defect-template', 'shablon_trenazhery.xlsx');
   $('imp').onclick = importDialog;
-  $('sets').innerHTML = sets.map(s => `<div class="set"><div><b>${esc(s.title)}</b> <span class="badge ${s.shared ? '' : 'm'}">${s.shared ? 'общий' : 'мой'}</span><div class="muted">Тренажёров: ${s.taskCount}</div></div>
+  $('expall').onclick = () => download('/api/defect-sets/export-all', 'vse_trenazhery.xlsx');
+  if ($('cloneall')) $('cloneall').onclick = async () => { if (confirm('Скопировать все общие тренажёры в «мои»? Копии можно менять через Excel и загружать свои фото.')) { await jpost('/api/defect-sets/clone-all-shared'); start(); } };
+  $('sets').innerHTML = sets.map(s => `<div class="set"><div><b>${esc(s.title)}</b> <span class="badge ${s.shared ? '' : 'm'}">${s.shared ? 'общий' : 'мой'}</span><div class="muted">${esc(s.node || '')}${s.taskCount > 1 ? ' · тренажёров в наборе: ' + s.taskCount : ''}</div></div>
     <div class="row"><button class="sec" data-a="open" data-id="${s.id}">Открыть</button><button class="sec" data-a="exp" data-id="${s.id}">Выгрузить Excel</button>
     ${s.shared ? `<button class="sec" data-a="clone" data-id="${s.id}">Копировать в мои</button>` : `<button class="red" data-a="del" data-id="${s.id}">Удалить</button>`}
-    <button class="green" data-a="sess" data-id="${s.id}">Создать сессию</button></div></div>`).join('') || '<p class="muted">Комплектов нет</p>';
+    <button class="green" data-a="sess" data-id="${s.id}">Создать сессию</button></div></div>`).join('') || '<p class="muted">Тренажёров нет — загрузите из Excel</p>';
   $('sets').onclick = async e => {
     const b = e.target.closest('button'); if (!b) return; const id = b.dataset.id;
     if (b.dataset.a === 'open') openSet(id);
@@ -153,19 +155,19 @@ function importDialog() {
   const m = document.createElement('div'); m.className = 'modal';
   m.innerHTML = `<div class="box"><h2>Загрузка из Excel</h2>
     <p><input type="file" id="xf" accept=".xlsx,.xls"></p>
-    <p><select id="md"><option value="new">Создать новый комплект</option>${own.length ? '<option value="append">Добавить в существующий (тот же ID — заменится)</option><option value="replace">Заменить содержимое существующего</option>' : ''}</select></p>
+    <p><select id="md"><option value="separate">Каждая строка — отдельный тренажёр (рекомендуется)</option><option value="new">Все строки — один набор тренажёров</option>${own.length ? '<option value="append">Добавить в существующий (тот же ID — заменится)</option><option value="replace">Заменить содержимое существующего</option>' : ''}</select></p>
     <p id="sw" class="hidden"><select id="ss">${own.map(s => `<option value="${s.id}">${esc(s.title)}</option>`).join('')}</select></p>
     <div id="msg" class="err"></div><div class="row"><button id="ok">Загрузить</button><button class="sec" id="cl">Отмена</button></div></div>`;
   document.body.appendChild(m);
-  $('md').onchange = () => $('sw').classList.toggle('hidden', $('md').value === 'new');
+  $('md').onchange = () => $('sw').classList.toggle('hidden', !['append','replace'].includes($('md').value));
   $('cl').onclick = () => m.remove();
   $('ok').onclick = async () => {
     const f = $('xf').files[0]; if (!f) { $('msg').textContent = 'Выберите файл'; return; }
-    const fd = new FormData(); fd.append('file', f); fd.append('mode', $('md').value); if ($('md').value !== 'new') fd.append('setId', $('ss').value);
+    const fd = new FormData(); fd.append('file', f); fd.append('mode', $('md').value); if (['append','replace'].includes($('md').value)) fd.append('setId', $('ss').value);
     const r = await api('/api/defect-sets/import', { method: 'POST', body: fd, raw: true });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { $('msg').textContent = (j.error || 'Ошибка') + (j.errors ? '\n' + j.errors.join('\n') : ''); return; }
-    m.remove(); currentSet = j.setId; start();
+    m.remove(); currentSet = j.created > 1 ? null : j.setId; if (j.created) alert('Создано тренажёров: ' + j.created); start();
   };
 }
 
