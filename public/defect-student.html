@@ -135,7 +135,7 @@ async function init() {
   try {
     const info = await api(`/api/defect-sessions/${CODE}/info`);
     $app.innerHTML = `<div class="card"><h1>${esc(info.testTitle)}</h1><p>${esc(info.intro)}</p>
-      <p class="muted">Актов дефектации: ${info.taskCount}. В каждом: осмотр узла, диагноз, причина, описание неисправности своими словами и рекомендуемые действия.</p>
+      <p class="muted">Что нужно сделать: изучить показания и схему узла, выбрать диагноз и причину, своими словами описать неисправность и указать рекомендуемые действия.</p>
       <input type="text" id="nm" placeholder="Ваши фамилия и имя" maxlength="80"><div class="err" id="er"></div>
       <p><button id="go">Начать</button></p></div>`;
     document.getElementById('go').onclick = join;
@@ -161,7 +161,7 @@ function renderAct() {
   const t = state.tasks[state.cur], a = state.answers[state.cur], n = state.tasks.length, last = state.cur === n - 1;
   const dots = state.tasks.map((_, i) => `<div class="dot ${answered(state.answers[i]) ? 'done' : ''} ${i === state.cur ? 'cur' : ''}" data-i="${i}">${i + 1}</div>`).join('');
   const radios = (q, key) => q.options.map(o => `<label class="opt ${a[key] === o.id ? 'sel' : ''}"><input type="radio" name="${key}" value="${o.id}" ${a[key] === o.id ? 'checked' : ''}><span>${esc(o.text)}</span></label>`).join('');
-  $app.innerHTML = `<div class="dots">${dots}</div>
+  $app.innerHTML = `${n > 1 ? `<div class="dots">${dots}</div>` : ''}
   <div class="act">
     <div class="act-head"><span>АКТ ДЕФЕКТАЦИИ № ${state.cur + 1}</span><span>${state.cur + 1} / ${n}</span></div>
     <table class="meta"><tr><td class="k">Объект</td><td>${esc(t.title)}</td><td class="k">Дата</td><td>${new Date().toLocaleDateString('ru-RU')}</td></tr>
@@ -184,7 +184,7 @@ function renderAct() {
     <div class="sign"><span>Исполнитель: ${esc(state.name)}</span><span>Подпись: ____________</span></div>
   </div>
   <div class="nav"><button class="sec" id="prev" ${state.cur === 0 ? 'disabled' : ''}>← Назад</button>
-    ${last ? '<button id="fin">Сдать все акты</button>' : '<button id="next">Далее →</button>'}</div>
+    ${last ? '<button id="fin">' + (n === 1 ? 'Сдать акт' : 'Сдать все акты') + '</button>' : '<button id="next">Далее →</button>'}</div>
   <div class="err" id="er"></div>`;
   document.getElementById('pl').onclick = e => playSound(t.sound.type, e.target);
   document.querySelectorAll('input[type=radio]').forEach(r => r.onchange = () => { a[r.name] = r.value; renderKeep(); });
@@ -219,7 +219,7 @@ function showResult(r) {
     <p><b>Ваше описание:</b><br>${esc(it.desc) || '<span class="muted">не заполнено</span>'}</p>
     <p><b>Ваши действия:</b><br>${esc(it.actions) || '<span class="muted">не заполнено</span>'}</p>
     <p>Оценка преподавателя: ${it.textGrade === true ? '<span class="tag t-ok">зачёт</span>' : it.textGrade === false ? '<span class="tag t-bad">незачёт</span>' : '<span class="tag t-n">ожидает проверки</span>'}</p></div>`).join('');
-  $app.innerHTML = `<div class="card"><h1>Акты сданы</h1>
+  $app.innerHTML = `<div class="card"><h1>${r.review.length > 1 ? 'Акты сданы' : 'Акт сдан'}</h1>
     <div class="score">${r.score} из ${r.total}</div><div class="muted">баллов за выбор диагноза и причины (проверено автоматически)</div>
     <p>Описания неисправностей проверяет преподаватель: ${r.graded ? `зачтено <b>${r.manualScore}</b> из ${r.manualTotal}` : 'оценка появится после проверки, обновите страницу позже'}.</p>
     ${r.gradeComment ? `<p><b>Комментарий преподавателя:</b> ${esc(r.gradeComment)}</p>` : ''}</div>${items}`;
