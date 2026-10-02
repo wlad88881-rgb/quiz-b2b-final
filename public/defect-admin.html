@@ -86,7 +86,7 @@ async function start() {
   sets = await api('/api/defect-sets');
   const sess = await api('/api/defect-sessions');
   app.innerHTML = `<div class="top"><h1>Акты дефектации — тренажёры</h1>
-    <div class="row"><button class="sec" id="tpl">Шаблон Excel</button><button id="imp">Загрузить из Excel</button><a class="btn sec" href="/">← Основная панель</a></div></div>
+    <div class="row"><button class="sec" id="tpl">Шаблон Excel</button><button id="imp">Загрузить из Excel</button>${window.self !== window.top ? '' : '<a class="btn sec" href="/">← Основная панель</a>'}</div></div>
     <div class="card"><h2>Комплекты тренажёров</h2><div id="sets"></div></div>
     <div id="detail"></div>
     <div class="card"><h2>Сессии и результаты</h2><div id="sess"></div></div><div id="sview"></div>`;

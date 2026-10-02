@@ -63,6 +63,7 @@ if (!process.env.SESSION_SECRET) {
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(express.json({ limit: '3mb' }));
+app.get(['/', '/index.html'], require('./defect-inject')); // вставка вкладки «Акты дефектации» в панель
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Ограничение частоты запросов на чувствительные маршруты (защита от подбора паролей и злоупотреблений)
