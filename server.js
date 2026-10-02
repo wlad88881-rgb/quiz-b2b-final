@@ -14,7 +14,7 @@ const db = require('./db');
 const { SEED_LABS } = require('./labs-content');
 const { SEED_DRAWING_TASKS } = require('./drawing-content');
 const { SEED_ANSWER_KEYS } = require('./drawing-answer-keys-content');
-const { computeAnswer: computeToleranceAnswer, SEED_TOLERANCE_TASK } = require('./tolerance-content');
+const { computeAnswer: computeToleranceAnswer, SEED_TOLERANCE_TASK, RANGES: TOLERANCE_RANGES, HOLE_FIELDS, SHAFT_FIELDS, rangeIndex: toleranceRangeIndex } = require('./tolerance-content');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -2116,12 +2116,21 @@ app.post('/api/tolerance-sessions/:code/join', joinLimiter, async (req, res) => 
   });
   io.to('session:' + req.params.code).emit('participant:joined', session.participants[pid] || { id: pid, name: name.trim() });
   const labels = fieldLabels(variant.kind);
+  const fieldsTable = variant.kind === 'hole' ? HOLE_FIELDS : SHAFT_FIELDS;
   res.json({
     participantId: pid,
     testTitle: task.title,
     intro: task.intro,
+    methodology: task.methodology || [],
     variant: { kind: variant.kind, typeName: labels.typeName, nominal: variant.nominal, field: variant.field },
-    labels
+    labels,
+    table: {
+      ranges: TOLERANCE_RANGES,
+      fieldNames: Object.keys(fieldsTable),
+      rows: Object.keys(fieldsTable).reduce((acc, f) => { acc[f] = fieldsTable[f]; return acc; }, {}),
+      highlightRow: toleranceRangeIndex(variant.nominal),
+      highlightCol: variant.field
+    }
   });
 });
 

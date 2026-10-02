@@ -85,6 +85,11 @@
       <div class="vv" id="variant-value"></div>
     </div>
 
+    <div id="methodology-box" class="info-box hidden" style="line-height:1.6;"></div>
+
+    <button type="button" class="btn outline" id="table-toggle-btn" style="margin-bottom:14px;" onclick="toggleTable()">📐 Показать таблицу допусков</button>
+    <div id="table-box" class="hidden" style="margin-bottom:18px; overflow-x:auto;"></div>
+
     <div class="step">
       <div class="step-title" id="step1-title"></div>
       <div class="field-row">
@@ -110,6 +115,7 @@
     </div>
 
     <div class="error-box hidden" id="submit-error"></div>
+
     <button class="btn navy" id="submit-btn" onclick="submitTask()">Сдать ответ</button>
   </div>
 
@@ -233,6 +239,55 @@
     document.getElementById('lbl-devMin-mm').textContent = L.devMin + ' (мм)';
     document.getElementById('lbl-limMax').textContent = L.limMax + ' (мм)';
     document.getElementById('lbl-limMin').textContent = L.limMin + ' (мм)';
+
+    const methodEl = document.getElementById('methodology-box');
+    if (data.methodology && data.methodology.length) {
+      methodEl.innerHTML = '<strong>Как выполнять:</strong><ol style="margin:8px 0 0 18px; padding:0;">' +
+        data.methodology.map(s => `<li style="margin-bottom:4px;">${escapeHtml(s)}</li>`).join('') + '</ol>';
+      methodEl.classList.remove('hidden');
+    }
+
+    if (data.table) renderToleranceTable(data.table, L);
+  }
+
+  function renderToleranceTable(table, L) {
+    const box = document.getElementById('table-box');
+    let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+    html += '<thead><tr>';
+    html += '<th style="padding:6px 8px; border:1px solid #e5e5e5; background:#f4f4f4; text-align:left;">Размеры, мм</th>';
+    table.fieldNames.forEach(f => {
+      html += `<th colspan="2" style="padding:6px 8px; border:1px solid #e5e5e5; background:${f === table.highlightCol ? '#F07C00' : '#f4f4f4'}; color:${f === table.highlightCol ? '#fff' : '#2C3E50'}; text-align:center;">${escapeHtml(f)}</th>`;
+    });
+    html += '</tr><tr>';
+    html += '<th style="padding:4px 8px; border:1px solid #e5e5e5; background:#fafafa;"></th>';
+    table.fieldNames.forEach(f => {
+      const hi = f === table.highlightCol;
+      html += `<th style="padding:4px 6px; border:1px solid #e5e5e5; background:${hi ? '#fde4c4' : '#fafafa'}; font-weight:400; font-size:11px;">${L.devMax}</th><th style="padding:4px 6px; border:1px solid #e5e5e5; background:${hi ? '#fde4c4' : '#fafafa'}; font-weight:400; font-size:11px;">${L.devMin}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+    table.ranges.forEach((range, ri) => {
+      const rowHi = ri === table.highlightRow;
+      const label = ri === 0 ? `От ${range[0]} до ${range[1]}` : `Свыше ${range[0]} до ${range[1]}`;
+      html += `<tr style="${rowHi ? 'background:#fff3e6;' : ''}">`;
+      html += `<td style="padding:6px 8px; border:1px solid #e5e5e5; font-weight:${rowHi ? '700' : '400'};">${label}</td>`;
+      table.fieldNames.forEach(f => {
+        const cellHi = rowHi && f === table.highlightCol;
+        const vals = table.rows[f][ri];
+        const style = `padding:6px; border:1px solid #e5e5e5; text-align:center; ${cellHi ? 'background:#F07C00; color:#fff; font-weight:700;' : ''}`;
+        html += `<td style="${style}">${vals[0] > 0 ? '+' : ''}${vals[0]}</td><td style="${style}">${vals[1] > 0 ? '+' : ''}${vals[1]}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    box.innerHTML = html;
+  }
+
+  function toggleTable() {
+    const box = document.getElementById('table-box');
+    const btn = document.getElementById('table-toggle-btn');
+    const willShow = box.classList.contains('hidden');
+    box.classList.toggle('hidden', !willShow);
+    btn.textContent = willShow ? '📐 Скрыть таблицу допусков' : '📐 Показать таблицу допусков';
   }
 
   async function submitTask() {
