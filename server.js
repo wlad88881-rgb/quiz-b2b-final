@@ -2433,6 +2433,12 @@ async function seedToleranceTasks() {
   console.log(`[tolerance-tasks] Синхронизировано заданий по квалитетам: 1 (${SEED_TOLERANCE_TASK.variants.length} вариантов)`);
 }
 
+// ==================== АКТ ДЕФЕКТАЦИИ (тренажёры нового формата) ====================
+const defectModule = require('./defect-routes')({
+  app, db, io, checkAuth, safeGet, nanoid, participantId, QRCode, getBaseUrl,
+  joinLimiter, upload, trialBlockedForCompany, incrementSubmissions
+});
+
 // ==================== ГЛОБАЛЬНАЯ ОБРАБОТКА ОШИБОК ====================
 // Ловит любую ошибку, брошенную (или переданную через next(err)) внутри
 // обработчиков маршрутов, чтобы один сбойный запрос не ронял весь процесс.
@@ -2457,6 +2463,7 @@ async function start() {
   await seedDrawingTasks();
   await seedAnswerKeys();
   await seedToleranceTasks();
+  await defectModule.seed();
   server.listen(PORT, '0.0.0.0', () => {
     console.log('');
     console.log('=== Приложение для тестирования запущено ===');
