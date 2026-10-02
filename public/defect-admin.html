@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Акты дефектации — панель преподавателя</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#eef1f5;color:#1f2933;line-height:1.45}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:0}h2{font-size:18px;margin:0 0 10px}
+.top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px}
+.card{background:#fff;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.12);padding:16px;margin-bottom:14px}
+button,.btn{font:inherit;font-size:14px;cursor:pointer;border:0;border-radius:6px;padding:8px 14px;background:#2563eb;color:#fff;text-decoration:none;display:inline-block}
+button.sec,.btn.sec{background:#e3e8ef;color:#1f2933}button.red{background:#dc2626}button.green{background:#16a34a}
+input,select,textarea{font:inherit;padding:8px;border:1px solid #b7c0cc;border-radius:6px;width:100%}
+textarea{min-height:60px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.set{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid #dde3ea;border-radius:8px;padding:10px 12px;margin-bottom:8px}
+.badge{font-size:12px;padding:2px 8px;border-radius:10px;background:#e0e7ff;color:#3730a3}.badge.m{background:#dcfce7;color:#166534}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{border:1px solid #dde3ea;padding:6px 8px;text-align:left;vertical-align:top}th{background:#f3f5f8}
+img.th{width:90px;border:1px solid #cbd2db;border-radius:4px;background:#fff}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:14px;z-index:10}
+.modal .box{background:#fff;border-radius:10px;padding:18px;max-width:560px;width:100%;max-height:90vh;overflow:auto}
+.err{color:#b42318;white-space:pre-wrap;font-size:14px}.ok{color:#166534}.muted{color:#667085;font-size:13px}
+.hidden{display:none}
+details{border:1px solid #dde3ea;border-radius:6px;padding:6px 10px;margin:6px 0}
+summary{cursor:pointer;font-weight:bold}
+.good{color:#166534;font-weight:bold}.bad{color:#b42318;font-weight:bold}
+.refbox{background:#fff8e1;border-left:4px solid #f59e0b;padding:6px 10px;margin:6px 0;font-size:14px}
+.ans{background:#f7f9fc;padding:6px 10px;border-radius:6px;margin:4px 0;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<script>
+const $ = document.getElementById.bind(document), app = $('app');
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let TOKEN = localStorage.getItem('defect_token') || '', sets = [], currentSet = null, watchCode = null, socket = null;
+
+async function api(url, opts = {}) {
+  opts.headers = Object.assign({ 'x-company-id': TOKEN }, opts.headers || {});
+  const r = await fetch(url, opts);
+  if (opts.raw) return r;
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.message || j.error || 'Ошибка'); e.status = r.status; e.data = j; throw e; }
+  return j;
+}
+const jpost = (url, body, method = 'POST') => api(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+async function download(url, name) {
+  const r = await api(url, { raw: true });
+  if (!r.ok) return alert('Не удалось скачать файл');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = name; a.click();
+}
+
+// ---------- авторизация: ищем токен основной панели, иначе просим войти ----------
+async function tryTokens() {
+  const cands = [TOKEN];
+  for (let i = 0; i < localStorage.length; i++) {
+    const v = localStorage.getItem(localStorage.key(i));
+    if (v && /^[\w-]{20,}\.[\w-]{20,}$/.test(v)) cands.push(v);
+    else if (v && v.length < 4000 && v.includes('"token"')) { try { const o = JSON.parse(v); if (o.token) cands.push(o.token); } catch (e) {} }
+  }
+  for (const t of cands) {
+    if (!t) continue;
+    const r = await fetch('/api/defect-sets', { headers: { 'x-company-id': t } });
+    if (r.ok) { TOKEN = t; localStorage.setItem('defect_token', t); return true; }
+  }
+  return false;
+}
+function loginForm(msg) {
+  app.innerHTML = `<div class="card" style="max-width:400px;margin:40px auto"><h2>Вход преподавателя</h2>
+    <p class="muted">Те же почта и пароль, что и в основной панели.</p>
+    <p><input id="em" type="text" placeholder="Почта"></p><p><input id="pw" type="password" placeholder="Пароль"></p>
+    <div class="err">${esc(msg || '')}</div><button id="lg">Войти</button></div>`;
+  $('lg').onclick = async () => {
+    try { const r = await jpost('/api/login', { email: $('em').value, password: $('pw').value }); TOKEN = r.token; localStorage.setItem('defect_token', TOKEN); start(); }
+    catch (e) { loginForm(e.message); }
+  };
+}
+
+// ---------- главный экран ----------
+async function start() {
+  if (!(await tryTokens())) return loginForm();
+  sets = await api('/api/defect-sets');
+  const sess = await api('/api/defect-sessions');
+  app.innerHTML = `<div class="top"><h1>Акты дефектации — тренажёры</h1>
+    <div class="row"><button class="sec" id="tpl">Шаблон Excel</button><button id="imp">Загрузить из Excel</button><a class="btn sec" href="/">← Основная панель</a></div></div>
+    <div class="card"><h2>Комплекты тренажёров</h2><div id="sets"></div></div>
+    <div id="detail"></div>
+    <div class="card"><h2>Сессии и результаты</h2><div id="sess"></div></div><div id="sview"></div>`;
+  $('tpl').onclick = () => download('/api/defect-template', 'shablon_trenazhery.xlsx');
+  $('imp').onclick = importDialog;
+  $('sets').innerHTML = sets.map(s => `<div class="set"><div><b>${esc(s.title)}</b> <span class="badge ${s.shared ? '' : 'm'}">${s.shared ? 'общий' : 'мой'}</span><div class="muted">Тренажёров: ${s.taskCount}</div></div>
+    <div class="row"><button class="sec" data-a="open" data-id="${s.id}">Открыть</button><button class="sec" data-a="exp" data-id="${s.id}">Выгрузить Excel</button>
+    ${s.shared ? `<button class="sec" data-a="clone" data-id="${s.id}">Копировать в мои</button>` : `<button class="red" data-a="del" data-id="${s.id}">Удалить</button>`}
+    <button class="green" data-a="sess" data-id="${s.id}">Создать сессию</button></div></div>`).join('') || '<p class="muted">Комплектов нет</p>';
+  $('sets').onclick = async e => {
+    const b = e.target.closest('button'); if (!b) return; const id = b.dataset.id;
+    if (b.dataset.a === 'open') openSet(id);
+    if (b.dataset.a === 'exp') download(`/api/defect-sets/${id}/export`, 'trenazhery.xlsx');
+    if (b.dataset.a === 'clone') { await jpost(`/api/defect-sets/${id}/clone`); start(); }
+    if (b.dataset.a === 'del' && confirm('Удалить комплект вместе с его сессиями?')) { await api(`/api/defect-sets/${id}`, { method: 'DELETE' }); start(); }
+    if (b.dataset.a === 'sess') newSession(id);
+  };
+  $('sess').innerHTML = sess.length ? `<table><tr><th>Код</th><th>Комплект</th><th>Начата</th><th>Участников</th><th>Сдали</th><th>Статус</th><th></th></tr>${sess.map(s =>
+    `<tr><td><b>${s.code}</b></td><td>${esc(s.title)}</td><td>${new Date(s.startedAt).toLocaleString('ru-RU')}</td><td>${s.participants}</td><td>${s.finished}</td><td>${s.ended ? 'завершена' : 'идёт'}</td><td><button data-code="${s.code}">Открыть</button></td></tr>`).join('')}</table>` : '<p class="muted">Сессий пока нет</p>';
+  $('sess').onclick = e => { const b = e.target.closest('button[data-code]'); if (b) openSession(b.dataset.code); };
+  if (currentSet) openSet(currentSet);
+}
+
+// ---------- комплект ----------
+async function openSet(id) {
+  currentSet = id;
+  const s = await api(`/api/defect-sets/${id}`);
+  const own = !s.shared;
+  $('detail').innerHTML = `<div class="card"><h2>${esc(s.title)}</h2><p class="muted">${esc(s.intro || '')}</p>
+    ${own ? '' : '<p class="muted">Общий комплект доступен только для просмотра. Чтобы менять тренажёры (Excel) и загружать свои фото, нажмите «Копировать в мои».</p>'}
+    <table><tr><th>№</th><th>Схема / фото</th><th>Тренажёр</th><th>Диагноз (верный)</th><th>Причина (верная)</th><th></th></tr>${s.tasks.map((t, i) => {
+      const cor = (q) => q ? esc((q.options.find(o => o.id === q.correct) || {}).text) : '—';
+      return `<tr><td>${i + 1}</td><td>${t.schemeUrl ? `<img class="th" src="${esc(t.schemeUrl)}">` : '—'}</td>
+      <td><b>${esc(t.title)}</b><div class="muted">${esc(t.node)} · ${esc(t.vibration.value)} · ${esc(t.temp.value)} · звук: ${esc(t.sound.type)}</div>
+        <details><summary>Эталон описания и пояснение</summary><div class="refbox"><b>Эталон:</b> ${esc(t.reference) || '—'}</div><div class="ans">${esc(t.explain)}</div></details></td>
+      <td>${cor(t.diag)}</td><td>${cor(t.cause)}</td>
+      <td>${own ? `<button class="sec" data-img="${t.id}">Фото/схема</button>${t.hasImage ? ` <button class="red" data-delimg="${t.id}">✕</button>` : ''}` : ''}</td></tr>`;
+    }).join('')}</table>
+    <input type="file" id="imgf" accept="image/*" class="hidden"></div>`;
+  $('detail').onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.img) { $('imgf').onchange = () => uploadImage(id, b.dataset.img); $('imgf').click(); }
+    if (b.dataset.delimg) jpost(`/api/defect-sets/${id}/tasks/${b.dataset.delimg}/image`, { image: null }, 'PUT').then(() => openSet(id));
+  };
+  $('detail').scrollIntoView({ behavior: 'smooth' });
+}
+function compress(file) {
+  return new Promise((res, rej) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => { const k = Math.min(1, 900 / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = img.width * k; c.height = img.height * k;
+      const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', 0.8)); };
+    img.onerror = () => rej(new Error('Не удалось прочитать изображение')); img.src = url;
+  });
+}
+async function uploadImage(setId, tid) {
+  const f = $('imgf').files[0]; if (!f) return;
+  try { await jpost(`/api/defect-sets/${setId}/tasks/${tid}/image`, { image: await compress(f) }, 'PUT'); openSet(setId); } catch (e) { alert(e.message); }
+  $('imgf').value = '';
+}
+
+// ---------- импорт Excel ----------
+function importDialog() {
+  const own = sets.filter(s => !s.shared);
+  const m = document.createElement('div'); m.className = 'modal';
+  m.innerHTML = `<div class="box"><h2>Загрузка из Excel</h2>
+    <p><input type="file" id="xf" accept=".xlsx,.xls"></p>
+    <p><select id="md"><option value="new">Создать новый комплект</option>${own.length ? '<option value="append">Добавить в существующий (тот же ID — заменится)</option><option value="replace">Заменить содержимое существующего</option>' : ''}</select></p>
+    <p id="sw" class="hidden"><select id="ss">${own.map(s => `<option value="${s.id}">${esc(s.title)}</option>`).join('')}</select></p>
+    <div id="msg" class="err"></div><div class="row"><button id="ok">Загрузить</button><button class="sec" id="cl">Отмена</button></div></div>`;
+  document.body.appendChild(m);
+  $('md').onchange = () => $('sw').classList.toggle('hidden', $('md').value === 'new');
+  $('cl').onclick = () => m.remove();
+  $('ok').onclick = async () => {
+    const f = $('xf').files[0]; if (!f) { $('msg').textContent = 'Выберите файл'; return; }
+    const fd = new FormData(); fd.append('file', f); fd.append('mode', $('md').value); if ($('md').value !== 'new') fd.append('setId', $('ss').value);
+    const r = await api('/api/defect-sets/import', { method: 'POST', body: fd, raw: true });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { $('msg').textContent = (j.error || 'Ошибка') + (j.errors ? '\n' + j.errors.join('\n') : ''); return; }
+    m.remove(); currentSet = j.setId; start();
+  };
+}
+
+// ---------- сессии ----------
+async function newSession(setId) {
+  const when = prompt('Время начала (оставьте пустым — начать сразу). Формат: 2026-10-05 09:30', '');
+  const body = { setId };
+  if (when && when.trim()) { const ts = new Date(when.replace(' ', 'T')).getTime(); if (isNaN(ts)) return alert('Неверный формат даты'); body.scheduledAt = ts; }
+  try { const r = await jpost('/api/defect-sessions', body); await start(); openSession(r.session.code); } catch (e) { alert(e.message); }
+}
+
+async function openSession(code) {
+  watchCode = code;
+  const v = await api(`/api/defect-sessions/${code}`);
+  const s = v.session, refs = {};
+  (v.set ? v.set.tasks : []).forEach((t, i) => { refs[i] = t.reference; });
+  const parts = Object.values(s.participants);
+  $('sview').innerHTML = `<div class="card"><div class="top"><h2 style="margin:0">Сессия ${code}: ${esc(s.testTitle)}</h2>
+    <div class="row">${s.scheduledAt ? '<button class="sec" id="now">Начать сейчас</button>' : ''}<button class="sec" id="exs">Результаты в Excel</button>${s.ended ? '' : '<button class="red" id="end">Завершить</button>'}</div></div>
+    <div class="row" style="align-items:flex-start"><img src="${v.qrDataUrl}" width="170"><div><p>Ссылка для учеников:<br><b>${esc(v.url)}</b></p>
+    <p class="muted">${s.ended ? 'Сессия завершена' : 'Идёт'}${s.scheduledAt ? ' · старт ' + new Date(s.scheduledAt).toLocaleString('ru-RU') : ''}</p></div></div>
+    <h2 style="margin-top:14px">Участники (${parts.length})</h2><div id="parts"></div></div>`;
+  $('exs').onclick = () => download(`/api/defect-sessions/${code}/export`, `defect_${code}.xlsx`);
+  if ($('end')) $('end').onclick = async () => { if (confirm('Завершить сессию?')) { await jpost(`/api/defect-sessions/${code}/end`); openSession(code); } };
+  if ($('now')) $('now').onclick = async () => { await jpost(`/api/defect-sessions/${code}/start-now`); openSession(code); };
+  $('parts').innerHTML = parts.map(p => {
+    const rv = p.review || [];
+    const head = `<b>${esc(p.name)}</b> — ${p.finished ? `выбор: ${p.score}/${p.total}${p.graded ? `, описания: ${p.manualScore}/${rv.length}` : ', <span class="bad">ждёт проверки</span>'}` : 'в процессе'}`;
+    if (!p.finished) return `<details><summary>${head}</summary></details>`;
+    return `<details data-pid="${p.id}"><summary>${head}</summary>${rv.map((it, i) => `
+      <div style="border-top:1px solid #eee;padding:6px 0"><b>№${i + 1}. ${esc(it.title)}</b><br>
+      Диагноз: <span class="${it.diag.ok ? 'good' : 'bad'}">${esc(it.diag.givenText || '—')}</span>${it.diag.ok ? '' : ` (верно: ${esc(it.diag.correctText)})`}<br>
+      ${it.cause ? `Причина: <span class="${it.cause.ok ? 'good' : 'bad'}">${esc(it.cause.givenText || '—')}</span>${it.cause.ok ? '' : ` (верно: ${esc(it.cause.correctText)})`}<br>` : ''}
+      Описание:<div class="ans">${esc(it.desc) || '—'}</div>Действия:<div class="ans">${esc(it.actions) || '—'}</div>
+      <div class="refbox"><b>Эталон:</b> ${esc(refs[i] || '—')}</div>
+      <label><input type="radio" name="g_${p.id}_${i}" value="1" ${it.textGrade === true ? 'checked' : ''}> зачёт</label>
+      <label><input type="radio" name="g_${p.id}_${i}" value="0" ${it.textGrade === false ? 'checked' : ''}> незачёт</label></div>`).join('')}
+      <textarea placeholder="Комментарий ученику" data-c="${p.id}">${esc(p.gradeComment || '')}</textarea>
+      <p><button data-save="${p.id}">Сохранить оценку</button></p></details>`;
+  }).join('') || '<p class="muted">Пока никто не присоединился</p>';
+  $('parts').onclick = async e => {
+    const b = e.target.closest('button[data-save]'); if (!b) return;
+    const pid = b.dataset.save, p = s.participants[pid];
+    const grades = (p.review || []).map((_, i) => { const r = document.querySelector(`input[name="g_${pid}_${i}"]:checked`); return r ? r.value === '1' : null; });
+    await jpost(`/api/defect-sessions/${code}/grade`, { participantId: pid, textGrades: grades, comment: document.querySelector(`textarea[data-c="${pid}"]`).value });
+    const open = [...document.querySelectorAll('#parts details[open]')].map(d => d.dataset.pid);
+    await openSession(code); open.forEach(id => { const d = document.querySelector(`#parts details[data-pid="${id}"]`); if (d) d.open = true; });
+  };
+  if (!socket && window.io) {
+    socket = io();
+    const refresh = () => { if (watchCode) { clearTimeout(refresh.t); refresh.t = setTimeout(() => { if (!document.querySelector('#parts textarea:focus')) openSessionKeepOpen(watchCode); }, 600); } };
+    socket.on('participant:joined', refresh); socket.on('participant:finished', refresh);
+  }
+  if (socket) socket.emit('teacher:watch', code);
+}
+async function openSessionKeepOpen(code) {
+  const open = [...document.querySelectorAll('#parts details[open]')].map(d => d.dataset.pid);
+  await openSession(code); open.forEach(id => { const d = document.querySelector(`#parts details[data-pid="${id}"]`); if (d) d.open = true; });
+}
+start();
+</script>
+<script src="/socket.io/socket.io.js"></script>
+</body>
+</html>
