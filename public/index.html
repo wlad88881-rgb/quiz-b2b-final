@@ -180,6 +180,7 @@
         </div>
         <h2 style="font-size:18px; margin-bottom:12px;">Мои тесты</h2>
         <div id="tests-list"></div>
+        <div id="history-test"></div>
       </div>
       <div id="tab-labs" class="hidden">
         <div class="row" style="margin-bottom:16px;">
@@ -187,6 +188,7 @@
         </div>
         <h2 style="font-size:18px; margin-bottom:12px;">Мои тренажёры</h2>
         <div id="labs-list"></div>
+        <div id="history-lab"></div>
       </div>
       <div id="tab-drawing" class="hidden">
         <div class="row" style="margin-bottom:16px;">
@@ -194,11 +196,13 @@
         </div>
         <h2 style="font-size:18px; margin-bottom:12px;">Задания по чертежам</h2>
         <div id="drawing-list"></div>
+        <div id="history-drawing"></div>
       </div>
       <div id="tab-tolerance" class="hidden">
         <h2 style="font-size:18px; margin-bottom:12px;">Задания по квалитетам</h2>
         <div class="muted" style="margin-bottom:14px; font-size:13.5px; line-height:1.5;">Каждый ученик, подключившись по одному QR, получает свой вариант по очереди — правильный ответ считается автоматически по таблице допусков ГОСТ 25347-82, проверка не нужна.</div>
         <div id="tolerance-list"></div>
+        <div id="history-tolerance"></div>
       </div>
       <div id="tab-stats" class="hidden">
         <h2 style="font-size:18px; margin-bottom:12px;">Статистика по тестам</h2>
@@ -486,6 +490,7 @@
   }
 
   async function loadTestsList() {
+    loadSessionHistory('test', 'history-test');
     const res = await authFetch('/api/tests');
     if (!res.ok) return;
     const tests = await res.json();
@@ -517,9 +522,9 @@
     document.getElementById('tab-drawing').classList.toggle('hidden', tab !== 'drawing');
     document.getElementById('tab-tolerance').classList.toggle('hidden', tab !== 'tolerance');
     document.getElementById('tab-stats').classList.toggle('hidden', tab !== 'stats');
-    if (tab === 'labs') loadLabsList();
-    if (tab === 'drawing') loadDrawingList();
-    if (tab === 'tolerance') loadToleranceList();
+    if (tab === 'labs') { loadLabsList(); loadSessionHistory('lab', 'history-lab'); }
+    if (tab === 'drawing') { loadDrawingList(); loadSessionHistory('drawing', 'history-drawing'); }
+    if (tab === 'tolerance') { loadToleranceList(); loadSessionHistory('tolerance', 'history-tolerance'); }
     if (tab === 'stats') showStatsList();
   }
 
@@ -926,7 +931,7 @@
         if (cell) cell.innerHTML = tabSwitchCellHtml({ id: evt.participantId, tabSwitchCount: undefined, tabSwitchTotalMs: undefined, tabSwitchLongCount: undefined });
       }
     });
-    socket.on('connect', () => { if (currentSessionCode) socket.emit('teacher:watch', currentSessionCode); });
+    socket.on('connect', () => { if (currentSessionCode) { socket.emit('teacher:watch', currentSessionCode); syncParticipants(); } });
     return socket;
   }
 
@@ -1024,6 +1029,7 @@
 
     const s = ensureSocket();
     s.emit('teacher:watch', currentSessionCode);
+    syncParticipants();
   }
 
   function updateScheduledBanner(scheduledAt) {
@@ -1058,6 +1064,55 @@
   function deleteTest(id) {
     if (!confirm('Удалить тест?')) return;
     authFetch('/api/tests/' + id, { method: 'DELETE' }).then(() => loadTestsList());
+  }
+
+  // Подтягивает актуальных участников с сервера: live-события по сокету могут быть пропущены
+  // (обновление страницы, «засыпание» бесплатного Render, обрыв связи).
+  async function syncParticipants() {
+    const code = currentSessionCode;
+    if (!code) return;
+    try {
+      const res = await authFetch('/api/my-sessions/' + encodeURIComponent(code));
+      if (!res.ok || code !== currentSessionCode) return;
+      const { session } = await res.json();
+      Object.values(session.participants || {}).forEach(p => upsertParticipantRow(p));
+      if (session.ended) {
+        document.getElementById('session-status').textContent = 'Завершено';
+        document.getElementById('session-status').classList.remove('live');
+        document.getElementById('end-session-btn').disabled = true;
+      }
+    } catch (e) { /* следующий тик попробует снова */ }
+  }
+  setInterval(() => {
+    const screen = document.getElementById('screen-session');
+    if (currentSessionCode && screen && !screen.classList.contains('hidden')) syncParticipants();
+  }, 8000);
+
+  async function openExistingSession(code) {
+    const res = await authFetch('/api/my-sessions/' + encodeURIComponent(code));
+    if (!res.ok) { alert('Не удалось открыть сессию'); return; }
+    const data = await res.json();
+    currentSessionType = data.session.type || 'test';
+    openSession(data.session, data.url, data.qrDataUrl);
+  }
+
+  const SESSION_TYPE_LABELS = { test: 'Тест', lab: 'Тренажёр', drawing: 'Чертежи', tolerance: 'Квалитеты' };
+
+  async function loadSessionHistory(type, containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    const res = await authFetch('/api/my-sessions');
+    if (!res.ok) return;
+    const list = (await res.json()).filter(s => s.type === type);
+    if (list.length === 0) { container.innerHTML = ''; return; }
+    container.innerHTML = '<h2 style="font-size:18px; margin:24px 0 12px;">Прошедшие сессии</h2>' + list.map(s => `
+      <div class="card row between">
+        <div>
+          <strong>${escapeHtml(s.title || '')}</strong>
+          <div class="muted">${new Date(s.startedAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · код ${escapeHtml(s.code)} · сдали ${s.finished} из ${s.participants}${s.ended ? ' · завершена' : ''}</div>
+        </div>
+        <button class="btn outline small" onclick="openExistingSession('${s.code}')">Открыть</button>
+      </div>`).join('');
   }
 
   async function endSession() {

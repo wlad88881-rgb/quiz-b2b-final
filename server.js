@@ -14,7 +14,7 @@ const db = require('./db');
 const { SEED_LABS } = require('./labs-content');
 const { SEED_DRAWING_TASKS } = require('./drawing-content');
 const { SEED_ANSWER_KEYS } = require('./drawing-answer-keys-content');
-const { computeAnswer: computeToleranceAnswer, SEED_TOLERANCE_TASK } = require('./tolerance-content');
+const { computeAnswer: computeToleranceAnswer, SEED_TOLERANCE_TASK, RANGES: TOLERANCE_RANGES, HOLE_FIELDS, SHAFT_FIELDS, rangeIndex: toleranceRangeIndex } = require('./tolerance-content');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -63,7 +63,6 @@ if (!process.env.SESSION_SECRET) {
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(express.json({ limit: '3mb' }));
-app.get(['/', '/index.html'], require('./defect-inject')); // вкладка «Акты дефектации» в панели
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Ограничение частоты запросов на чувствительные маршруты (защита от подбора паролей и злоупотреблений)
@@ -1982,6 +1981,46 @@ app.get('/api/drawing-sessions/:code/export', checkAuth, (req, res) => {
   res.send(buf);
 });
 
+// ==================== СЕССИИ КОМПАНИИ (история и повторное открытие) ====================
+// Панель преподавателя раньше получала участников только live по сокету — после
+// обновления страницы или перезапуска сервера таблица оставалась пустой. Эти два маршрута
+// позволяют подтянуть актуальное состояние с сервера и вернуться в любую прошлую сессию.
+
+function sessionPathPrefix(type) {
+  return type === 'lab' ? 'l' : type === 'drawing' ? 'd' : type === 'tolerance' ? 'k' : 's';
+}
+
+app.get('/api/my-sessions', checkAuth, (req, res) => {
+  const data = db.load();
+  const list = Object.values(data.sessions)
+    .filter(s => s.companyId === req.companyId)
+    .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))
+    .slice(0, 100)
+    .map(s => {
+      const parts = Object.values(s.participants || {});
+      return {
+        code: s.code,
+        type: s.type || 'test',
+        title: s.testTitle,
+        startedAt: s.startedAt,
+        ended: !!s.ended,
+        participants: parts.length,
+        finished: parts.filter(p => p.finished).length
+      };
+    });
+  res.json(list);
+});
+
+app.get('/api/my-sessions/:code', checkAuth, async (req, res) => {
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.companyId !== req.companyId) return res.status(404).json({ error: 'Сессия не найдена' });
+  const url = `${getBaseUrl()}/${sessionPathPrefix(session.type)}/${session.code}`;
+  let qrDataUrl = '';
+  try { qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 }); } catch (e) {}
+  res.json({ session, url, qrDataUrl });
+});
+
 // ==================== КВАЛИТЕТЫ (расчёт допусков, автопроверка) ====================
 // В отличие от чертежей и тренажёров, здесь правильный ответ вычисляется по формуле
 // (см. tolerance-content.js), поэтому проверка полностью автоматическая. Раздача
@@ -2117,12 +2156,21 @@ app.post('/api/tolerance-sessions/:code/join', joinLimiter, async (req, res) => 
   });
   io.to('session:' + req.params.code).emit('participant:joined', session.participants[pid] || { id: pid, name: name.trim() });
   const labels = fieldLabels(variant.kind);
+  const fieldsTable = variant.kind === 'hole' ? HOLE_FIELDS : SHAFT_FIELDS;
   res.json({
     participantId: pid,
     testTitle: task.title,
     intro: task.intro,
+    methodology: task.methodology || [],
     variant: { kind: variant.kind, typeName: labels.typeName, nominal: variant.nominal, field: variant.field },
-    labels
+    labels,
+    table: {
+      ranges: TOLERANCE_RANGES,
+      fieldNames: Object.keys(fieldsTable),
+      rows: Object.keys(fieldsTable).reduce((acc, f) => { acc[f] = fieldsTable[f]; return acc; }, {}),
+      highlightRow: toleranceRangeIndex(variant.nominal),
+      highlightCol: variant.field
+    }
   });
 });
 
@@ -2425,12 +2473,6 @@ async function seedToleranceTasks() {
   console.log(`[tolerance-tasks] Синхронизировано заданий по квалитетам: 1 (${SEED_TOLERANCE_TASK.variants.length} вариантов)`);
 }
 
-// ==================== АКТ ДЕФЕКТАЦИИ (тренажёры нового формата) ====================
-const defectModule = require('./defect-routes')({
-  app, db, io, checkAuth, safeGet, nanoid, participantId, QRCode, getBaseUrl,
-  joinLimiter, upload, trialBlockedForCompany, incrementSubmissions
-});
-
 // ==================== ГЛОБАЛЬНАЯ ОБРАБОТКА ОШИБОК ====================
 // Ловит любую ошибку, брошенную (или переданную через next(err)) внутри
 // обработчиков маршрутов, чтобы один сбойный запрос не ронял весь процесс.
@@ -2455,7 +2497,6 @@ async function start() {
   await seedDrawingTasks();
   await seedAnswerKeys();
   await seedToleranceTasks();
-  await defectModule.seed();
   server.listen(PORT, '0.0.0.0', () => {
     console.log('');
     console.log('=== Приложение для тестирования запущено ===');
