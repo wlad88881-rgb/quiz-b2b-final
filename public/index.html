@@ -1088,6 +1088,15 @@
     if (currentSessionCode && screen && !screen.classList.contains('hidden')) syncParticipants();
   }, 8000);
 
+  async function deleteSessions(codes, type, containerId, message) {
+    if (!confirm(message)) return;
+    const res = await authFetch('/api/my-sessions/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ codes })
+    });
+    if (!res.ok) { alert('Не удалось удалить'); return; }
+    loadSessionHistory(type, containerId);
+  }
+
   async function openExistingSession(code) {
     const res = await authFetch('/api/my-sessions/' + encodeURIComponent(code));
     if (!res.ok) { alert('Не удалось открыть сессию'); return; }
@@ -1105,13 +1114,20 @@
     if (!res.ok) return;
     const list = (await res.json()).filter(s => s.type === type);
     if (list.length === 0) { container.innerHTML = ''; return; }
-    container.innerHTML = '<h2 style="font-size:18px; margin:24px 0 12px;">Прошедшие сессии</h2>' + list.map(s => `
+    const endedCodes = list.filter(s => s.ended).map(s => s.code);
+    container.innerHTML = `<div class="row between" style="margin:24px 0 12px;">
+        <h2 style="font-size:18px; margin:0;">Прошедшие сессии</h2>
+        ${endedCodes.length ? `<button class="btn danger small" onclick='deleteSessions(${JSON.stringify(endedCodes)}, "${type}", "${containerId}", "Удалить все завершённые сессии (${endedCodes.length})? Ответы участников будут стёрты.")'>Удалить завершённые</button>` : ''}
+      </div>` + list.map(s => `
       <div class="card row between">
         <div>
           <strong>${escapeHtml(s.title || '')}</strong>
           <div class="muted">${new Date(s.startedAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · код ${escapeHtml(s.code)} · сдали ${s.finished} из ${s.participants}${s.ended ? ' · завершена' : ''}</div>
         </div>
-        <button class="btn outline small" onclick="openExistingSession('${s.code}')">Открыть</button>
+        <div class="row">
+          <button class="btn outline small" onclick="openExistingSession('${s.code}')">Открыть</button>
+          <button class="btn danger small" onclick="deleteSessions(['${s.code}'], '${type}', '${containerId}', 'Удалить эту сессию вместе с ответами участников?')">Удалить</button>
+        </div>
       </div>`).join('');
   }
 

@@ -2021,6 +2021,20 @@ app.get('/api/my-sessions/:code', checkAuth, async (req, res) => {
   res.json({ session, url, qrDataUrl });
 });
 
+// Удаление прошедших сессий (вместе с ответами участников). Только свои сессии компании.
+app.post('/api/my-sessions/delete', checkAuth, async (req, res) => {
+  const codes = Array.isArray(req.body.codes) ? req.body.codes.filter(c => typeof c === 'string').slice(0, 200) : [];
+  let deleted = 0;
+  await db.update((d) => {
+    codes.forEach(code => {
+      const s = safeGet(d.sessions, code);
+      if (s && s.companyId === req.companyId) { delete d.sessions[code]; deleted++; }
+    });
+  });
+  codes.forEach(code => io.to('session:' + code).emit('session:ended'));
+  res.json({ ok: true, deleted });
+});
+
 // ==================== КВАЛИТЕТЫ (расчёт допусков, автопроверка) ====================
 // В отличие от чертежей и тренажёров, здесь правильный ответ вычисляется по формуле
 // (см. tolerance-content.js), поэтому проверка полностью автоматическая. Раздача
