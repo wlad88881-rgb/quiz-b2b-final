@@ -32,6 +32,10 @@
   .q-block { margin-bottom: 16px; }
   .q-num { font-size: 12px; color: var(--orange); font-weight: 700; margin-bottom: 4px; letter-spacing: 0.3px; }
 
+  .sec-title { font-size: 16px; font-weight: 700; color: #fff; background: var(--navy); border-radius: 10px; padding: 10px 14px; margin: 22px 0 10px; }
+  .sec-text { font-size: 14px; color: var(--navy); background: #eef4fb; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; line-height: 1.5; white-space: pre-wrap; }
+  .q-hint { font-size: 13px; color: #555; background: #fff8ec; border-left: 3px solid var(--orange); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; line-height: 1.5; white-space: pre-wrap; }
+  .q-img { max-width: 100%; border: 1px solid #eee; border-radius: 10px; margin-bottom: 8px; }
   .center { text-align: center; }
   .spinner { width: 34px; height: 34px; border: 3px solid #eee; border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 30px auto; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -67,6 +71,7 @@
     <h1 id="form-title"></h1>
     <div class="sub" id="form-intro"></div>
     <div id="questions-container"></div>
+    <div class="info-box hidden" id="form-outro" style="white-space:pre-wrap;"></div>
     <div class="error-box hidden" id="submit-error"></div>
     <button class="btn navy" id="submit-btn" onclick="submitTask()">Сдать бланк</button>
   </div>
@@ -192,6 +197,7 @@
       }
       state.participantId = data.participantId;
       state.questions = data.questions;
+      state.outro = data.outro || '';
       document.getElementById('form-title').textContent = data.testTitle;
       document.getElementById('form-intro').textContent = data.intro || '';
       renderForm();
@@ -206,7 +212,21 @@
   function renderForm() {
     const container = document.getElementById('questions-container');
     container.innerHTML = '';
+    let lastSection = '';
     state.questions.forEach((q, i) => {
+      if (q.section && q.section !== lastSection) {
+        const h = document.createElement('div');
+        h.className = 'sec-title';
+        h.textContent = q.section;
+        container.appendChild(h);
+        if (q.sectionText) {
+          const t = document.createElement('div');
+          t.className = 'sec-text';
+          t.textContent = q.sectionText;
+          container.appendChild(t);
+        }
+        lastSection = q.section;
+      }
       const block = document.createElement('div');
       block.className = 'q-block';
       block.innerHTML = `
@@ -214,9 +234,26 @@
         <label class="field-label" for="ans-${i}"></label>
         <textarea id="ans-${i}" rows="2" placeholder="Ваш ответ"></textarea>
       `;
-      block.querySelector('.field-label').textContent = q.text;
+      const label = block.querySelector('.field-label');
+      label.textContent = q.text;
+      if (q.hint) {
+        const hint = document.createElement('div');
+        hint.className = 'q-hint';
+        hint.textContent = q.hint;
+        label.insertAdjacentElement('afterend', hint);
+      }
+      if (q.imageUrl) {
+        const img = document.createElement('img');
+        img.className = 'q-img';
+        img.src = q.imageUrl;
+        img.alt = 'Схема к пункту ' + (i + 1);
+        block.querySelector('textarea').insertAdjacentElement('beforebegin', img);
+      }
       container.appendChild(block);
     });
+    const outro = document.getElementById('form-outro');
+    outro.textContent = state.outro || '';
+    outro.classList.toggle('hidden', !state.outro);
   }
 
   async function submitTask() {

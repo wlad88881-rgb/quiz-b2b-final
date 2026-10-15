@@ -1627,6 +1627,26 @@ function resolveKeyAnswers(taskQuestions, key) {
   });
 }
 
+// Поля пункта бланка, кроме текста и ключа: заголовок блока и его указание, порядок выполнения
+// (методика) конкретного пункта и необязательная схема (только из папки /img/ нашего сервера).
+function cleanDrawingQuestion(q, fallbackId) {
+  const img = typeof q.imageUrl === 'string' ? q.imageUrl.trim() : '';
+  const imageUrl = /^\/img\/[\w\-.\/]+$/.test(img) && !img.includes('..') ? img : '';
+  return {
+    id: q.id || fallbackId,
+    text: q.text.trim(),
+    correctAnswer: (q.correctAnswer || '').trim(),
+    section: (q.section || '').trim().slice(0, 200),
+    sectionText: (q.sectionText || '').trim().slice(0, 1000),
+    hint: (q.hint || '').trim().slice(0, 1500),
+    imageUrl
+  };
+}
+
+function studentQuestionView(q) {
+  return { id: q.id, text: q.text, section: q.section || '', sectionText: q.sectionText || '', hint: q.hint || '', imageUrl: q.imageUrl || '' };
+}
+
 function validateDrawingTaskPayload(body) {
   const { title, questions } = body;
   if (!title || !title.trim()) return 'Введите название задания';
@@ -1637,49 +1657,81 @@ function validateDrawingTaskPayload(body) {
   return null;
 }
 
+const DRAWING_IMPORT_HEADERS = [
+  'Пункт бланка (вопрос)',
+  'Правильный ответ (ключ, необязательно)',
+  'Блок (заголовок)',
+  'Указание к блоку',
+  'Порядок выполнения / методика пункта',
+  'Схема (путь /img/..., необязательно)'
+];
+
 app.get('/api/drawing-import-template', checkAuth, (req, res) => {
-  const headers = ['Пункт бланка (вопрос)', 'Правильный ответ (ключ, необязательно)'];
-  const rows = SEED_DRAWING_TASKS[0].questions.map(q => [q.text, '']);
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-  ws['!cols'] = [{ wch: 55 }, { wch: 45 }];
+  const rows = SEED_DRAWING_TASKS[0].questions.map(q => [q.text, '', '', '', '', '']);
+  const ws = XLSX.utils.aoa_to_sheet([DRAWING_IMPORT_HEADERS, ...rows]);
+  ws['!cols'] = [{ wch: 55 }, { wch: 40 }, { wch: 35 }, { wch: 45 }, { wch: 60 }, { wch: 30 }];
+  const info = XLSX.utils.aoa_to_sheet([
+    ['Название', ''],
+    ['Вступление (общее указание ученику)', ''],
+    ['Завершение (что сделать в конце работ)', '']
+  ]);
+  info['!cols'] = [{ wch: 40 }, { wch: 100 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Бланк');
+  XLSX.utils.book_append_sheet(wb, info, 'Описание');
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
   res.setHeader('Content-Disposition', 'attachment; filename="shablon_chertezh.xlsx"');
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.send(buf);
 });
 
-// Импорт из Excel: две колонки — текст пункта и (опционально) ключ ответа под конкретный
-// чертёж. Ничего не сохраняет сам — просто возвращает распознанные пункты, дальше
-// преподаватель проверяет их в редакторе задания и жмёт «Сохранить» как обычно.
+// Импорт из Excel. Лист 1 «Бланк»: A — пункт, B — ключ, C — заголовок блока, D — указание к блоку,
+// E — порядок выполнения пункта, F — схема. Блок указывают в первой строке блока: пустые ячейки C/D
+// ниже означают «тот же блок». Лист «Описание» (необязательно): название, вступление, завершение.
+// Ничего не сохраняет — возвращает распознанное в редактор, где преподаватель всё проверяет.
 app.post('/api/drawing-tasks/import', checkAuth, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
-  let rows;
+  let rows, infoRows = [];
   try {
     const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' });
+    if (wb.SheetNames[1]) infoRows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[1]], { header: 1, defval: '' });
   } catch (e) {
     return res.status(400).json({ error: 'Не удалось прочитать файл. Убедитесь, что это .xlsx или .xls' });
   }
   if (rows.length < 2) {
     return res.status(400).json({ error: 'В файле нет строк с вопросами под заголовком.' });
   }
+  const cell = (row, i) => String((row && row[i]) || '').trim();
   const questions = [];
   const skipped = [];
+  let curSection = '', curSectionText = '';
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     if (!row || row.every(c => String(c).trim() === '')) continue;
-    const text = String(row[0] || '').trim();
-    const correctAnswer = String(row[1] || '').trim();
+    const text = cell(row, 0);
     if (!text) { skipped.push({ row: i + 1, reason: 'пустой текст вопроса' }); continue; }
-    questions.push({ text, correctAnswer });
+    if (cell(row, 2)) { curSection = cell(row, 2); curSectionText = cell(row, 3); }
+    questions.push({
+      text,
+      correctAnswer: cell(row, 1),
+      section: curSection,
+      sectionText: curSectionText,
+      hint: cell(row, 4),
+      imageUrl: cell(row, 5)
+    });
   }
   if (questions.length === 0) {
     return res.status(400).json({ error: 'Не удалось распознать ни одного пункта. Проверьте формат файла (скачайте шаблон).', skipped });
   }
-  res.json({ questions, skipped });
+  const info = {};
+  infoRows.forEach(r => {
+    const k = cell(r, 0).toLowerCase();
+    if (k.startsWith('назван')) info.title = cell(r, 1);
+    else if (k.startsWith('вступ')) info.intro = cell(r, 1);
+    else if (k.startsWith('заверш')) info.outro = cell(r, 1);
+  });
+  res.json({ questions, skipped, title: info.title || '', intro: info.intro || '', outro: info.outro || '' });
 });
 
 app.post('/api/drawing-tasks', checkAuth, async (req, res) => {
@@ -1692,11 +1744,8 @@ app.post('/api/drawing-tasks', checkAuth, async (req, res) => {
     shared: false,
     title: req.body.title.trim(),
     intro: (req.body.intro || '').trim(),
-    questions: req.body.questions.map((q, qi) => ({
-      id: q.id || ('q' + qi + '_' + id),
-      text: q.text.trim(),
-      correctAnswer: (q.correctAnswer || '').trim()
-    })),
+    outro: (req.body.outro || '').trim().slice(0, 1500),
+    questions: req.body.questions.map((q, qi) => cleanDrawingQuestion(q, 'q' + qi + '_' + id)),
     createdAt: Date.now(),
     custom: true
   };
@@ -1712,11 +1761,8 @@ app.put('/api/drawing-tasks/:id', checkAuth, async (req, res) => {
     if (!existing || existing.shared || existing.companyId !== req.companyId) return null;
     existing.title = req.body.title.trim();
     existing.intro = (req.body.intro || '').trim();
-    existing.questions = req.body.questions.map((q, qi) => ({
-      id: q.id || ('q' + qi + '_' + req.params.id),
-      text: q.text.trim(),
-      correctAnswer: (q.correctAnswer || '').trim()
-    }));
+    existing.outro = (req.body.outro || '').trim().slice(0, 1500);
+    existing.questions = req.body.questions.map((q, qi) => cleanDrawingQuestion(q, 'q' + qi + '_' + req.params.id));
     return existing;
   });
   if (!result) return res.status(404).json({ error: 'Задание не найдено' });
@@ -1815,7 +1861,8 @@ app.get('/api/drawing-sessions/:code/info', (req, res) => {
   res.json({
     testTitle: session.testTitle,
     intro: task ? task.intro : '',
-    questions: task ? task.questions.map(q => ({ id: q.id, text: q.text })) : [],
+    outro: task ? (task.outro || '') : '',
+    questions: task ? task.questions.map(studentQuestionView) : [],
     scheduledAt: session.scheduledAt || null
   });
 });
@@ -1856,7 +1903,8 @@ app.post('/api/drawing-sessions/:code/join', joinLimiter, async (req, res) => {
     participantId: pid,
     testTitle: task.title,
     intro: task.intro,
-    questions: task.questions.map(q => ({ id: q.id, text: q.text }))
+    outro: task.outro || '',
+    questions: task.questions.map(studentQuestionView)
   });
 });
 

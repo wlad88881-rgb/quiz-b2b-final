@@ -40,6 +40,13 @@
   .status-badge { display: inline-block; margin-top: 16px; padding: 8px 20px; border-radius: 20px; font-size: 15px; font-weight: 700; background: #3a4453; }
   .status-badge.scheduled { background: #3a3010; color: #f0c000; }
   .status-badge.ended { background: #3a1f22; color: #ff7373; }
+  @media (max-width: 700px) {
+    body { padding: 24px 12px; }
+    .qr-card { padding: 14px; border-radius: 18px; }
+    .qr-card img { width: min(76vw, 360px); height: min(76vw, 360px); }
+    .code-value { letter-spacing: 5px; }
+    .sub { margin-bottom: 20px; }
+  }
   .center { text-align: center; }
   .spinner { width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.2); border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
   @keyframes spin { to { transform: rotate(360deg); } }

@@ -120,7 +120,28 @@
     .option-row { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
     .option-row input[type="text"] { flex: 1; margin-bottom: 0; }
     .option-row input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; }
-  </style>
+  
+    /* ==== Мобильная версия панели (телефон на полигоне) ==== */
+    #qr-img { cursor: pointer; }
+    @media (max-width: 700px) {
+      body { padding: 8px; }
+      .app-wrapper { padding: 16px 12px; border-radius: 14px; }
+      .tabs { gap: 8px; flex-wrap: wrap; padding-bottom: 12px; }
+      .tab-btn { padding: 8px 12px; border-radius: 20px; background: var(--bg-card-alt); border: 1px solid var(--border); font-size: 14px; white-space: nowrap; }
+      .tab-btn.active { background: var(--orange); border-color: var(--orange); color: #fff; }
+      .tab-btn.active::after { display: none; }
+      .card { padding: 12px 12px; }
+      .card.row.between > div:first-child { flex: 1 1 100%; }
+      .btn { min-height: 42px; }
+      .btn.small { padding: 10px 14px; }
+      input, textarea, select { font-size: 16px !important; }
+      #qr-img { width: 150px; height: 150px; }
+      #results-table, #stats-sessions-table, #stats-questions-table { font-size: 12.5px; }
+      #results-table td, #results-table th { padding: 8px 5px; }
+      #results-table .btn.small { padding: 8px 10px; min-height: 36px; white-space: nowrap; }
+      .code-big { font-size: 28px; }
+    }
+</style>
 </head>
 <body>
 
@@ -271,7 +292,7 @@
             <div class="code-big" id="session-code"></div>
           </div>
           <div style="text-align:center;">
-            <img id="qr-img" src="" alt="QR">
+            <img id="qr-img" src="" alt="QR" title="Нажмите, чтобы показать на весь экран" onclick="openPresentView()">
             <div class="muted" style="font-size:11px;">Ссылка</div>
             <a id="session-link" href="#" target="_blank"></a>
           </div>
@@ -1440,7 +1461,7 @@
         <button class="btn outline small" onclick="closeDrawingEditor()">Отмена</button>
       </div>
       <input type="text" id="drawing-title" placeholder="Название задания" value="${escapeHtml(task.title || '')}">
-      <textarea id="drawing-intro" placeholder="Краткое вступление для ученика (необязательно)" style="min-height:50px;">${escapeHtml(task.intro || '')}</textarea>
+      <textarea id="drawing-intro" placeholder="Вступление / общее указание ученику (необязательно)" style="min-height:50px;">${escapeHtml(task.intro || '')}</textarea>
       <div id="drawing-questions-container"></div>
       <div class="row" style="margin-top:6px; flex-wrap:wrap;">
         <button class="btn outline small" onclick="addDrawingQuestion()">+ Пункт бланка</button>
@@ -1449,13 +1470,14 @@
         <button class="btn outline small" onclick="document.getElementById('drawing-import-file').click()">📤 Импорт из Excel</button>
         <input type="file" id="drawing-import-file" accept=".xlsx,.xls" class="hidden" onchange="importDrawingFromExcel()">
       </div>
+      <textarea id="drawing-outro" placeholder="Окончание работ — что сделать в конце (необязательно, например: «Установите крышку и закрепите болтами»)" style="min-height:50px; margin-top:10px;">${escapeHtml(task.outro || '')}</textarea>
       <button class="btn" style="margin-top:14px;" onclick="saveDrawingTask()">Сохранить задание</button>
       <div id="drawing-save-error" class="error"></div>
     `;
     editor.classList.remove('hidden');
     const qContainer = editor.querySelector('#drawing-questions-container');
     qContainer.innerHTML = '';
-    (task.questions || []).forEach(q => addDrawingQuestion(q.text, q.correctAnswer));
+    (task.questions || []).forEach(q => addDrawingQuestion(q.text, q.correctAnswer, q));
   }
 
   function closeDrawingEditor() {
@@ -1465,7 +1487,9 @@
     switchTab('drawing');
   }
 
-  function addDrawingQuestion(existingText, existingCorrect) {
+  function addDrawingQuestion(existingText, existingCorrect, extra) {
+    const ex = extra || {};
+    const hasExtra = !!(ex.section || ex.sectionText || ex.hint || ex.imageUrl);
     const row = document.createElement('div');
     row.className = 'card';
     row.style.background = '#fafbfc';
@@ -1476,6 +1500,13 @@
         <button class="btn outline small" onclick="this.closest('.card').remove()">✕</button>
       </div>
       <input type="text" class="drawing-q-correct" placeholder="Ключ ответа для проверки (необязательно, под конкретный чертёж)" value="${existingCorrect ? escapeHtml(existingCorrect) : ''}">
+      <details ${hasExtra ? 'open' : ''} style="margin-top:2px;">
+        <summary class="muted" style="cursor:pointer; font-size:13px; margin-bottom:8px;">Блок и порядок выполнения</summary>
+        <input type="text" class="drawing-q-section" placeholder="Заголовок блока (например, «Блок 2: Измерения штангенциркулем») — укажите у первого пункта блока" value="${ex.section ? escapeHtml(ex.section) : ''}">
+        <textarea class="drawing-q-sectiontext" placeholder="Указание к блоку (что осмотреть / чем измерять)" style="min-height:44px;">${ex.sectionText ? escapeHtml(ex.sectionText) : ''}</textarea>
+        <textarea class="drawing-q-hint" placeholder="Порядок выполнения / методика этого пункта (формула, как измерять)" style="min-height:44px;">${ex.hint ? escapeHtml(ex.hint) : ''}</textarea>
+        <input type="text" class="drawing-q-image" placeholder="Схема к пункту: путь вида /img/lapy-scheme.png (необязательно)" value="${ex.imageUrl ? escapeHtml(ex.imageUrl) : ''}">
+      </details>
     `;
     document.getElementById('drawing-questions-container').appendChild(row);
   }
@@ -1509,10 +1540,12 @@
     fileInput.value = '';
     if (!res.ok) { alert(data.error || 'Ошибка импорта файла'); return; }
     if (!document.getElementById('drawing-title').value.trim()) {
-      document.getElementById('drawing-title').value = file.name.replace(/\.(xlsx|xls)$/i, '');
+      document.getElementById('drawing-title').value = data.title || file.name.replace(/\.(xlsx|xls)$/i, '');
     }
     document.getElementById('drawing-questions-container').innerHTML = '';
-    data.questions.forEach(q => addDrawingQuestion(q.text, q.correctAnswer));
+    data.questions.forEach(q => addDrawingQuestion(q.text, q.correctAnswer, q));
+    if (data.intro && !document.getElementById('drawing-intro').value.trim()) document.getElementById('drawing-intro').value = data.intro;
+    if (data.outro && !document.getElementById('drawing-outro').value.trim()) document.getElementById('drawing-outro').value = data.outro;
     if (data.skipped && data.skipped.length) {
       alert(`Импортировано: ${data.questions.length}. Пропущено строк: ${data.skipped.length} (пустой текст вопроса).`);
     }
@@ -1529,11 +1562,16 @@
     for (const row of qRows) {
       const text = row.querySelector('.drawing-q-text').value.trim();
       const correctAnswer = row.querySelector('.drawing-q-correct').value.trim();
-      if (text) questions.push({ text, correctAnswer });
+      const section = row.querySelector('.drawing-q-section').value.trim();
+      const sectionText = row.querySelector('.drawing-q-sectiontext').value.trim();
+      const hint = row.querySelector('.drawing-q-hint').value.trim();
+      const imageUrl = row.querySelector('.drawing-q-image').value.trim();
+      if (text) questions.push({ text, correctAnswer, section, sectionText, hint, imageUrl });
     }
     if (questions.length === 0) { errorEl.textContent = 'Добавьте хотя бы один пункт бланка'; return; }
 
-    const payload = { title, intro, questions };
+    const outro = document.getElementById('drawing-outro').value.trim();
+    const payload = { title, intro, outro, questions };
     const url = editingDrawingTaskId ? '/api/drawing-tasks/' + editingDrawingTaskId : '/api/drawing-tasks';
     const method = editingDrawingTaskId ? 'PUT' : 'POST';
     const res = await authFetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
