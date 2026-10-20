@@ -1734,6 +1734,25 @@ app.post('/api/drawing-tasks/import', checkAuth, upload.single('file'), (req, re
   res.json({ questions, skipped, title: info.title || '', intro: info.intro || '', outro: info.outro || '' });
 });
 
+// Общие задания (из кода) нельзя править на месте: при каждом запуске сервера они
+// восстанавливаются. Копия принадлежит компании и редактируется как обычное задание.
+app.post('/api/drawing-tasks/:id/copy', checkAuth, async (req, res) => {
+  const data = db.load();
+  const src = safeGet(data.drawingTasks, req.params.id);
+  if (!src || (!src.shared && src.companyId !== req.companyId)) return res.status(404).json({ error: 'Задание не найдено' });
+  const id = participantId();
+  const copy = JSON.parse(JSON.stringify(src));
+  copy.id = id;
+  copy.companyId = req.companyId;
+  copy.shared = false;
+  copy.custom = true;
+  copy.title = src.title.replace(/\s*\(копия\)$/, '') + ' (копия)';
+  copy.createdAt = Date.now();
+  copy.questions = copy.questions.map((q, qi) => ({ ...q, id: 'q' + qi + '_' + id }));
+  await db.update((d) => { d.drawingTasks[id] = copy; });
+  res.json(copy);
+});
+
 app.post('/api/drawing-tasks', checkAuth, async (req, res) => {
   const err = validateDrawingTaskPayload(req.body);
   if (err) return res.status(400).json({ error: err });
@@ -1804,6 +1823,8 @@ app.post('/api/drawing-sessions', checkAuth, async (req, res) => {
     testTitle: task.title,
     startedAt: Date.now(),
     scheduledAt,
+    timeLimit: (Number.isInteger(parseInt(req.body.timeLimit, 10)) && parseInt(req.body.timeLimit, 10) > 0)
+      ? Math.min(parseInt(req.body.timeLimit, 10), 600) : null,
     ended: false,
     participants: {}
   };
@@ -1862,6 +1883,7 @@ app.get('/api/drawing-sessions/:code/info', (req, res) => {
     testTitle: session.testTitle,
     intro: task ? task.intro : '',
     outro: task ? (task.outro || '') : '',
+    timeLimit: session.timeLimit || null,
     questions: task ? task.questions.map(studentQuestionView) : [],
     scheduledAt: session.scheduledAt || null
   });
@@ -1886,11 +1908,13 @@ app.post('/api/drawing-sessions/:code/join', joinLimiter, async (req, res) => {
   const task = safeGet(data.drawingTasks, session.drawingTaskId);
   if (!task) return res.status(404).json({ error: 'Задание не найдено' });
   const pid = participantId();
+  const joinedAt = Date.now();
   const participant = {
     id: pid,
     name: name.trim().slice(0, 80),
     partInfo: (partInfo || '').trim().slice(0, 200),
-    joinedAt: Date.now(),
+    joinedAt,
+    deadline: session.timeLimit ? joinedAt + session.timeLimit * 60 * 1000 : null,
     finished: false,
     answers: null,
     grades: null,
@@ -1904,6 +1928,9 @@ app.post('/api/drawing-sessions/:code/join', joinLimiter, async (req, res) => {
     testTitle: task.title,
     intro: task.intro,
     outro: task.outro || '',
+    timeLimit: session.timeLimit || null,
+    deadline: participant.deadline,
+    serverNow: Date.now(),
     questions: task.questions.map(studentQuestionView)
   });
 });
@@ -1916,6 +1943,8 @@ app.post('/api/drawing-sessions/:code/submit', async (req, res) => {
   const participant = safeGet(session.participants, pid);
   if (!participant) return res.status(404).json({ error: 'Участник не найден' });
   if (participant.finished) return res.status(400).json({ error: 'Бланк уже сдан' });
+  // Время вышло определяет сервер (по своим часам), а не телефон ученика.
+  const timeIsUp = !!(participant.deadline && Date.now() >= participant.deadline - 3000);
   const task = safeGet(data.drawingTasks, session.drawingTaskId);
   if (!task) return res.status(404).json({ error: 'Задание не найдено' });
   const safeAnswers = task.questions.map((q, i) => {
@@ -1924,7 +1953,9 @@ app.post('/api/drawing-sessions/:code/submit', async (req, res) => {
   });
   // Бланк принимается только полностью заполненным (проверка и на сервере — обойти её нельзя).
   const missing = safeAnswers.map((a, i) => (a ? null : i + 1)).filter(Boolean);
-  if (missing.length > 0) {
+  // Пока время не вышло, бланк с пустыми графами не принимается; после окончания времени
+  // принимается как есть (иначе ответы ученика просто пропали бы).
+  if (missing.length > 0 && !timeIsUp) {
     return res.status(400).json({
       error: `Заполните все графы перед сдачей. Не заполнено: ${missing.length} (пункты ${missing.join(', ')}).`,
       missing
@@ -1934,6 +1965,8 @@ app.post('/api/drawing-sessions/:code/submit', async (req, res) => {
     const p = safeGet(d.sessions[req.params.code].participants, pid);
     p.finished = true;
     p.finishedAt = Date.now();
+    p.durationSec = Math.round((p.finishedAt - p.joinedAt) / 1000);
+    p.timedOut = timeIsUp;
     p.answers = safeAnswers;
     return p;
   });
@@ -1954,7 +1987,7 @@ app.get('/api/drawing-sessions/:code/result', (req, res) => {
   const p = safeGet(session.participants, pid);
   if (!p) return res.status(404).json({ error: 'Участник не найден' });
   if (!p.finished) return res.json({ finished: false });
-  if (!p.graded) return res.json({ finished: true, graded: false });
+  if (!p.graded) return res.json({ finished: true, graded: false, timedOut: !!p.timedOut, durationSec: p.durationSec || null });
 
   const task = safeGet(data.drawingTasks, session.drawingTaskId);
   const match = task ? matchAnswerKey(data, session.companyId, p.partInfo) : null;
@@ -1970,6 +2003,8 @@ app.get('/api/drawing-sessions/:code/result', (req, res) => {
   res.json({
     finished: true,
     graded: true,
+    timedOut: !!p.timedOut,
+    durationSec: p.durationSec || null,
     score,
     total: items.length,
     gradeComment: p.gradeComment || '',

@@ -39,6 +39,8 @@
   .q-block.missing textarea { border-color: #d64545; background: #fff5f5; }
   .q-block .q-miss { display: none; color: #d64545; font-size: 12.5px; margin: -6px 0 6px; }
   .q-block.missing .q-miss { display: block; }
+  .timer { position: sticky; top: 0; z-index: 5; text-align: center; font-weight: 800; font-size: 20px; color: var(--navy); background: #fff; padding: 6px 0 10px; margin: -6px 0 6px; border-bottom: 1px solid #f0f0f0; }
+  .timer.warn { color: #d64545; }
   .center { text-align: center; }
   .spinner { width: 34px; height: 34px; border: 3px solid #eee; border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 30px auto; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -62,6 +64,7 @@
     <h1 id="join-title"></h1>
     <div class="sub" id="join-intro"></div>
     <div class="info-box hidden" id="scheduled-banner"></div>
+    <div class="info-box hidden" id="limit-note"></div>
     <label class="field-label">Ф.И.О.</label>
     <input type="text" id="student-name" placeholder="Фамилия Имя" maxlength="60">
     <label class="field-label">Номер задания / деталь для анализа</label>
@@ -71,6 +74,7 @@
   </div>
 
   <div id="screen-form" class="hidden">
+    <div class="timer" id="timer-box">00:00</div>
     <h1 id="form-title"></h1>
     <div class="sub" id="form-intro"></div>
     <div id="questions-container"></div>
@@ -140,6 +144,11 @@
       }
       document.getElementById('join-title').textContent = data.testTitle;
       document.getElementById('join-intro').textContent = data.intro || 'Заполните бланк по чертежу.';
+      if (data.timeLimit) {
+        const ln = document.getElementById('limit-note');
+        ln.textContent = `⏱ Лимит времени: ${data.timeLimit} мин. Отсчёт начнётся сразу после нажатия «Начать». По окончании времени бланк отправится автоматически в том виде, в каком он заполнен.`;
+        ln.classList.remove('hidden');
+      }
       if (data.scheduledAt && data.scheduledAt > Date.now()) {
         showScheduledBanner(data.scheduledAt);
       }
@@ -202,10 +211,15 @@
       state.participantId = data.participantId;
       state.questions = data.questions;
       state.outro = data.outro || '';
+      state.timeLimit = data.timeLimit || null;
+      // Срок считает сервер; поправка на разницу часов телефона и сервера.
+      state.deadline = data.deadline ? data.deadline - (data.serverNow - Date.now()) : null;
+      state.startLocal = Date.now();
       document.getElementById('form-title').textContent = data.testTitle;
       document.getElementById('form-intro').textContent = data.intro || '';
       renderForm();
       showScreen('screen-form');
+      startTimer();
     } catch (e) {
       errEl.textContent = 'Не удалось подключиться. Проверьте интернет-соединение.';
       errEl.classList.remove('hidden');
@@ -267,6 +281,43 @@
     outro.classList.toggle('hidden', !state.outro);
   }
 
+  let timerInterval = null;
+  const fmt = (sec) => String(Math.floor(sec / 60)).padStart(2, '0') + ':' + String(sec % 60).padStart(2, '0');
+
+  function startTimer() {
+    stopTimer();
+    tickTimer();
+    timerInterval = setInterval(tickTimer, 1000);
+  }
+  function stopTimer() {
+    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  }
+  function tickTimer() {
+    const box = document.getElementById('timer-box');
+    if (state.deadline) {
+      const left = Math.ceil((state.deadline - Date.now()) / 1000);
+      if (left <= 0) { box.textContent = '⏱ Время вышло'; box.classList.add('warn'); stopTimer(); autoSubmit(); return; }
+      box.textContent = '⏱ Осталось ' + fmt(left);
+      box.classList.toggle('warn', left <= 300);
+    } else {
+      box.textContent = '⏱ Время: ' + fmt(Math.floor((Date.now() - state.startLocal) / 1000));
+    }
+  }
+  // Время вышло: поля блокируются, бланк уходит как есть; при сбое связи пробуем повторять.
+  async function autoSubmit() {
+    document.querySelectorAll('#questions-container textarea').forEach(t => { t.readOnly = true; });
+    const errEl = document.getElementById('submit-error');
+    errEl.textContent = 'Время вышло — бланк отправляется автоматически…';
+    errEl.classList.remove('hidden');
+    document.getElementById('submit-btn').disabled = true;
+    const retry = setInterval(() => {
+      if (localStorage.getItem(LS_KEY)) { clearInterval(retry); return; }
+      document.getElementById('submit-btn').disabled = false;
+      submitTask(true);
+    }, 5000);
+    await submitTask(true);
+  }
+
   function updateProgress() {
     const total = state.questions.length;
     const filled = state.questions.filter((q, i) => document.getElementById('ans-' + i).value.trim()).length;
@@ -275,7 +326,7 @@
     el.style.color = filled === total ? '#2e9e4f' : '#2C3E50';
   }
 
-  async function submitTask() {
+  async function submitTask(auto) {
     const errEl = document.getElementById('submit-error');
     errEl.classList.add('hidden');
     const answers = state.questions.map((q, i) => document.getElementById('ans-' + i).value.trim());
@@ -285,7 +336,7 @@
       blk.classList.toggle('missing', !a);
       if (!a) emptyIdx.push(i);
     });
-    if (emptyIdx.length) {
+    if (emptyIdx.length && !auto) {
       errEl.textContent = `Заполните все графы перед сдачей. Не заполнено: ${emptyIdx.length} (пункты ${emptyIdx.map(i => i + 1).join(', ')}).`;
       errEl.classList.remove('hidden');
       const first = document.getElementById('ans-' + emptyIdx[0]);
@@ -308,6 +359,7 @@
         btn.disabled = false;
         return;
       }
+      stopTimer();
       localStorage.setItem(LS_KEY, state.participantId);
       showScreen('screen-done');
       await checkResult();
@@ -334,7 +386,8 @@
       if (!data.graded) {
         statusEl.innerHTML = `
           <div class="ok-box">
-            <strong>Бланк сдан.</strong><br>
+            <strong>Бланк сдан.</strong>${data.timedOut ? ' ⏱ Время вышло — бланк отправлен автоматически.' : ''}<br>
+            ${data.durationSec ? `Время выполнения: ${fmt(data.durationSec)}.<br>` : ''}
             Преподаватель ещё не проверил бланк. Загляните позже по этой же ссылке.
           </div>`;
         itemsEl.innerHTML = '';

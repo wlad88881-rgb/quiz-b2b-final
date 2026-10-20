@@ -324,7 +324,7 @@
     <div style="width:320px; background:#fff; border-radius:14px; padding:20px;">
       <h3 style="margin-bottom:10px; color:#2C3E50;">Начать сессию</h3>
       <div id="session-timelimit-wrap">
-        <label class="muted" style="display:block; margin-bottom:6px;">Лимит времени на тест, минут (оставьте пустым — без ограничения)</label>
+        <label class="muted" style="display:block; margin-bottom:6px;">Лимит времени, минут (оставьте пустым — без ограничения)</label>
         <input type="text" id="session-time-limit" placeholder="например, 20" inputmode="numeric">
       </div>
 
@@ -508,6 +508,7 @@
   });
 
   // ОСНОВНЫЕ ФУНКЦИИ
+  let currentSessionTimeLimit = null;
   const BASE_TITLE = document.title;
   function showList() {
     document.title = BASE_TITLE;
@@ -809,7 +810,7 @@
     pendingSessionType = type;
     pendingSessionId = id;
     document.getElementById('session-time-limit').value = '';
-    document.getElementById('session-timelimit-wrap').classList.toggle('hidden', type !== 'test');
+    document.getElementById('session-timelimit-wrap').classList.toggle('hidden', type !== 'test' && type !== 'drawing');
     document.querySelector('input[name="session-when"][value="now"]').checked = true;
     document.getElementById('session-schedule-at').classList.add('hidden');
     document.getElementById('session-schedule-at').value = '';
@@ -902,7 +903,7 @@
     const errorEl = document.getElementById('session-modal-error');
     errorEl.textContent = '';
     let timeLimit = null;
-    if (pendingSessionType === 'test') {
+    if (pendingSessionType === 'test' || pendingSessionType === 'drawing') {
       const raw = document.getElementById('session-time-limit').value.trim();
       if (raw) {
         const n = parseInt(raw, 10);
@@ -926,7 +927,7 @@
     closeSessionModal();
 
     const endpoint = type === 'lab' ? '/api/lab-sessions' : type === 'drawing' ? '/api/drawing-sessions' : type === 'tolerance' ? '/api/tolerance-sessions' : '/api/sessions';
-    const body = type === 'lab' ? { labId: id, scheduledAt } : type === 'drawing' ? { drawingTaskId: id, scheduledAt } : type === 'tolerance' ? { toleranceTaskId: id, scheduledAt } : { testId: id, timeLimit, scheduledAt };
+    const body = type === 'lab' ? { labId: id, scheduledAt } : type === 'drawing' ? { drawingTaskId: id, timeLimit, scheduledAt } : type === 'tolerance' ? { toleranceTaskId: id, scheduledAt } : { testId: id, timeLimit, scheduledAt };
     const res = await authFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -982,6 +983,11 @@
   // Таблица сортируется так же, как студенты видят топ-3 в лидерборде: сначала
   // завершившие тест — по проценту результата (выше — выше в списке), при равном
   // проценте раньше сдавший идёт первым; ещё не завершившие — ниже, в порядке захода.
+  function formatDuration(sec) {
+    const m = Math.floor(sec / 60), r = sec % 60;
+    return m > 0 ? `${m} мин ${String(r).padStart(2, '0')} с` : `${r} с`;
+  }
+
   function upsertParticipantRow(p) {
     participantsMap[p.id] = Object.assign({}, participantsMap[p.id] || {}, p);
     document.getElementById('no-participants').classList.add('hidden');
@@ -1008,11 +1014,14 @@
     const body = document.getElementById('results-body');
     const counter = document.getElementById('participants-counter');
     const doneCount = list.filter(p => p.finished).length;
-    counter.textContent = `Подключилось: ${list.length} · Сдали: ${doneCount}`;
+    counter.textContent = `Подключилось: ${list.length} · Сдали: ${doneCount}` + (currentSessionTimeLimit ? ` · Лимит: ${currentSessionTimeLimit} мин` : '');
     counter.classList.toggle('hidden', list.length === 0);
     if (currentSessionType === 'drawing') {
       body.innerHTML = list.map((p, idx) => {
-        const statusText = p.finished ? 'Сдал бланк' : 'Заполняет';
+        let statusText = p.finished ? 'Сдал бланк' : 'Заполняет';
+        if (p.finished && p.durationSec) {
+          statusText += `<div class="muted" style="font-size:12px;">${formatDuration(p.durationSec)}${p.timedOut ? ' · <span style="color:#d64545;">⏱ время вышло</span>' : ''}</div>`;
+        }
         let resultText = '—';
         if (p.finished) {
           resultText = p.graded
@@ -1063,6 +1072,7 @@
 
     document.title = session.testTitle + ' · ' + session.code;
     currentSessionCode = session.code;
+    currentSessionTimeLimit = session.timeLimit || null;
     updateScheduledBanner(session.scheduledAt || null);
 
     const s = ensureSocket();
@@ -1450,11 +1460,20 @@
         </div>
         <div class="row">
           <button class="btn small" onclick="startDrawingSession('${t.id}')">Начать сессию</button>
-          ${t.shared ? '' : `<button class="btn outline small" onclick="editDrawingTask('${t.id}')">Изменить</button>
+          ${t.shared ? `<button class="btn outline small" onclick="copyAndEditDrawingTask('${t.id}')">Копия и правка</button>` : `<button class="btn outline small" onclick="editDrawingTask('${t.id}')">Изменить</button>
           <button class="btn danger small" onclick="deleteDrawingTask('${t.id}')">Удалить</button>`}
         </div>
       </div>
     `).join('');
+  }
+
+  // Общее задание нельзя править на месте (оно восстанавливается при запуске сервера),
+  // поэтому создаём собственную копию и сразу открываем её в редакторе.
+  async function copyAndEditDrawingTask(id) {
+    const res = await authFetch('/api/drawing-tasks/' + id + '/copy', { method: 'POST' });
+    if (!res.ok) { alert('Не удалось создать копию'); return; }
+    const copy = await res.json();
+    await editDrawingTask(copy.id);
   }
 
   function showDrawingEditor() {
