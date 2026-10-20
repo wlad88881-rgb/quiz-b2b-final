@@ -63,7 +63,11 @@ if (!process.env.SESSION_SECRET) {
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(express.json({ limit: '3mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, filePath) => {
+    if (/(sw\.js|\.html|manifest.*\.json)$/.test(filePath)) res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+  }
+}));
 
 // Ограничение частоты запросов на чувствительные маршруты (защита от подбора паролей и злоупотреблений)
 const authLimiter = rateLimit({
