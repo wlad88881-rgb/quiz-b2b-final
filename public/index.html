@@ -137,7 +137,8 @@
       input, textarea, select { font-size: 16px !important; }
       #qr-img { width: 150px; height: 150px; }
       #results-table, #stats-sessions-table, #stats-questions-table { font-size: 12.5px; }
-      #results-table td, #results-table th { padding: 8px 5px; }
+      #results-table td, #results-table th { padding: 8px 4px; }
+      #results-table th:first-child, #results-table td:first-child { width: 26px; text-align: center; }
       #results-table .btn.small { padding: 8px 10px; min-height: 36px; white-space: nowrap; }
       .code-big { font-size: 28px; }
     }
@@ -297,6 +298,7 @@
             <a id="session-link" href="#" target="_blank"></a>
           </div>
           <button class="btn outline small" onclick="openPresentView()">🖥 Экран для показа</button>
+          <button class="btn outline small" onclick="openSessionInNewWindow(currentSessionCode)">↗ В отдельном окне</button>
           <button class="btn outline small" onclick="toggleSessionStats()">📊 Статистика вопросов</button>
           <button class="btn outline small" onclick="exportResults()">📥 Excel</button>
         </div>
@@ -310,8 +312,9 @@
         <div id="session-stats-chart"></div>
       </div>
       <div id="no-participants" class="muted" style="text-align:center; padding:30px 0;">Пока никто не присоединился.</div>
+      <div id="participants-counter" class="hidden" style="margin:10px 0 8px; font-weight:700; color:var(--navy);"></div>
       <table id="results-table" class="hidden">
-        <thead><tr><th>Участник</th><th>Статус</th><th>Результат</th><th id="results-th-4">Переключения вкладки</th></tr></thead>
+        <thead><tr><th style="width:34px;">№</th><th>Участник</th><th>Статус</th><th>Результат</th><th id="results-th-4">Переключения вкладки</th></tr></thead>
         <tbody id="results-body"></tbody>
       </table>
     </div>
@@ -417,6 +420,8 @@
     document.getElementById('company-display').textContent = localStorage.getItem('b2bEmail') || 'Компания';
     refreshMe();
     loadTestsList();
+    const wantedSession = new URLSearchParams(location.search).get('session');
+    if (wantedSession) openExistingSession(wantedSession);
   }
 
   function logout() {
@@ -503,7 +508,9 @@
   });
 
   // ОСНОВНЫЕ ФУНКЦИИ
+  const BASE_TITLE = document.title;
   function showList() {
+    document.title = BASE_TITLE;
     document.getElementById('screen-list').classList.remove('hidden');
     document.getElementById('screen-editor').classList.add('hidden');
     document.getElementById('screen-session').classList.add('hidden');
@@ -984,7 +991,11 @@
 
   function renderParticipantsTable() {
     const list = Object.values(participantsMap);
+    const byJoinOrder = currentSessionType === 'drawing' || currentSessionType === 'tolerance';
     list.sort((a, b) => {
+      // Для чертежей и квалитетов порядок = порядок подключения: номера не «прыгают»,
+      // последний номер всегда равен числу подключившихся.
+      if (byJoinOrder) return (a.joinedAt || 0) - (b.joinedAt || 0);
       if (a.finished && b.finished) {
         const pa = a.total ? a.score / a.total : 0;
         const pb = b.total ? b.score / b.total : 0;
@@ -995,8 +1006,12 @@
       return (a.joinedAt || 0) - (b.joinedAt || 0);
     });
     const body = document.getElementById('results-body');
+    const counter = document.getElementById('participants-counter');
+    const doneCount = list.filter(p => p.finished).length;
+    counter.textContent = `Подключилось: ${list.length} · Сдали: ${doneCount}`;
+    counter.classList.toggle('hidden', list.length === 0);
     if (currentSessionType === 'drawing') {
-      body.innerHTML = list.map(p => {
+      body.innerHTML = list.map((p, idx) => {
         const statusText = p.finished ? 'Сдал бланк' : 'Заполняет';
         let resultText = '—';
         if (p.finished) {
@@ -1005,22 +1020,22 @@
             : '<span style="color:var(--orange); font-weight:600;">Не проверено</span>';
         }
         const openBtn = p.finished ? `<button class="btn outline small" onclick="openDrawingReview('${p.id}')">Проверить</button>` : '';
-        return `<tr id="prow-${p.id}"><td>${escapeHtml(p.name)}${p.partInfo ? `<div class="muted" style="font-size:12px;">${escapeHtml(p.partInfo)}</div>` : ''}</td><td>${statusText}</td><td>${resultText}</td><td>${openBtn}</td></tr>`;
+        return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}${p.partInfo ? `<div class="muted" style="font-size:12px;">${escapeHtml(p.partInfo)}</div>` : ''}</td><td>${statusText}</td><td>${resultText}</td><td>${openBtn}</td></tr>`;
       }).join('');
       return;
     }
     if (currentSessionType === 'tolerance') {
-      body.innerHTML = list.map(p => {
+      body.innerHTML = list.map((p, idx) => {
         const statusText = p.finished ? 'Сдал ответ' : 'Решает';
         const resultText = (p.finished && p.score !== undefined && p.score !== null) ? `${p.score}/6` : '—';
-        return `<tr id="prow-${p.id}"><td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td><td>—</td></tr>`;
+        return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td><td>—</td></tr>`;
       }).join('');
       return;
     }
-    body.innerHTML = list.map(p => {
+    body.innerHTML = list.map((p, idx) => {
       const statusText = p.finished ? 'Завершил' : 'Проходит тест';
       const resultText = (p.finished && p.total) ? `${p.score}/${p.total} (${Math.round(p.score / p.total * 100)}%)` : '—';
-      return `<tr id="prow-${p.id}"><td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td><td>${tabSwitchCellHtml(p)}</td></tr>`;
+      return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td><td>${tabSwitchCellHtml(p)}</td></tr>`;
     }).join('');
   }
 
@@ -1036,6 +1051,7 @@
     document.getElementById('no-participants').classList.remove('hidden');
     document.getElementById('results-table').classList.add('hidden');
     document.getElementById('results-body').innerHTML = '';
+    document.getElementById('participants-counter').classList.add('hidden');
     document.getElementById('end-session-btn').disabled = false;
     liveTabSwitches = {};
     participantsMap = {};
@@ -1045,6 +1061,7 @@
     document.getElementById('results-th-4').textContent = session.type === 'drawing' ? 'Проверка' : session.type === 'tolerance' ? '—' : 'Переключения вкладки';
     document.querySelector('#screen-session button[onclick="toggleSessionStats()"]').classList.toggle('hidden', session.type === 'drawing' || session.type === 'tolerance');
 
+    document.title = session.testTitle + ' · ' + session.code;
     currentSessionCode = session.code;
     updateScheduledBanner(session.scheduledAt || null);
 
@@ -1118,6 +1135,13 @@
     loadSessionHistory(type, containerId);
   }
 
+  // Каждая вкладка/окно браузера хранит своё состояние, поэтому две сессии
+  // (например, редуктор и насос) можно вести параллельно в двух независимых окнах.
+  function openSessionInNewWindow(code) {
+    if (!code) return;
+    window.open(location.origin + '/?session=' + encodeURIComponent(code), '_blank');
+  }
+
   async function openExistingSession(code) {
     const res = await authFetch('/api/my-sessions/' + encodeURIComponent(code));
     if (!res.ok) { alert('Не удалось открыть сессию'); return; }
@@ -1147,6 +1171,7 @@
         </div>
         <div class="row">
           <button class="btn outline small" onclick="openExistingSession('${s.code}')">Открыть</button>
+          <button class="btn outline small" onclick="openSessionInNewWindow('${s.code}')">↗ Новое окно</button>
           <button class="btn danger small" onclick="deleteSessions(['${s.code}'], '${type}', '${containerId}', 'Удалить эту сессию вместе с ответами участников?')">Удалить</button>
         </div>
       </div>`).join('');
