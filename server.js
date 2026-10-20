@@ -1922,6 +1922,14 @@ app.post('/api/drawing-sessions/:code/submit', async (req, res) => {
     const val = Array.isArray(answers) ? answers[i] : undefined;
     return typeof val === 'string' ? val.trim().slice(0, 2000) : '';
   });
+  // Бланк принимается только полностью заполненным (проверка и на сервере — обойти её нельзя).
+  const missing = safeAnswers.map((a, i) => (a ? null : i + 1)).filter(Boolean);
+  if (missing.length > 0) {
+    return res.status(400).json({
+      error: `Заполните все графы перед сдачей. Не заполнено: ${missing.length} (пункты ${missing.join(', ')}).`,
+      missing
+    });
+  }
   const result = await db.update((d) => {
     const p = safeGet(d.sessions[req.params.code].participants, pid);
     p.finished = true;
@@ -2094,7 +2102,10 @@ const TOL_MM_EPS = 0.0006; // допуск сравнения в мм (~0.5 мк
 
 function parseNum(v) {
   if (v === null || v === undefined || v === '') return null;
-  const n = parseFloat(String(v).replace(',', '.').replace(/\s/g, ''));
+  // iOS/Android могут подставить типографский минус (−), короткое (–) или длинное (—) тире.
+  const cleaned = String(v).replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.').replace(/\s/g, '');
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(cleaned)) return null;
+  const n = parseFloat(cleaned);
   return isNaN(n) ? null : n;
 }
 
@@ -2258,6 +2269,13 @@ app.post('/api/tolerance-sessions/:code/submit', async (req, res) => {
     limMaxMm: parseNum(values && values.limMaxMm),
     limMinMm: parseNum(values && values.limMinMm)
   };
+  const missingFields = Object.keys(given).filter(k => given[k] === null);
+  if (missingFields.length > 0) {
+    return res.status(400).json({
+      error: 'Заполните все 6 граф числами перед сдачей (допустимы минус и запятая, например −16 или 0,021).',
+      missing: missingFields
+    });
+  }
   const correct = {
     devMaxUm: given.devMaxUm !== null && Math.abs(given.devMaxUm - correctAnswer.devMaxUm) <= TOL_UM_EPS,
     devMinUm: given.devMinUm !== null && Math.abs(given.devMinUm - correctAnswer.devMinUm) <= TOL_UM_EPS,

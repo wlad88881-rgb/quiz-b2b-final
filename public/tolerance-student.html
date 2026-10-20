@@ -39,6 +39,11 @@
   .field-label { font-size: 12px; color: #888; margin-bottom: 4px; display: block; }
   .field-col input { margin-bottom: 0; }
 
+  .num-wrap { display: flex; gap: 6px; }
+  .num-wrap input { flex: 1; min-width: 0; }
+  .sign-btn { flex: 0 0 52px; border: 1px solid #ddd; background: #f4f4f4; color: var(--navy); border-radius: 10px; font-size: 15px; font-weight: 700; cursor: pointer; }
+  .sign-btn:active { background: #e3e3e3; }
+  input.invalid { border-color: #d64545 !important; background: #fff5f5; }
   .center { text-align: center; }
   .spinner { width: 34px; height: 34px; border: 3px solid #eee; border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 30px auto; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -86,6 +91,7 @@
     </div>
 
     <div id="methodology-box" class="info-box hidden" style="line-height:1.6;"></div>
+    <div class="muted" style="margin-bottom:14px; line-height:1.5;">Все 6 граф обязательны. Знак минус вводится кнопкой <b>«+/−»</b> справа от поля (на iPhone на цифровой клавиатуре минуса нет). Дробную часть можно писать через запятую.</div>
 
     <button type="button" class="btn outline" id="table-toggle-btn" style="margin-bottom:14px;" onclick="toggleTable()">📐 Показать таблицу допусков</button>
     <div id="table-box" class="hidden" style="margin-bottom:18px; overflow-x:auto;"></div>
@@ -93,24 +99,24 @@
     <div class="step">
       <div class="step-title" id="step1-title"></div>
       <div class="field-row">
-        <div class="field-col"><span class="field-label" id="lbl-devMax-um"></span><input type="text" id="devMaxUm" inputmode="decimal" placeholder="0"></div>
-        <div class="field-col"><span class="field-label" id="lbl-devMin-um"></span><input type="text" id="devMinUm" inputmode="decimal" placeholder="0"></div>
+        <div class="field-col"><span class="field-label" id="lbl-devMax-um"></span><div class="num-wrap"><input type="text" id="devMaxUm" inputmode="decimal" autocomplete="off" placeholder="0"><button type="button" class="sign-btn" onclick="toggleSign('devMaxUm')" aria-label="Сменить знак">+/−</button></div></div>
+        <div class="field-col"><span class="field-label" id="lbl-devMin-um"></span><div class="num-wrap"><input type="text" id="devMinUm" inputmode="decimal" autocomplete="off" placeholder="0"><button type="button" class="sign-btn" onclick="toggleSign('devMinUm')" aria-label="Сменить знак">+/−</button></div></div>
       </div>
     </div>
 
     <div class="step">
       <div class="step-title">2. Переведите в мм</div>
       <div class="field-row">
-        <div class="field-col"><span class="field-label" id="lbl-devMax-mm"></span><input type="text" id="devMaxMm" inputmode="decimal" placeholder="0"></div>
-        <div class="field-col"><span class="field-label" id="lbl-devMin-mm"></span><input type="text" id="devMinMm" inputmode="decimal" placeholder="0"></div>
+        <div class="field-col"><span class="field-label" id="lbl-devMax-mm"></span><div class="num-wrap"><input type="text" id="devMaxMm" inputmode="decimal" autocomplete="off" placeholder="0"><button type="button" class="sign-btn" onclick="toggleSign('devMaxMm')" aria-label="Сменить знак">+/−</button></div></div>
+        <div class="field-col"><span class="field-label" id="lbl-devMin-mm"></span><div class="num-wrap"><input type="text" id="devMinMm" inputmode="decimal" autocomplete="off" placeholder="0"><button type="button" class="sign-btn" onclick="toggleSign('devMinMm')" aria-label="Сменить знак">+/−</button></div></div>
       </div>
     </div>
 
     <div class="step">
       <div class="step-title" id="step3-title"></div>
       <div class="field-row">
-        <div class="field-col"><span class="field-label" id="lbl-limMax"></span><input type="text" id="limMaxMm" inputmode="decimal" placeholder="0"></div>
-        <div class="field-col"><span class="field-label" id="lbl-limMin"></span><input type="text" id="limMinMm" inputmode="decimal" placeholder="0"></div>
+        <div class="field-col"><span class="field-label" id="lbl-limMax"></span><div class="num-wrap"><input type="text" id="limMaxMm" inputmode="decimal" autocomplete="off" placeholder="0"><button type="button" class="sign-btn" onclick="toggleSign('limMaxMm')" aria-label="Сменить знак">+/−</button></div></div>
+        <div class="field-col"><span class="field-label" id="lbl-limMin"></span><div class="num-wrap"><input type="text" id="limMinMm" inputmode="decimal" autocomplete="off" placeholder="0"><button type="button" class="sign-btn" onclick="toggleSign('limMinMm')" aria-label="Сменить знак">+/−</button></div></div>
       </div>
     </div>
 
@@ -287,9 +293,38 @@
     btn.textContent = willShow ? '📐 Скрыть таблицу допусков' : '📐 Показать таблицу допусков';
   }
 
+  function normalizeNumber(v) {
+    return String(v || '').replace(/[\u2212\u2013\u2014]/g, '-').replace(',', '.').replace(/\s/g, '');
+  }
+  function isValidNumber(v) {
+    return /^[+-]?(\d+\.?\d*|\.\d+)$/.test(normalizeNumber(v));
+  }
+  // На iPhone в цифровой клавиатуре нет минуса — кнопка «+/−» меняет знак в самом приложении.
+  function toggleSign(id) {
+    const el = document.getElementById(id);
+    let v = normalizeNumber(el.value);
+    if (v.startsWith('-')) v = v.slice(1);
+    else v = '-' + v.replace(/^\+/, '');
+    el.value = v;
+    el.classList.remove('invalid');
+    el.focus();
+  }
+  document.addEventListener('input', (e) => { if (e.target.classList) e.target.classList.remove('invalid'); });
+
   async function submitTask() {
     const errEl = document.getElementById('submit-error');
     errEl.classList.add('hidden');
+    const FIELD_IDS = ['devMaxUm', 'devMinUm', 'devMaxMm', 'devMinMm', 'limMaxMm', 'limMinMm'];
+    const bad = FIELD_IDS.filter(id => !isValidNumber(document.getElementById(id).value));
+    FIELD_IDS.forEach(id => document.getElementById(id).classList.toggle('invalid', bad.includes(id)));
+    if (bad.length) {
+      errEl.textContent = `Заполните все графы числами перед сдачей. Не заполнено или неверно: ${bad.length} из 6.`;
+      errEl.classList.remove('hidden');
+      const first = document.getElementById(bad[0]);
+      first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      first.focus();
+      return;
+    }
     const values = {
       devMaxUm: document.getElementById('devMaxUm').value.trim(),
       devMinUm: document.getElementById('devMinUm').value.trim(),

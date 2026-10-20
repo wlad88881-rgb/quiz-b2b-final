@@ -36,6 +36,9 @@
   .sec-text { font-size: 14px; color: var(--navy); background: #eef4fb; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; line-height: 1.5; white-space: pre-wrap; }
   .q-hint { font-size: 13px; color: #555; background: #fff8ec; border-left: 3px solid var(--orange); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; line-height: 1.5; white-space: pre-wrap; }
   .q-img { max-width: 100%; border: 1px solid #eee; border-radius: 10px; margin-bottom: 8px; }
+  .q-block.missing textarea { border-color: #d64545; background: #fff5f5; }
+  .q-block .q-miss { display: none; color: #d64545; font-size: 12.5px; margin: -6px 0 6px; }
+  .q-block.missing .q-miss { display: block; }
   .center { text-align: center; }
   .spinner { width: 34px; height: 34px; border: 3px solid #eee; border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 30px auto; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -72,6 +75,7 @@
     <div class="sub" id="form-intro"></div>
     <div id="questions-container"></div>
     <div class="info-box hidden" id="form-outro" style="white-space:pre-wrap;"></div>
+    <div id="fill-progress" class="muted" style="margin:6px 0 10px; font-weight:700;"></div>
     <div class="error-box hidden" id="submit-error"></div>
     <button class="btn navy" id="submit-btn" onclick="submitTask()">Сдать бланк</button>
   </div>
@@ -233,6 +237,7 @@
         <div class="q-num">${i + 1} / ${state.questions.length}</div>
         <label class="field-label" for="ans-${i}"></label>
         <textarea id="ans-${i}" rows="2" placeholder="Ваш ответ"></textarea>
+        <div class="q-miss">Заполните это поле (если нечего писать — поставьте «нет» или «—»)</div>
       `;
       const label = block.querySelector('.field-label');
       label.textContent = q.text;
@@ -251,15 +256,43 @@
       }
       container.appendChild(block);
     });
+    container.addEventListener('input', (e) => {
+      const blk = e.target.closest('.q-block');
+      if (blk && e.target.value.trim()) blk.classList.remove('missing');
+      updateProgress();
+    });
+    updateProgress();
     const outro = document.getElementById('form-outro');
     outro.textContent = state.outro || '';
     outro.classList.toggle('hidden', !state.outro);
+  }
+
+  function updateProgress() {
+    const total = state.questions.length;
+    const filled = state.questions.filter((q, i) => document.getElementById('ans-' + i).value.trim()).length;
+    const el = document.getElementById('fill-progress');
+    el.textContent = `Заполнено: ${filled} из ${total}`;
+    el.style.color = filled === total ? '#2e9e4f' : '#2C3E50';
   }
 
   async function submitTask() {
     const errEl = document.getElementById('submit-error');
     errEl.classList.add('hidden');
     const answers = state.questions.map((q, i) => document.getElementById('ans-' + i).value.trim());
+    const emptyIdx = [];
+    answers.forEach((a, i) => {
+      const blk = document.getElementById('ans-' + i).closest('.q-block');
+      blk.classList.toggle('missing', !a);
+      if (!a) emptyIdx.push(i);
+    });
+    if (emptyIdx.length) {
+      errEl.textContent = `Заполните все графы перед сдачей. Не заполнено: ${emptyIdx.length} (пункты ${emptyIdx.map(i => i + 1).join(', ')}).`;
+      errEl.classList.remove('hidden');
+      const first = document.getElementById('ans-' + emptyIdx[0]);
+      first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      first.focus();
+      return;
+    }
     const btn = document.getElementById('submit-btn');
     btn.disabled = true;
     try {
