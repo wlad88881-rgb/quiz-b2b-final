@@ -139,6 +139,8 @@
       #results-table, #stats-sessions-table, #stats-questions-table { font-size: 12.5px; }
       #results-table td, #results-table th { padding: 8px 4px; }
       #results-table th:first-child, #results-table td:first-child { width: 26px; text-align: center; }
+      /* с таймером столбец «Статус» на телефоне скрыт: отсчёт или ✓ уже показывают состояние */
+      #results-table.has-time th:nth-child(3), #results-table.has-time td:nth-child(3) { display: none; }
       #results-table .btn.small { padding: 8px 10px; min-height: 36px; white-space: nowrap; }
       .code-big { font-size: 28px; }
     }
@@ -314,7 +316,7 @@
       <div id="no-participants" class="muted" style="text-align:center; padding:30px 0;">Пока никто не присоединился.</div>
       <div id="participants-counter" class="hidden" style="margin:10px 0 8px; font-weight:700; color:var(--navy);"></div>
       <table id="results-table" class="hidden">
-        <thead><tr><th style="width:34px;">№</th><th>Участник</th><th>Статус</th><th>Результат</th><th id="results-th-4">Переключения вкладки</th></tr></thead>
+        <thead><tr><th style="width:34px;">№</th><th>Участник</th><th>Статус</th><th id="results-th-time" class="hidden">Осталось</th><th>Результат</th><th id="results-th-4">Переключения вкладки</th></tr></thead>
         <tbody id="results-body"></tbody>
       </table>
     </div>
@@ -983,6 +985,38 @@
   // Таблица сортируется так же, как студенты видят топ-3 в лидерборде: сначала
   // завершившие тест — по проценту результата (выше — выше в списке), при равном
   // проценте раньше сдавший идёт первым; ещё не завершившие — ниже, в порядке захода.
+  // ===== Обратный отсчёт по каждому ученику =====
+  let serverOffsetMs = 0; // сервер минус часы этого компьютера/телефона
+  const fmtClock = (sec) => {
+    const a = Math.max(0, sec);
+    return String(Math.floor(a / 60)).padStart(2, '0') + ':' + String(a % 60).padStart(2, '0');
+  };
+  function participantDeadline(p) {
+    if (p.deadline) return p.deadline;
+    if (currentSessionTimeLimit && p.joinedAt) return p.joinedAt + currentSessionTimeLimit * 60 * 1000;
+    return null;
+  }
+  function timeCellHtml(p) {
+    if (!currentSessionTimeLimit) return '';
+    if (p.finished) {
+      const dur = p.durationSec || (p.finishedAt && p.joinedAt ? Math.round((p.finishedAt - p.joinedAt) / 1000) : null);
+      return `<td class="muted" style="white-space:nowrap;">✓ ${dur ? fmtClock(dur) : ''}${p.timedOut ? ' <span style="color:#d64545;" title="Время вышло">⏱</span>' : ''}</td>`;
+    }
+    return `<td class="time-left" data-deadline="${participantDeadline(p) || ''}" style="font-weight:700; white-space:nowrap;"></td>`;
+  }
+  function tickTimeLeft() {
+    const now = Date.now() + serverOffsetMs;
+    document.querySelectorAll('#results-body .time-left').forEach(td => {
+      const dl = parseInt(td.dataset.deadline, 10);
+      if (!dl) { td.textContent = '—'; return; }
+      const left = Math.ceil((dl - now) / 1000);
+      if (left <= 0) { td.textContent = 'время вышло'; td.style.color = '#d64545'; return; }
+      td.textContent = '⏱ ' + fmtClock(left);
+      td.style.color = left <= 300 ? '#d64545' : '#2e9e4f';
+    });
+  }
+  setInterval(tickTimeLeft, 1000);
+
   function formatDuration(sec) {
     const m = Math.floor(sec / 60), r = sec % 60;
     return m > 0 ? `${m} мин ${String(r).padStart(2, '0')} с` : `${r} с`;
@@ -1013,13 +1047,14 @@
     });
     const body = document.getElementById('results-body');
     const counter = document.getElementById('participants-counter');
+    setTimeout(tickTimeLeft, 0);
     const doneCount = list.filter(p => p.finished).length;
     counter.textContent = `Подключилось: ${list.length} · Сдали: ${doneCount}` + (currentSessionTimeLimit ? ` · Лимит: ${currentSessionTimeLimit} мин` : '');
     counter.classList.toggle('hidden', list.length === 0);
     if (currentSessionType === 'drawing') {
       body.innerHTML = list.map((p, idx) => {
         let statusText = p.finished ? 'Сдал бланк' : 'Заполняет';
-        if (p.finished && p.durationSec) {
+        if (p.finished && p.durationSec && !currentSessionTimeLimit) {
           statusText += `<div class="muted" style="font-size:12px;">${formatDuration(p.durationSec)}${p.timedOut ? ' · <span style="color:#d64545;">⏱ время вышло</span>' : ''}</div>`;
         }
         let resultText = '—';
@@ -1029,7 +1064,7 @@
             : '<span style="color:var(--orange); font-weight:600;">Не проверено</span>';
         }
         const openBtn = p.finished ? `<button class="btn outline small" onclick="openDrawingReview('${p.id}')">Проверить</button>` : '';
-        return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}${p.partInfo ? `<div class="muted" style="font-size:12px;">${escapeHtml(p.partInfo)}</div>` : ''}</td><td>${statusText}</td><td>${resultText}</td><td>${openBtn}</td></tr>`;
+        return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}${p.partInfo ? `<div class="muted" style="font-size:12px;">${escapeHtml(p.partInfo)}</div>` : ''}</td><td>${statusText}</td>${timeCellHtml(p)}<td>${resultText}</td><td>${openBtn}</td></tr>`;
       }).join('');
       return;
     }
@@ -1044,7 +1079,7 @@
     body.innerHTML = list.map((p, idx) => {
       const statusText = p.finished ? 'Завершил' : 'Проходит тест';
       const resultText = (p.finished && p.total) ? `${p.score}/${p.total} (${Math.round(p.score / p.total * 100)}%)` : '—';
-      return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td><td>${tabSwitchCellHtml(p)}</td></tr>`;
+      return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}</td><td>${statusText}</td>${timeCellHtml(p)}<td>${resultText}</td><td>${tabSwitchCellHtml(p)}</td></tr>`;
     }).join('');
   }
 
@@ -1072,7 +1107,9 @@
 
     document.title = session.testTitle + ' · ' + session.code;
     currentSessionCode = session.code;
-    currentSessionTimeLimit = session.timeLimit || null;
+    currentSessionTimeLimit = ((session.type === 'drawing' || !session.type) && session.timeLimit) ? session.timeLimit : null;
+    document.getElementById('results-th-time').classList.toggle('hidden', !currentSessionTimeLimit);
+    document.getElementById('results-table').classList.toggle('has-time', !!currentSessionTimeLimit);
     updateScheduledBanner(session.scheduledAt || null);
 
     const s = ensureSocket();
@@ -1122,7 +1159,8 @@
     try {
       const res = await authFetch('/api/my-sessions/' + encodeURIComponent(code));
       if (!res.ok || code !== currentSessionCode) return;
-      const { session } = await res.json();
+      const { session, serverNow } = await res.json();
+      if (serverNow) serverOffsetMs = serverNow - Date.now();
       Object.values(session.participants || {}).forEach(p => upsertParticipantRow(p));
       if (session.ended) {
         document.getElementById('session-status').textContent = 'Завершено';

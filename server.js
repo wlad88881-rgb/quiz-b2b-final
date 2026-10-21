@@ -2109,7 +2109,7 @@ app.get('/api/my-sessions/:code', checkAuth, async (req, res) => {
   const url = `${getBaseUrl()}/${sessionPathPrefix(session.type)}/${session.code}`;
   let qrDataUrl = '';
   try { qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 }); } catch (e) {}
-  res.json({ session, url, qrDataUrl });
+  res.json({ session, url, qrDataUrl, serverNow: Date.now() });
 });
 
 // Удаление прошедших сессий (вместе с ответами участников). Только свои сессии компании.
