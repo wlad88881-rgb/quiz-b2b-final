@@ -161,6 +161,16 @@
   </div>
 
   <!-- Экран блокировки / окончания пробного периода -->
+  <div id="boot-screen" style="text-align:center; padding:60px 20px;">
+    <div id="boot-spinner" style="width:36px; height:36px; border:3px solid #eee; border-top-color:#F07C00; border-radius:50%; animation:bootspin .8s linear infinite; margin:0 auto 16px;"></div>
+    <div id="boot-text" style="font-size:15px; color:#555; line-height:1.6;">Загрузка…</div>
+    <div id="boot-actions" class="hidden" style="margin-top:18px; display:flex; flex-direction:column; gap:10px; align-items:center;">
+      <button class="btn" onclick="bootApp()">Повторить</button>
+      <button class="btn outline" onclick="resetAppCache()">Сбросить кэш и перезагрузить</button>
+      <button class="btn outline" onclick="bootLoginAgain()">Войти заново</button>
+    </div>
+  </div>
+  <style>@keyframes bootspin { to { transform: rotate(360deg); } }</style>
   <div id="blocked-screen" class="hidden" style="text-align:center; padding:50px 20px;">
     <div style="font-size:40px; margin-bottom:10px;">🔒</div>
     <h2 style="color:#2C3E50; margin-bottom:12px;">Доступ ограничен</h2>
@@ -392,12 +402,19 @@
     }
     const endpoint = isRegisterMode ? '/api/register' : '/api/login';
     const body = isRegisterMode ? { email, password, name } : { email, password };
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const data = await res.json();
+    let res, data;
+    try {
+      res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      data = await res.json();
+    } catch (e) {
+      errorEl.textContent = 'Нет связи с сервером. Проверьте интернет (или VPN/прокси) и повторите. Сервер на бесплатном тарифе может просыпаться до минуты.';
+      errorEl.style.display = 'block';
+      return;
+    }
     if (!res.ok) {
       errorEl.textContent = (data.error === 'BLOCKED' || data.error === 'TRIAL_ENDED') ? (data.message || 'Ошибка') : (data.error || 'Ошибка');
       errorEl.style.display = 'block';
@@ -416,6 +433,7 @@
   }
 
   function enterApp() {
+    document.getElementById('boot-screen').classList.add('hidden');
     document.getElementById('blocked-screen').classList.add('hidden');
     document.getElementById('auth-screen').classList.add('hidden');
     document.getElementById('screen-main').classList.remove('hidden');
@@ -489,25 +507,75 @@
     updateThemeButton();
   }
 
-  document.addEventListener('DOMContentLoaded', async () => {
+  // Старт панели. Раньше при зависшем или недоступном сервере страница оставалась пустой:
+  // теперь есть таймаут, понятное сообщение и кнопки «Повторить» / «Сбросить кэш» / «Войти заново».
+  function showBoot(text, isError) {
+    document.getElementById('boot-screen').classList.remove('hidden');
+    document.getElementById('boot-text').innerHTML = text;
+    document.getElementById('boot-spinner').classList.toggle('hidden', !!isError);
+    document.getElementById('boot-actions').classList.toggle('hidden', !isError);
+  }
+  function hideBoot() { document.getElementById('boot-screen').classList.add('hidden'); }
+
+  async function bootApp() {
     updateThemeButton();
+    showBoot('Загрузка…');
+    const slowTimer = setTimeout(() => showBoot('Сервер просыпается или отвечает медленно…<br>На бесплатном тарифе Render это может занять до минуты. Подождите.'), 6000);
     const savedToken = localStorage.getItem('b2bToken');
     if (savedToken) {
-      const res = await fetch('/api/me', { headers: { 'x-company-id': savedToken } });
-      if (res.ok) {
-        const data = await res.json();
-        localStorage.setItem('b2bPlan', data.plan);
-        enterApp();
-        return;
-      }
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 403 && (data.error === 'BLOCKED' || data.error === 'TRIAL_ENDED')) {
-        showBlockedScreen(data.message);
+      try {
+        const ctrl = new AbortController();
+        const abortTimer = setTimeout(() => ctrl.abort(), 25000);
+        const res = await fetch('/api/me', { headers: { 'x-company-id': savedToken }, signal: ctrl.signal, cache: 'no-store' });
+        clearTimeout(abortTimer); clearTimeout(slowTimer);
+        if (res.ok) {
+          const data = await res.json();
+          localStorage.setItem('b2bPlan', data.plan);
+          enterApp();
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 403 && (data.error === 'BLOCKED' || data.error === 'TRIAL_ENDED')) {
+          hideBoot();
+          showBlockedScreen(data.message);
+          return;
+        }
+        if (res.status >= 500 || res.status === 429) {
+          showBoot('Сервер временно недоступен (код ' + res.status + '). Подождите минуту и нажмите «Повторить».', true);
+          return;
+        }
+      } catch (e) {
+        clearTimeout(slowTimer);
+        showBoot('Нет связи с сервером. Проверьте интернет, VPN или прокси компании и нажмите «Повторить».<br><span style="font-size:13px; color:#888;">Если на телефоне работает, а здесь нет — попробуйте «Сбросить кэш» или раздачу интернета с телефона.</span>', true);
         return;
       }
     }
+    clearTimeout(slowTimer);
+    hideBoot();
     document.getElementById('auth-screen').classList.remove('hidden');
-  });
+  }
+
+  function bootLoginAgain() {
+    ['b2bToken', 'b2bCompanyId', 'b2bEmail', 'b2bPlan'].forEach(k => localStorage.removeItem(k));
+    bootApp();
+  }
+
+  // Сбрасывает service worker и кэш браузера (вход в аккаунт сохраняется) — лечит «зависшую» старую версию.
+  async function resetAppCache() {
+    try {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      }
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+    } catch (e) { /* всё равно перезагрузим */ }
+    location.href = location.pathname + location.search;
+  }
+
+  document.addEventListener('DOMContentLoaded', bootApp);
 
   // ОСНОВНЫЕ ФУНКЦИИ
   let currentSessionTimeLimit = null;
