@@ -916,6 +916,9 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
     });
   }
 
+  const inProgress = findUnfinishedByName(session, name);
+  if (inProgress) return nameInProgress(res, inProgress);
+
   const pid = participantId();
 
   // Перемешиваем порядок вопросов и порядок вариантов ответа индивидуально для
@@ -945,6 +948,7 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
     score: null,
     total: null,
     optionShuffle,
+    questionOrder: orderedQuestions.map(q => q.id),
     tabSwitchCount: 0,
     tabSwitchTotalMs: 0
   };
@@ -954,6 +958,8 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
     participantId: pid,
     testTitle: test.title,
     timeLimit: session.timeLimit || null,
+    deadline: session.timeLimit ? participant.joinedAt + session.timeLimit * 60 * 1000 : null,
+    serverNow: Date.now(),
     questions: orderedQuestions
   });
 });
@@ -1406,6 +1412,8 @@ app.post('/api/lab-sessions/:code/join', joinLimiter, async (req, res) => {
   if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
   const lab = safeGet(data.labs, session.labId);
   if (!lab) return res.status(404).json({ error: 'Тренажёр не найден' });
+  const inProgress = findUnfinishedByName(session, name);
+  if (inProgress) return nameInProgress(res, inProgress);
   const pid = participantId();
   const caseAssignment = assignCases(lab);
   const participant = {
@@ -1907,6 +1915,8 @@ app.post('/api/drawing-sessions/:code/join', joinLimiter, async (req, res) => {
   if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
   const task = safeGet(data.drawingTasks, session.drawingTaskId);
   if (!task) return res.status(404).json({ error: 'Задание не найдено' });
+  const inProgress = findUnfinishedByName(session, name);
+  if (inProgress) return nameInProgress(res, inProgress);
   const pid = participantId();
   const joinedAt = Date.now();
   const participant = {
@@ -2070,6 +2080,106 @@ app.get('/api/drawing-sessions/:code/export', checkAuth, (req, res) => {
   res.setHeader('Content-Disposition', `attachment; filename="drawing_results_${req.params.code}.xlsx"`);
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.send(buf);
+});
+
+// ==================== ВОЗОБНОВЛЕНИЕ ПРОХОЖДЕНИЯ ====================
+// Если ученик вышел (закрыл вкладку, села батарея, пропала связь), при повторном входе он
+// продолжает с того же места: тот же участник, те же вопросы/вариант, сохранённые ответы и
+// тот же срок сдачи (таймер НЕ перезапускается). Черновик ответов клиент шлёт на
+// /api/progress; на диск/в Supabase он уходит пачкой раз в 15 секунд, чтобы десятки
+// учеников не создавали очередь из полных записей базы.
+const MAX_DRAFT_BYTES = 100 * 1024;
+let draftFlushTimer = null;
+function scheduleDraftFlush() {
+  if (draftFlushTimer) return;
+  draftFlushTimer = setTimeout(async () => {
+    draftFlushTimer = null;
+    try { await db.update(() => {}); } catch (e) { console.error('[progress] не удалось сохранить черновики:', e); }
+  }, 15000);
+}
+
+function findUnfinishedByName(session, name) {
+  const key = String(name || '').trim().toLowerCase();
+  return Object.values(session.participants || {})
+    .filter(p => !p.finished && String(p.name || '').trim().toLowerCase() === key)
+    .sort((a, b) => (b.joinedAt || 0) - (a.joinedAt || 0))[0] || null;
+}
+
+// Ответ join, если участник с таким именем уже проходит эту сессию: вместо дубля
+// предлагаем продолжить (клиент вызывает /api/resume по имени).
+function nameInProgress(res, p) {
+  return res.status(409).json({
+    error: 'NAME_IN_PROGRESS',
+    message: `«${p.name}» уже проходит это задание. Если это вы — продолжите с того же места. Если это другой человек с таким же именем, добавьте к имени инициал или номер группы.`
+  });
+}
+
+app.post('/api/progress/:code', (req, res) => {
+  const { participantId: pid, draft } = req.body;
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session) return res.status(404).json({ ok: false });
+  const p = safeGet(session.participants, pid);
+  if (!p || p.finished || session.ended) return res.json({ ok: false });
+  let size = 0;
+  try { size = JSON.stringify(draft === undefined ? null : draft).length; } catch (e) { return res.status(400).json({ ok: false }); }
+  if (size > MAX_DRAFT_BYTES) return res.status(413).json({ ok: false, error: 'Слишком большой черновик' });
+  p.draft = draft === undefined ? null : draft; // правим кэш в памяти напрямую; запись на диск — пачкой
+  p.draftAt = Date.now();
+  scheduleDraftFlush();
+  res.json({ ok: true });
+});
+
+app.post('/api/resume/:code', joinLimiter, (req, res) => {
+  const { participantId: pid, name } = req.body;
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session) return res.status(404).json({ error: 'NOT_FOUND', message: 'Сессия не найдена' });
+  let p = pid ? safeGet(session.participants, pid) : null;
+  if (!p && name) p = findUnfinishedByName(session, name);
+  if (!p) return res.status(404).json({ error: 'NOT_FOUND', message: 'Участник не найден' });
+  if (p.finished) return res.json({ finished: true, participantId: p.id });
+  if (session.ended) return res.status(410).json({ error: 'Задание завершено' });
+  const type = session.type || 'test';
+  const base = { resumed: true, finished: false, type, participantId: p.id, name: p.name, joinedAt: p.joinedAt, draft: p.draft || null, serverNow: Date.now() };
+
+  if (type === 'test') {
+    const test = safeGet(data.tests, session.testId);
+    if (!test) return res.status(404).json({ error: 'Тест не найден' });
+    const byId = {}; test.questions.forEach(q => { byId[q.id] = q; });
+    const mapping = p.optionShuffle || {};
+    const order = (p.questionOrder && p.questionOrder.length ? p.questionOrder : test.questions.map(q => q.id)).filter(id => byId[id]);
+    const questions = order.map(id => {
+      const q = byId[id];
+      const m = mapping[id] || q.options.map((_, i) => i);
+      return { id: q.id, text: q.text, options: m.map(i => q.options[i]), multi: !!q.multi, image: q.image || null };
+    });
+    return res.json({ ...base, testTitle: test.title, timeLimit: session.timeLimit || null,
+      deadline: session.timeLimit ? p.joinedAt + session.timeLimit * 60 * 1000 : null, questions });
+  }
+  if (type === 'lab') {
+    const lab = safeGet(data.labs, session.labId);
+    if (!lab) return res.status(404).json({ error: 'Тренажёр не найден' });
+    return res.json({ ...base, testTitle: lab.title, cases: (p.caseAssignment || []).map(a => caseForClient(lab, a)) });
+  }
+  if (type === 'drawing') {
+    const task = safeGet(data.drawingTasks, session.drawingTaskId);
+    if (!task) return res.status(404).json({ error: 'Задание не найдено' });
+    return res.json({ ...base, testTitle: task.title, intro: task.intro, outro: task.outro || '',
+      timeLimit: session.timeLimit || null, deadline: p.deadline || null, partInfo: p.partInfo || '',
+      questions: task.questions.map(studentQuestionView) });
+  }
+  if (type === 'tolerance') {
+    const task = safeGet(data.toleranceTasks, session.toleranceTaskId);
+    const variant = task ? task.variants.find(v => v.id === p.variantId) : null;
+    if (!variant) return res.status(404).json({ error: 'Вариант не найден' });
+    const labels = fieldLabels(variant.kind);
+    const fieldsTable = variant.kind === 'hole' ? HOLE_FIELDS : SHAFT_FIELDS;
+    return res.json({ ...base, testTitle: task.title, intro: task.intro, methodology: task.methodology || [],
+      variant: { kind: variant.kind, typeName: labels.typeName, nominal: variant.nominal, field: variant.field }, labels,
+      table: { ranges: TOLERANCE_RANGES, fieldNames: Object.keys(fieldsTable), rows: fieldsTable } });
+  }
+  res.status(400).json({ error: 'Неизвестный тип сессии' });
 });
 
 // ==================== СЕССИИ КОМПАНИИ (история и повторное открытие) ====================
@@ -2243,6 +2353,8 @@ app.post('/api/tolerance-sessions/:code/join', joinLimiter, async (req, res) => 
   const task = safeGet(data.toleranceTasks, session.toleranceTaskId);
   if (!task || task.variants.length === 0) return res.status(404).json({ error: 'Задание не найдено' });
 
+  const inProgress = findUnfinishedByName(session, name);
+  if (inProgress) return nameInProgress(res, inProgress);
   const pid = participantId();
   let variant;
   await db.update((d) => {

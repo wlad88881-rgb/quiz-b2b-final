@@ -228,6 +228,8 @@
 
   const CODE = location.pathname.split('/').filter(Boolean).pop();
 
+  const LS_KEY = 'labParticipant_' + CODE;
+
   const state = {
     participantId: null,
     testTitle: '',
@@ -247,6 +249,48 @@
     showScreen('screen-error');
   }
 
+  // ==================== ПРОДОЛЖЕНИЕ С ТОГО ЖЕ МЕСТА ====================
+  let progressTimer = null;
+  function scheduleProgress() {
+    if (!state.participantId) return;
+    clearTimeout(progressTimer);
+    progressTimer = setTimeout(sendProgress, 2000);
+  }
+  function sendProgress() {
+    if (!state.participantId) return;
+    clearTimeout(progressTimer);
+    try {
+      fetch(`/api/progress/${CODE}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+        body: JSON.stringify({ participantId: state.participantId, draft: { answers: state.answers, currentIndex: state.currentIndex } })
+      }).catch(() => {});
+    } catch (e) { /* не критично */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) sendProgress(); });
+  window.addEventListener('pagehide', sendProgress);
+
+  async function resumeLab(body) {
+    try {
+      const res = await fetch(`/api/resume/${CODE}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) { if (res.status === 404) localStorage.removeItem(LS_KEY); return false; }
+      if (data.finished) { localStorage.removeItem(LS_KEY); return 'finished'; }
+      state.participantId = data.participantId;
+      state.testTitle = data.testTitle;
+      state.cases = data.cases;
+      const d = data.draft || {};
+      state.answers = d.answers && typeof d.answers === 'object' ? d.answers : {};
+      const ci = parseInt(d.currentIndex, 10);
+      state.currentIndex = Math.min(Math.max(isNaN(ci) ? 0 : ci, 0), state.cases.length - 1);
+      localStorage.setItem(LS_KEY, data.participantId);
+      showScreen('screen-quiz');
+      renderCase();
+      return true;
+    } catch (e) { return false; }
+  }
+
   async function init() {
     try {
       const res = await fetch(`/api/lab-sessions/${CODE}/info`);
@@ -264,6 +308,8 @@
       if (data.scheduledAt && data.scheduledAt > Date.now()) {
         showScheduledBannerLab(data.scheduledAt);
       }
+      const savedId = localStorage.getItem(LS_KEY);
+      if (savedId && (await resumeLab({ participantId: savedId })) === true) return;
       showScreen('screen-join');
     } catch (e) {
       showError('Не удалось подключиться. Проверьте интернет-соединение.');
@@ -320,6 +366,20 @@
         body: JSON.stringify({ name })
       });
       const data = await res.json();
+      if (!res.ok && data.error === 'NAME_IN_PROGRESS') {
+        btn.disabled = false;
+        if (confirm(data.message + '\n\nПродолжить с того же места как «' + name + '»?')) {
+          btn.disabled = true;
+          const r = await resumeLab({ name });
+          if (r === true) return;
+          btn.disabled = false;
+          errEl.textContent = 'Не удалось продолжить. Обновите страницу и попробуйте ещё раз.';
+        } else {
+          errEl.textContent = data.message;
+        }
+        errEl.classList.remove('hidden');
+        return;
+      }
       if (!res.ok) {
         errEl.textContent = (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED' || data.error === 'NOT_STARTED') ? (data.message || 'Ошибка') : (data.error || 'Ошибка');
         errEl.classList.remove('hidden');
@@ -332,6 +392,7 @@
       state.cases = data.cases;
       state.currentIndex = 0;
       state.answers = {};
+      localStorage.setItem(LS_KEY, data.participantId);
       showScreen('screen-quiz');
       renderCase();
     } catch (e) {
@@ -376,7 +437,7 @@
       const d = document.createElement('div');
       d.className = 'dot' + (answered ? ' answered' : '') + (i === idx ? ' current' : '');
       d.textContent = i + 1;
-      d.onclick = () => { state.currentIndex = i; renderCase(); };
+      d.onclick = () => { state.currentIndex = i; renderCase(); scheduleProgress(); };
       dots.appendChild(d);
     });
 
@@ -392,10 +453,11 @@
   function selectOption(idx, faultId) {
     state.answers[idx] = faultId;
     renderCase();
+    scheduleProgress();
   }
 
-  function goNext() { if (state.currentIndex < state.cases.length - 1) { state.currentIndex++; renderCase(); } }
-  function goPrev() { if (state.currentIndex > 0) { state.currentIndex--; renderCase(); } }
+  function goNext() { if (state.currentIndex < state.cases.length - 1) { state.currentIndex++; renderCase(); scheduleProgress(); } }
+  function goPrev() { if (state.currentIndex > 0) { state.currentIndex--; renderCase(); scheduleProgress(); } }
 
   let lastResult = null;
 
@@ -411,6 +473,8 @@
       });
       const data = await res.json();
       if (!res.ok) { showError(data.message || data.error || 'Ошибка отправки результата.'); return; }
+      clearTimeout(progressTimer);
+      localStorage.removeItem(LS_KEY);
       lastResult = data;
       showResult();
     } catch (e) {

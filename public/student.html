@@ -349,6 +349,8 @@
     }
   };
 
+  const LS_KEY = 'testParticipant_' + CODE;
+
   const state = {
     lang: 'ru',
     participantId: null,
@@ -387,6 +389,58 @@
     showScreen('screen-error');
   }
 
+  // ==================== ПРОДОЛЖЕНИЕ С ТОГО ЖЕ МЕСТА ====================
+  // Ответы автоматически сохраняются на сервере. Если ученик вышел (закрыл вкладку, пропала
+  // связь), при повторном входе он видит тот же порядок вопросов, свои ответы и тот же таймер.
+  let progressTimer = null;
+  function scheduleProgress() {
+    if (!state.participantId) return;
+    clearTimeout(progressTimer);
+    progressTimer = setTimeout(sendProgress, 2000);
+  }
+  function sendProgress() {
+    if (!state.participantId) return;
+    clearTimeout(progressTimer);
+    try {
+      fetch(`/api/progress/${CODE}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+        body: JSON.stringify({ participantId: state.participantId, draft: { answers: state.answers, currentIndex: state.currentIndex } })
+      }).catch(() => {});
+    } catch (e) { /* не критично: сохранится при следующем действии */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) sendProgress(); });
+  window.addEventListener('pagehide', sendProgress);
+
+  // Возвращает true (восстановили), 'finished' (уже сдано) или false (не нашли / нет связи).
+  async function resumeTest(body) {
+    try {
+      const res = await fetch(`/api/resume/${CODE}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) { if (res.status === 404) localStorage.removeItem(LS_KEY); return false; }
+      if (data.finished) { localStorage.removeItem(LS_KEY); return 'finished'; }
+      state.participantId = data.participantId;
+      state.testTitle = data.testTitle;
+      state.timeLimit = data.timeLimit;
+      state.questions = data.questions;
+      const d = data.draft || {};
+      state.answers = d.answers && typeof d.answers === 'object' ? d.answers : {};
+      const ci = parseInt(d.currentIndex, 10);
+      state.currentIndex = Math.min(Math.max(isNaN(ci) ? 0 : ci, 0), state.questions.length - 1);
+      localStorage.setItem(LS_KEY, data.participantId);
+      showScreen('screen-quiz');
+      if (state.timeLimit && data.deadline) {
+        state.deadline = data.deadline - (data.serverNow - Date.now());
+        document.getElementById('timer-box').classList.remove('hidden');
+        startTimer();
+      }
+      if (state.lang === 'kk') translateAll();
+      renderQuestion();
+      return true;
+    } catch (e) { return false; }
+  }
+
   async function init() {
     applyStaticUi();
     try {
@@ -416,6 +470,8 @@
       if (data.scheduledAt && data.scheduledAt > Date.now()) {
         showScheduledBanner(data.scheduledAt);
       }
+      const savedId = localStorage.getItem(LS_KEY);
+      if (savedId && (await resumeTest({ participantId: savedId })) === true) return;
       showScreen('screen-join');
     } catch (e) {
       showError(t('notFound'));
@@ -535,6 +591,20 @@
         body: JSON.stringify({ name })
       });
       const data = await res.json();
+      if (!res.ok && data.error === 'NAME_IN_PROGRESS') {
+        btn.disabled = false;
+        if (confirm(data.message + '\n\nПродолжить с того же места как «' + name + '»?')) {
+          btn.disabled = true;
+          const r = await resumeTest({ name });
+          if (r === true) return;
+          btn.disabled = false;
+          errEl.textContent = 'Не удалось продолжить. Обновите страницу и попробуйте ещё раз.';
+        } else {
+          errEl.textContent = data.message;
+        }
+        errEl.classList.remove('hidden');
+        return;
+      }
       if (!res.ok) {
         errEl.textContent = (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED' || data.error === 'NOT_STARTED' || data.error === 'ALREADY_SUBMITTED') ? (data.message || t('notFound')) : (data.error || t('notFound'));
         errEl.classList.remove('hidden');
@@ -548,9 +618,10 @@
       state.questions = data.questions;
       state.currentIndex = 0;
       state.answers = {};
+      localStorage.setItem(LS_KEY, data.participantId);
       showScreen('screen-quiz');
       if (state.timeLimit) {
-        state.deadline = Date.now() + state.timeLimit * 60 * 1000;
+        state.deadline = data.deadline ? data.deadline - (data.serverNow - Date.now()) : Date.now() + state.timeLimit * 60 * 1000;
         document.getElementById('timer-box').classList.remove('hidden');
         startTimer();
       }
@@ -629,7 +700,7 @@
       const d = document.createElement('div');
       d.className = 'dot' + (answered ? ' answered' : '') + (i === idx ? ' current' : '');
       d.textContent = i + 1;
-      d.onclick = () => { state.currentIndex = i; renderQuestion(); };
+      d.onclick = () => { state.currentIndex = i; renderQuestion(); scheduleProgress(); };
       dots.appendChild(d);
     });
 
@@ -655,18 +726,21 @@
       state.answers[q.id] = i;
     }
     renderQuestion();
+    scheduleProgress();
   }
 
   function goNext() {
     if (state.currentIndex < state.questions.length - 1) {
       state.currentIndex++;
       renderQuestion();
+      scheduleProgress();
     }
   }
   function goPrev() {
     if (state.currentIndex > 0) {
       state.currentIndex--;
       renderQuestion();
+      scheduleProgress();
     }
   }
 
@@ -732,6 +806,8 @@
         showError(data.error || t('notFound'));
         return;
       }
+      clearTimeout(progressTimer);
+      localStorage.removeItem(LS_KEY);
       lastResult = data;
       lastResult.auto = auto;
       showResult();

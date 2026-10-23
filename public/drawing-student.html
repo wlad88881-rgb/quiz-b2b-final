@@ -107,7 +107,8 @@
 
 <script>
   const CODE = location.pathname.split('/').filter(Boolean).pop();
-  const LS_KEY = 'drawingParticipant_' + CODE;
+  const LS_KEY = 'drawingParticipant_' + CODE;      // бланк сдан — показываем результат
+  const JOIN_KEY = 'drawingJoined_' + CODE;        // бланк в процессе — можно продолжить
 
   const state = {
     participantId: null,
@@ -125,6 +126,75 @@
     showScreen('screen-error');
   }
 
+  // ==================== ПРОДОЛЖЕНИЕ С ТОГО ЖЕ МЕСТА ====================
+  // Заполненные поля сохраняются на сервере. Если ученик вышел (закрыл вкладку, села батарея),
+  // при повторном входе он видит свои ответы, а таймер продолжает идти с прежнего срока.
+  let progressTimer = null;
+  function collectAnswers() {
+    return state.questions.map((q, i) => { const el = document.getElementById('ans-' + i); return el ? el.value : ''; });
+  }
+  function scheduleProgress() {
+    if (!state.participantId) return;
+    clearTimeout(progressTimer);
+    progressTimer = setTimeout(sendProgress, 2000);
+  }
+  function sendProgress() {
+    if (!state.participantId || localStorage.getItem(LS_KEY)) return;
+    clearTimeout(progressTimer);
+    try {
+      fetch(`/api/progress/${CODE}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+        body: JSON.stringify({ participantId: state.participantId, draft: { answers: collectAnswers() } })
+      }).catch(() => {});
+    } catch (e) { /* не критично */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) sendProgress(); });
+  window.addEventListener('pagehide', sendProgress);
+
+  function enterForm(data, draft) {
+    state.participantId = data.participantId;
+    state.questions = data.questions;
+    state.outro = data.outro || '';
+    state.timeLimit = data.timeLimit || null;
+    // Срок считает сервер; поправка на разницу часов телефона и сервера.
+    state.deadline = data.deadline ? data.deadline - (data.serverNow - Date.now()) : null;
+    state.startLocal = data.joinedAt ? Date.now() - (data.serverNow - data.joinedAt) : Date.now();
+    document.getElementById('form-title').textContent = data.testTitle;
+    document.getElementById('form-intro').textContent = data.intro || '';
+    renderForm();
+    if (draft && Array.isArray(draft.answers)) {
+      draft.answers.forEach((v, i) => {
+        const el = document.getElementById('ans-' + i);
+        if (el && typeof v === 'string') el.value = v;
+      });
+      updateProgress();
+    }
+    localStorage.setItem(JOIN_KEY, state.participantId);
+    showScreen('screen-form');
+    startTimer();
+  }
+
+  // true — восстановили; 'finished' — бланк уже сдан (например, ушёл по таймеру); false — не нашли.
+  async function resumeDrawing(body) {
+    try {
+      const res = await fetch(`/api/resume/${CODE}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) { if (res.status === 404) localStorage.removeItem(JOIN_KEY); return false; }
+      if (data.finished) {
+        state.participantId = data.participantId;
+        localStorage.removeItem(JOIN_KEY);
+        localStorage.setItem(LS_KEY, data.participantId);
+        showScreen('screen-done');
+        await checkResult();
+        return 'finished';
+      }
+      enterForm(data, data.draft);
+      return true;
+    } catch (e) { return false; }
+  }
+
   async function init() {
     const savedId = localStorage.getItem(LS_KEY);
     if (savedId) {
@@ -133,6 +203,8 @@
       await checkResult();
       return;
     }
+    const joinedId = localStorage.getItem(JOIN_KEY);
+    if (joinedId && (await resumeDrawing({ participantId: joinedId }))) return;
     try {
       const res = await fetch(`/api/drawing-sessions/${CODE}/info`);
       const data = await res.json();
@@ -201,6 +273,20 @@
         body: JSON.stringify({ name, partInfo })
       });
       const data = await res.json();
+      if (!res.ok && data.error === 'NAME_IN_PROGRESS') {
+        btn.disabled = false;
+        if (confirm(data.message + '\n\nПродолжить с того же места как «' + name + '»?')) {
+          btn.disabled = true;
+          const r = await resumeDrawing({ name });
+          if (r) return;
+          btn.disabled = false;
+          errEl.textContent = 'Не удалось продолжить. Обновите страницу и попробуйте ещё раз.';
+        } else {
+          errEl.textContent = data.message;
+        }
+        errEl.classList.remove('hidden');
+        return;
+      }
       if (!res.ok) {
         errEl.textContent = (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED' || data.error === 'NOT_STARTED') ? (data.message || 'Ошибка') : (data.error || 'Ошибка');
         errEl.classList.remove('hidden');
@@ -208,18 +294,7 @@
         if (data.error === 'NOT_STARTED' && data.scheduledAt) showScheduledBanner(data.scheduledAt);
         return;
       }
-      state.participantId = data.participantId;
-      state.questions = data.questions;
-      state.outro = data.outro || '';
-      state.timeLimit = data.timeLimit || null;
-      // Срок считает сервер; поправка на разницу часов телефона и сервера.
-      state.deadline = data.deadline ? data.deadline - (data.serverNow - Date.now()) : null;
-      state.startLocal = Date.now();
-      document.getElementById('form-title').textContent = data.testTitle;
-      document.getElementById('form-intro').textContent = data.intro || '';
-      renderForm();
-      showScreen('screen-form');
-      startTimer();
+      enterForm(data, null);
     } catch (e) {
       errEl.textContent = 'Не удалось подключиться. Проверьте интернет-соединение.';
       errEl.classList.remove('hidden');
@@ -274,6 +349,7 @@
       const blk = e.target.closest('.q-block');
       if (blk && e.target.value.trim()) blk.classList.remove('missing');
       updateProgress();
+      scheduleProgress();
     });
     updateProgress();
     const outro = document.getElementById('form-outro');
@@ -360,6 +436,8 @@
         return;
       }
       stopTimer();
+      clearTimeout(progressTimer);
+      localStorage.removeItem(JOIN_KEY);
       localStorage.setItem(LS_KEY, state.participantId);
       showScreen('screen-done');
       await checkResult();

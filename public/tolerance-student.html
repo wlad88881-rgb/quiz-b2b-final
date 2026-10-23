@@ -134,7 +134,8 @@
 
 <script>
   const CODE = location.pathname.split('/').filter(Boolean).pop();
-  const LS_KEY = 'toleranceParticipant_' + CODE;
+  const LS_KEY = 'toleranceParticipant_' + CODE;      // ответ сдан — показываем результат
+  const JOIN_KEY = 'toleranceJoined_' + CODE;        // решает — можно продолжить
 
   const state = { participantId: null, variant: null, labels: null };
 
@@ -153,6 +154,67 @@
     return div.innerHTML;
   }
 
+  // ==================== ПРОДОЛЖЕНИЕ С ТОГО ЖЕ МЕСТА ====================
+  // Вариант закреплён за учеником, введённые числа сохраняются на сервере: при повторном
+  // входе он получает тот же вариант и свои значения, а не следующий по очереди.
+  const FIELD_IDS_ALL = ['devMaxUm', 'devMinUm', 'devMaxMm', 'devMinMm', 'limMaxMm', 'limMinMm'];
+  let progressTimer = null;
+  function collectValues() {
+    const v = {};
+    FIELD_IDS_ALL.forEach(id => { v[id] = document.getElementById(id).value; });
+    return v;
+  }
+  function scheduleProgress() {
+    if (!state.participantId) return;
+    clearTimeout(progressTimer);
+    progressTimer = setTimeout(sendProgress, 2000);
+  }
+  function sendProgress() {
+    if (!state.participantId || localStorage.getItem(LS_KEY)) return;
+    clearTimeout(progressTimer);
+    try {
+      fetch(`/api/progress/${CODE}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+        body: JSON.stringify({ participantId: state.participantId, draft: { values: collectValues() } })
+      }).catch(() => {});
+    } catch (e) { /* не критично */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) sendProgress(); });
+  window.addEventListener('pagehide', sendProgress);
+  document.addEventListener('input', (e) => { if (e.target && FIELD_IDS_ALL.includes(e.target.id)) scheduleProgress(); });
+
+  function enterForm(data, draft) {
+    state.participantId = data.participantId;
+    state.variant = data.variant;
+    state.labels = data.labels;
+    renderForm(data);
+    if (draft && draft.values && typeof draft.values === 'object') {
+      FIELD_IDS_ALL.forEach(id => { if (typeof draft.values[id] === 'string') document.getElementById(id).value = draft.values[id]; });
+    }
+    localStorage.setItem(JOIN_KEY, state.participantId);
+    showScreen('screen-form');
+  }
+
+  async function resumeTolerance(body) {
+    try {
+      const res = await fetch(`/api/resume/${CODE}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) { if (res.status === 404) localStorage.removeItem(JOIN_KEY); return false; }
+      if (data.finished) {
+        state.participantId = data.participantId;
+        localStorage.removeItem(JOIN_KEY);
+        localStorage.setItem(LS_KEY, data.participantId);
+        showScreen('screen-done');
+        await checkResult();
+        return 'finished';
+      }
+      enterForm(data, data.draft);
+      return true;
+    } catch (e) { return false; }
+  }
+
   async function init() {
     const savedId = localStorage.getItem(LS_KEY);
     if (savedId) {
@@ -161,6 +223,8 @@
       await checkResult();
       return;
     }
+    const joinedId = localStorage.getItem(JOIN_KEY);
+    if (joinedId && (await resumeTolerance({ participantId: joinedId }))) return;
     try {
       const res = await fetch(`/api/tolerance-sessions/${CODE}/info`);
       const data = await res.json();
@@ -213,6 +277,20 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name })
       });
       const data = await res.json();
+      if (!res.ok && data.error === 'NAME_IN_PROGRESS') {
+        btn.disabled = false;
+        if (confirm(data.message + '\n\nПродолжить с того же места как «' + name + '»?')) {
+          btn.disabled = true;
+          const r = await resumeTolerance({ name });
+          if (r) return;
+          btn.disabled = false;
+          errEl.textContent = 'Не удалось продолжить. Обновите страницу и попробуйте ещё раз.';
+        } else {
+          errEl.textContent = data.message;
+        }
+        errEl.classList.remove('hidden');
+        return;
+      }
       if (!res.ok) {
         errEl.textContent = data.message || data.error || 'Ошибка';
         errEl.classList.remove('hidden');
@@ -220,11 +298,7 @@
         if (data.error === 'NOT_STARTED' && data.scheduledAt) showScheduledBanner(data.scheduledAt);
         return;
       }
-      state.participantId = data.participantId;
-      state.variant = data.variant;
-      state.labels = data.labels;
-      renderForm(data);
-      showScreen('screen-form');
+      enterForm(data, null);
     } catch (e) {
       errEl.textContent = 'Не удалось подключиться. Проверьте интернет-соединение.';
       errEl.classList.remove('hidden');
@@ -347,6 +421,8 @@
         btn.disabled = false;
         return;
       }
+      clearTimeout(progressTimer);
+      localStorage.removeItem(JOIN_KEY);
       localStorage.setItem(LS_KEY, state.participantId);
       showScreen('screen-done');
       await checkResult();
