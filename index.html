@@ -137,7 +137,10 @@
       input, textarea, select { font-size: 16px !important; }
       #qr-img { width: 150px; height: 150px; }
       #results-table, #stats-sessions-table, #stats-questions-table { font-size: 12.5px; }
-      #results-table td, #results-table th { padding: 8px 5px; }
+      #results-table td, #results-table th { padding: 8px 4px; }
+      #results-table th:first-child, #results-table td:first-child { width: 26px; text-align: center; }
+      /* с таймером столбец «Статус» на телефоне скрыт: отсчёт или ✓ уже показывают состояние */
+      #results-table.has-time th:nth-child(3), #results-table.has-time td:nth-child(3) { display: none; }
       #results-table .btn.small { padding: 8px 10px; min-height: 36px; white-space: nowrap; }
       .code-big { font-size: 28px; }
     }
@@ -158,6 +161,16 @@
   </div>
 
   <!-- Экран блокировки / окончания пробного периода -->
+  <div id="boot-screen" style="text-align:center; padding:60px 20px;">
+    <div id="boot-spinner" style="width:36px; height:36px; border:3px solid #eee; border-top-color:#F07C00; border-radius:50%; animation:bootspin .8s linear infinite; margin:0 auto 16px;"></div>
+    <div id="boot-text" style="font-size:15px; color:#555; line-height:1.6;">Загрузка…</div>
+    <div id="boot-actions" class="hidden" style="margin-top:18px; display:flex; flex-direction:column; gap:10px; align-items:center;">
+      <button class="btn" onclick="bootApp()">Повторить</button>
+      <button class="btn outline" onclick="resetAppCache()">Сбросить кэш и перезагрузить</button>
+      <button class="btn outline" onclick="bootLoginAgain()">Войти заново</button>
+    </div>
+  </div>
+  <style>@keyframes bootspin { to { transform: rotate(360deg); } }</style>
   <div id="blocked-screen" class="hidden" style="text-align:center; padding:50px 20px;">
     <div style="font-size:40px; margin-bottom:10px;">🔒</div>
     <h2 style="color:#2C3E50; margin-bottom:12px;">Доступ ограничен</h2>
@@ -297,6 +310,7 @@
             <a id="session-link" href="#" target="_blank"></a>
           </div>
           <button class="btn outline small" onclick="openPresentView()">🖥 Экран для показа</button>
+          <button class="btn outline small" onclick="openSessionInNewWindow(currentSessionCode)">↗ В отдельном окне</button>
           <button class="btn outline small" onclick="toggleSessionStats()">📊 Статистика вопросов</button>
           <button class="btn outline small" onclick="exportResults()">📥 Excel</button>
         </div>
@@ -310,8 +324,9 @@
         <div id="session-stats-chart"></div>
       </div>
       <div id="no-participants" class="muted" style="text-align:center; padding:30px 0;">Пока никто не присоединился.</div>
+      <div id="participants-counter" class="hidden" style="margin:10px 0 8px; font-weight:700; color:var(--navy);"></div>
       <table id="results-table" class="hidden">
-        <thead><tr><th>Участник</th><th>Статус</th><th>Результат</th><th id="results-th-4">Переключения вкладки</th></tr></thead>
+        <thead><tr><th style="width:34px;">№</th><th>Участник</th><th>Статус</th><th id="results-th-time" class="hidden">Осталось</th><th>Результат</th><th id="results-th-4">Переключения вкладки</th></tr></thead>
         <tbody id="results-body"></tbody>
       </table>
     </div>
@@ -321,7 +336,7 @@
     <div style="width:320px; background:#fff; border-radius:14px; padding:20px;">
       <h3 style="margin-bottom:10px; color:#2C3E50;">Начать сессию</h3>
       <div id="session-timelimit-wrap">
-        <label class="muted" style="display:block; margin-bottom:6px;">Лимит времени на тест, минут (оставьте пустым — без ограничения)</label>
+        <label class="muted" style="display:block; margin-bottom:6px;">Лимит времени, минут (оставьте пустым — без ограничения)</label>
         <input type="text" id="session-time-limit" placeholder="например, 20" inputmode="numeric">
       </div>
 
@@ -387,12 +402,19 @@
     }
     const endpoint = isRegisterMode ? '/api/register' : '/api/login';
     const body = isRegisterMode ? { email, password, name } : { email, password };
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const data = await res.json();
+    let res, data;
+    try {
+      res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      data = await res.json();
+    } catch (e) {
+      errorEl.textContent = 'Нет связи с сервером. Проверьте интернет (или VPN/прокси) и повторите. Сервер на бесплатном тарифе может просыпаться до минуты.';
+      errorEl.style.display = 'block';
+      return;
+    }
     if (!res.ok) {
       errorEl.textContent = (data.error === 'BLOCKED' || data.error === 'TRIAL_ENDED') ? (data.message || 'Ошибка') : (data.error || 'Ошибка');
       errorEl.style.display = 'block';
@@ -411,12 +433,15 @@
   }
 
   function enterApp() {
+    document.getElementById('boot-screen').classList.add('hidden');
     document.getElementById('blocked-screen').classList.add('hidden');
     document.getElementById('auth-screen').classList.add('hidden');
     document.getElementById('screen-main').classList.remove('hidden');
     document.getElementById('company-display').textContent = localStorage.getItem('b2bEmail') || 'Компания';
     refreshMe();
     loadTestsList();
+    const wantedSession = new URLSearchParams(location.search).get('session');
+    if (wantedSession) openExistingSession(wantedSession);
   }
 
   function logout() {
@@ -482,28 +507,81 @@
     updateThemeButton();
   }
 
-  document.addEventListener('DOMContentLoaded', async () => {
+  // Старт панели. Раньше при зависшем или недоступном сервере страница оставалась пустой:
+  // теперь есть таймаут, понятное сообщение и кнопки «Повторить» / «Сбросить кэш» / «Войти заново».
+  function showBoot(text, isError) {
+    document.getElementById('boot-screen').classList.remove('hidden');
+    document.getElementById('boot-text').innerHTML = text;
+    document.getElementById('boot-spinner').classList.toggle('hidden', !!isError);
+    document.getElementById('boot-actions').classList.toggle('hidden', !isError);
+  }
+  function hideBoot() { document.getElementById('boot-screen').classList.add('hidden'); }
+
+  async function bootApp() {
     updateThemeButton();
+    showBoot('Загрузка…');
+    const slowTimer = setTimeout(() => showBoot('Сервер просыпается или отвечает медленно…<br>На бесплатном тарифе Render это может занять до минуты. Подождите.'), 6000);
     const savedToken = localStorage.getItem('b2bToken');
     if (savedToken) {
-      const res = await fetch('/api/me', { headers: { 'x-company-id': savedToken } });
-      if (res.ok) {
-        const data = await res.json();
-        localStorage.setItem('b2bPlan', data.plan);
-        enterApp();
-        return;
-      }
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 403 && (data.error === 'BLOCKED' || data.error === 'TRIAL_ENDED')) {
-        showBlockedScreen(data.message);
+      try {
+        const ctrl = new AbortController();
+        const abortTimer = setTimeout(() => ctrl.abort(), 25000);
+        const res = await fetch('/api/me', { headers: { 'x-company-id': savedToken }, signal: ctrl.signal, cache: 'no-store' });
+        clearTimeout(abortTimer); clearTimeout(slowTimer);
+        if (res.ok) {
+          const data = await res.json();
+          localStorage.setItem('b2bPlan', data.plan);
+          enterApp();
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 403 && (data.error === 'BLOCKED' || data.error === 'TRIAL_ENDED')) {
+          hideBoot();
+          showBlockedScreen(data.message);
+          return;
+        }
+        if (res.status >= 500 || res.status === 429) {
+          showBoot('Сервер временно недоступен (код ' + res.status + '). Подождите минуту и нажмите «Повторить».', true);
+          return;
+        }
+      } catch (e) {
+        clearTimeout(slowTimer);
+        showBoot('Нет связи с сервером. Проверьте интернет, VPN или прокси компании и нажмите «Повторить».<br><span style="font-size:13px; color:#888;">Если на телефоне работает, а здесь нет — попробуйте «Сбросить кэш» или раздачу интернета с телефона.</span>', true);
         return;
       }
     }
+    clearTimeout(slowTimer);
+    hideBoot();
     document.getElementById('auth-screen').classList.remove('hidden');
-  });
+  }
+
+  function bootLoginAgain() {
+    ['b2bToken', 'b2bCompanyId', 'b2bEmail', 'b2bPlan'].forEach(k => localStorage.removeItem(k));
+    bootApp();
+  }
+
+  // Сбрасывает service worker и кэш браузера (вход в аккаунт сохраняется) — лечит «зависшую» старую версию.
+  async function resetAppCache() {
+    try {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      }
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+    } catch (e) { /* всё равно перезагрузим */ }
+    location.href = location.pathname + location.search;
+  }
+
+  document.addEventListener('DOMContentLoaded', bootApp);
 
   // ОСНОВНЫЕ ФУНКЦИИ
+  let currentSessionTimeLimit = null;
+  const BASE_TITLE = document.title;
   function showList() {
+    document.title = BASE_TITLE;
     document.getElementById('screen-list').classList.remove('hidden');
     document.getElementById('screen-editor').classList.add('hidden');
     document.getElementById('screen-session').classList.add('hidden');
@@ -802,7 +880,7 @@
     pendingSessionType = type;
     pendingSessionId = id;
     document.getElementById('session-time-limit').value = '';
-    document.getElementById('session-timelimit-wrap').classList.toggle('hidden', type !== 'test');
+    document.getElementById('session-timelimit-wrap').classList.toggle('hidden', type !== 'test' && type !== 'drawing');
     document.querySelector('input[name="session-when"][value="now"]').checked = true;
     document.getElementById('session-schedule-at').classList.add('hidden');
     document.getElementById('session-schedule-at').value = '';
@@ -895,7 +973,7 @@
     const errorEl = document.getElementById('session-modal-error');
     errorEl.textContent = '';
     let timeLimit = null;
-    if (pendingSessionType === 'test') {
+    if (pendingSessionType === 'test' || pendingSessionType === 'drawing') {
       const raw = document.getElementById('session-time-limit').value.trim();
       if (raw) {
         const n = parseInt(raw, 10);
@@ -919,7 +997,7 @@
     closeSessionModal();
 
     const endpoint = type === 'lab' ? '/api/lab-sessions' : type === 'drawing' ? '/api/drawing-sessions' : type === 'tolerance' ? '/api/tolerance-sessions' : '/api/sessions';
-    const body = type === 'lab' ? { labId: id, scheduledAt } : type === 'drawing' ? { drawingTaskId: id, scheduledAt } : type === 'tolerance' ? { toleranceTaskId: id, scheduledAt } : { testId: id, timeLimit, scheduledAt };
+    const body = type === 'lab' ? { labId: id, scheduledAt } : type === 'drawing' ? { drawingTaskId: id, timeLimit, scheduledAt } : type === 'tolerance' ? { toleranceTaskId: id, scheduledAt } : { testId: id, timeLimit, scheduledAt };
     const res = await authFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -975,6 +1053,48 @@
   // Таблица сортируется так же, как студенты видят топ-3 в лидерборде: сначала
   // завершившие тест — по проценту результата (выше — выше в списке), при равном
   // проценте раньше сдавший идёт первым; ещё не завершившие — ниже, в порядке захода.
+  // ===== Обратный отсчёт по каждому ученику =====
+  let serverOffsetMs = 0; // сервер минус часы этого компьютера/телефона
+  const fmtClock = (sec) => {
+    const a = Math.max(0, sec);
+    return String(Math.floor(a / 60)).padStart(2, '0') + ':' + String(a % 60).padStart(2, '0');
+  };
+  function participantDeadline(p) {
+    if (p.deadline) return p.deadline;
+    if (currentSessionTimeLimit && p.joinedAt) return p.joinedAt + currentSessionTimeLimit * 60 * 1000;
+    return null;
+  }
+  function timeCellHtml(p) {
+    if (!currentSessionTimeLimit) return '';
+    if (p.finished) {
+      const dur = p.durationSec || (p.finishedAt && p.joinedAt ? Math.round((p.finishedAt - p.joinedAt) / 1000) : null);
+      return `<td class="muted" style="white-space:nowrap;">✓ ${dur ? fmtClock(dur) : ''}${p.timedOut ? ' <span style="color:#d64545;" title="Время вышло">⏱</span>' : ''}</td>`;
+    }
+    return `<td class="time-left" data-deadline="${participantDeadline(p) || ''}" style="font-weight:700; white-space:nowrap;"></td>`;
+  }
+  function tickTimeLeft() {
+    const now = Date.now() + serverOffsetMs;
+    document.querySelectorAll('#results-body .time-left').forEach(td => {
+      const dl = parseInt(td.dataset.deadline, 10);
+      if (!dl) { td.textContent = '—'; return; }
+      const left = Math.ceil((dl - now) / 1000);
+      if (left <= 0) { td.textContent = 'время вышло'; td.style.color = '#d64545'; return; }
+      td.textContent = '⏱ ' + fmtClock(left);
+      td.style.color = left <= 300 ? '#d64545' : '#2e9e4f';
+    });
+  }
+  setInterval(tickTimeLeft, 1000);
+
+  // Ученик вошёл повторно под тем же именем как новый участник — показываем, чтобы вы видели дубль.
+  function restartedMark(p) {
+    return p.restarted ? ' <span title="Вошёл заново с тем же именем" style="color:#F07C00; font-weight:700;">↻</span>' : '';
+  }
+
+  function formatDuration(sec) {
+    const m = Math.floor(sec / 60), r = sec % 60;
+    return m > 0 ? `${m} мин ${String(r).padStart(2, '0')} с` : `${r} с`;
+  }
+
   function upsertParticipantRow(p) {
     participantsMap[p.id] = Object.assign({}, participantsMap[p.id] || {}, p);
     document.getElementById('no-participants').classList.add('hidden');
@@ -984,7 +1104,11 @@
 
   function renderParticipantsTable() {
     const list = Object.values(participantsMap);
+    const byJoinOrder = currentSessionType === 'drawing' || currentSessionType === 'tolerance';
     list.sort((a, b) => {
+      // Для чертежей и квалитетов порядок = порядок подключения: номера не «прыгают»,
+      // последний номер всегда равен числу подключившихся.
+      if (byJoinOrder) return (a.joinedAt || 0) - (b.joinedAt || 0);
       if (a.finished && b.finished) {
         const pa = a.total ? a.score / a.total : 0;
         const pb = b.total ? b.score / b.total : 0;
@@ -995,9 +1119,17 @@
       return (a.joinedAt || 0) - (b.joinedAt || 0);
     });
     const body = document.getElementById('results-body');
+    const counter = document.getElementById('participants-counter');
+    setTimeout(tickTimeLeft, 0);
+    const doneCount = list.filter(p => p.finished).length;
+    counter.textContent = `Подключилось: ${list.length} · Сдали: ${doneCount}` + (currentSessionTimeLimit ? ` · Лимит: ${currentSessionTimeLimit} мин` : '');
+    counter.classList.toggle('hidden', list.length === 0);
     if (currentSessionType === 'drawing') {
-      body.innerHTML = list.map(p => {
-        const statusText = p.finished ? 'Сдал бланк' : 'Заполняет';
+      body.innerHTML = list.map((p, idx) => {
+        let statusText = p.finished ? 'Сдал бланк' : 'Заполняет';
+        if (p.finished && p.durationSec && !currentSessionTimeLimit) {
+          statusText += `<div class="muted" style="font-size:12px;">${formatDuration(p.durationSec)}${p.timedOut ? ' · <span style="color:#d64545;">⏱ время вышло</span>' : ''}</div>`;
+        }
         let resultText = '—';
         if (p.finished) {
           resultText = p.graded
@@ -1005,22 +1137,22 @@
             : '<span style="color:var(--orange); font-weight:600;">Не проверено</span>';
         }
         const openBtn = p.finished ? `<button class="btn outline small" onclick="openDrawingReview('${p.id}')">Проверить</button>` : '';
-        return `<tr id="prow-${p.id}"><td>${escapeHtml(p.name)}${p.partInfo ? `<div class="muted" style="font-size:12px;">${escapeHtml(p.partInfo)}</div>` : ''}</td><td>${statusText}</td><td>${resultText}</td><td>${openBtn}</td></tr>`;
+        return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}${restartedMark(p)}${p.partInfo ? `<div class="muted" style="font-size:12px;">${escapeHtml(p.partInfo)}</div>` : ''}</td><td>${statusText}</td>${timeCellHtml(p)}<td>${resultText}</td><td>${openBtn}</td></tr>`;
       }).join('');
       return;
     }
     if (currentSessionType === 'tolerance') {
-      body.innerHTML = list.map(p => {
+      body.innerHTML = list.map((p, idx) => {
         const statusText = p.finished ? 'Сдал ответ' : 'Решает';
         const resultText = (p.finished && p.score !== undefined && p.score !== null) ? `${p.score}/6` : '—';
-        return `<tr id="prow-${p.id}"><td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td><td>—</td></tr>`;
+        return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}${restartedMark(p)}</td><td>${statusText}</td><td>${resultText}</td><td>—</td></tr>`;
       }).join('');
       return;
     }
-    body.innerHTML = list.map(p => {
+    body.innerHTML = list.map((p, idx) => {
       const statusText = p.finished ? 'Завершил' : 'Проходит тест';
       const resultText = (p.finished && p.total) ? `${p.score}/${p.total} (${Math.round(p.score / p.total * 100)}%)` : '—';
-      return `<tr id="prow-${p.id}"><td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td><td>${tabSwitchCellHtml(p)}</td></tr>`;
+      return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}${restartedMark(p)}</td><td>${statusText}</td>${timeCellHtml(p)}<td>${resultText}</td><td>${tabSwitchCellHtml(p)}</td></tr>`;
     }).join('');
   }
 
@@ -1036,6 +1168,7 @@
     document.getElementById('no-participants').classList.remove('hidden');
     document.getElementById('results-table').classList.add('hidden');
     document.getElementById('results-body').innerHTML = '';
+    document.getElementById('participants-counter').classList.add('hidden');
     document.getElementById('end-session-btn').disabled = false;
     liveTabSwitches = {};
     participantsMap = {};
@@ -1045,7 +1178,11 @@
     document.getElementById('results-th-4').textContent = session.type === 'drawing' ? 'Проверка' : session.type === 'tolerance' ? '—' : 'Переключения вкладки';
     document.querySelector('#screen-session button[onclick="toggleSessionStats()"]').classList.toggle('hidden', session.type === 'drawing' || session.type === 'tolerance');
 
+    document.title = session.testTitle + ' · ' + session.code;
     currentSessionCode = session.code;
+    currentSessionTimeLimit = ((session.type === 'drawing' || !session.type) && session.timeLimit) ? session.timeLimit : null;
+    document.getElementById('results-th-time').classList.toggle('hidden', !currentSessionTimeLimit);
+    document.getElementById('results-table').classList.toggle('has-time', !!currentSessionTimeLimit);
     updateScheduledBanner(session.scheduledAt || null);
 
     const s = ensureSocket();
@@ -1095,7 +1232,8 @@
     try {
       const res = await authFetch('/api/my-sessions/' + encodeURIComponent(code));
       if (!res.ok || code !== currentSessionCode) return;
-      const { session } = await res.json();
+      const { session, serverNow } = await res.json();
+      if (serverNow) serverOffsetMs = serverNow - Date.now();
       Object.values(session.participants || {}).forEach(p => upsertParticipantRow(p));
       if (session.ended) {
         document.getElementById('session-status').textContent = 'Завершено';
@@ -1116,6 +1254,13 @@
     });
     if (!res.ok) { alert('Не удалось удалить'); return; }
     loadSessionHistory(type, containerId);
+  }
+
+  // Каждая вкладка/окно браузера хранит своё состояние, поэтому две сессии
+  // (например, редуктор и насос) можно вести параллельно в двух независимых окнах.
+  function openSessionInNewWindow(code) {
+    if (!code) return;
+    window.open(location.origin + '/?session=' + encodeURIComponent(code), '_blank');
   }
 
   async function openExistingSession(code) {
@@ -1147,6 +1292,7 @@
         </div>
         <div class="row">
           <button class="btn outline small" onclick="openExistingSession('${s.code}')">Открыть</button>
+          <button class="btn outline small" onclick="openSessionInNewWindow('${s.code}')">↗ Новое окно</button>
           <button class="btn danger small" onclick="deleteSessions(['${s.code}'], '${type}', '${containerId}', 'Удалить эту сессию вместе с ответами участников?')">Удалить</button>
         </div>
       </div>`).join('');
@@ -1425,11 +1571,20 @@
         </div>
         <div class="row">
           <button class="btn small" onclick="startDrawingSession('${t.id}')">Начать сессию</button>
-          ${t.shared ? '' : `<button class="btn outline small" onclick="editDrawingTask('${t.id}')">Изменить</button>
+          ${t.shared ? `<button class="btn outline small" onclick="copyAndEditDrawingTask('${t.id}')">Копия и правка</button>` : `<button class="btn outline small" onclick="editDrawingTask('${t.id}')">Изменить</button>
           <button class="btn danger small" onclick="deleteDrawingTask('${t.id}')">Удалить</button>`}
         </div>
       </div>
     `).join('');
+  }
+
+  // Общее задание нельзя править на месте (оно восстанавливается при запуске сервера),
+  // поэтому создаём собственную копию и сразу открываем её в редакторе.
+  async function copyAndEditDrawingTask(id) {
+    const res = await authFetch('/api/drawing-tasks/' + id + '/copy', { method: 'POST' });
+    if (!res.ok) { alert('Не удалось создать копию'); return; }
+    const copy = await res.json();
+    await editDrawingTask(copy.id);
   }
 
   function showDrawingEditor() {
@@ -1928,19 +2083,7 @@
   // Регистрация service worker для установки страницы как приложения (PWA)
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
-        .then((reg) => {
-          reg.update();
-          document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update(); });
-        })
-        .catch((e) => console.warn('SW не зарегистрирован:', e));
-      // Новая версия SW взяла управление — один раз перезагружаем страницу, чтобы показать свежий код
-      let swReloaded = false;
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (swReloaded) return;
-        swReloaded = true;
-        location.reload();
-      });
+      navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('SW не зарегистрирован:', e));
     });
   }
 </script>

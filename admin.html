@@ -337,19 +337,7 @@
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
-        .then((reg) => {
-          reg.update();
-          document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update(); });
-        })
-        .catch((e) => console.warn('SW не зарегистрирован:', e));
-      // Новая версия SW взяла управление — один раз перезагружаем страницу, чтобы показать свежий код
-      let swReloaded = false;
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (swReloaded) return;
-        swReloaded = true;
-        location.reload();
-      });
+      navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('SW не зарегистрирован:', e));
     });
   }
 </script>

@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Задание по чертежу</title>
+<meta name="theme-color" content="#2C3E50">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<style>
+  :root { --navy: #2C3E50; --orange: #F07C00; --gray: #F4F4F4; }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  html, body { height: 100%; }
+  body { background: var(--gray); display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; padding: 16px; }
+  .wrap { max-width: 620px; width: 100%; background: #fff; border-radius: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); padding: 24px; margin: 20px 0 40px; }
+  .hidden { display: none !important; }
+  h1 { font-size: 20px; color: var(--navy); margin-bottom: 6px; }
+  .sub { color: #888; font-size: 14px; margin-bottom: 18px; line-height: 1.5; }
+  .muted { color: #888; font-size: 13px; }
+
+  input[type="text"], textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 10px; font-size: 16px; margin-bottom: 12px; font-family: inherit; }
+  textarea { resize: vertical; min-height: 52px; line-height: 1.4; }
+  .btn { display: inline-block; background: var(--orange); color: #fff; border: none; padding: 13px 20px; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; width: 100%; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn.navy { background: var(--navy); }
+
+  .error-box { background: #fdecea; color: #d64545; padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+  .info-box { background: #eef4fb; color: #2C3E50; padding: 12px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+  .ok-box { background: #e6f4ea; color: #2e9e4f; padding: 14px; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+
+  .field-label { font-size: 13.5px; font-weight: 700; color: var(--navy); margin-bottom: 6px; display: block; }
+  .q-block { margin-bottom: 16px; }
+  .q-num { font-size: 12px; color: var(--orange); font-weight: 700; margin-bottom: 4px; letter-spacing: 0.3px; }
+
+  .sec-title { font-size: 16px; font-weight: 700; color: #fff; background: var(--navy); border-radius: 10px; padding: 10px 14px; margin: 22px 0 10px; }
+  .sec-text { font-size: 14px; color: var(--navy); background: #eef4fb; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; line-height: 1.5; white-space: pre-wrap; }
+  .q-hint { font-size: 13px; color: #555; background: #fff8ec; border-left: 3px solid var(--orange); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; line-height: 1.5; white-space: pre-wrap; }
+  .q-img { max-width: 100%; border: 1px solid #eee; border-radius: 10px; margin-bottom: 8px; }
+  .q-block.missing textarea { border-color: #d64545; background: #fff5f5; }
+  .q-block .q-miss { display: none; color: #d64545; font-size: 12.5px; margin: -6px 0 6px; }
+  .q-block.missing .q-miss { display: block; }
+  .timer { position: sticky; top: 0; z-index: 5; text-align: center; font-weight: 800; font-size: 20px; color: var(--navy); background: #fff; padding: 6px 0 10px; margin: -6px 0 6px; border-bottom: 1px solid #f0f0f0; }
+  .timer.warn { color: #d64545; }
+  .center { text-align: center; }
+  .spinner { width: 34px; height: 34px; border: 3px solid #eee; border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 30px auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div id="screen-loading" class="center">
+    <div class="spinner"></div>
+    <div class="muted">Загрузка...</div>
+  </div>
+
+  <div id="screen-error" class="hidden">
+    <h1>Не получилось</h1>
+    <div class="error-box" id="error-text"></div>
+  </div>
+
+  <div id="screen-join" class="hidden">
+    <h1 id="join-title"></h1>
+    <div class="sub" id="join-intro"></div>
+    <div class="info-box hidden" id="scheduled-banner"></div>
+    <div class="info-box hidden" id="limit-note"></div>
+    <label class="field-label">Ф.И.О.</label>
+    <input type="text" id="student-name" placeholder="Фамилия Имя" maxlength="60">
+    <label class="field-label">Номер задания / деталь для анализа</label>
+    <input type="text" id="student-part" placeholder="например: чертёж №14, вал-шестерня" maxlength="120">
+    <div class="error-box hidden" id="join-error"></div>
+    <button class="btn" id="join-btn" onclick="joinTask()">Начать</button>
+  </div>
+
+  <div id="screen-form" class="hidden">
+    <div class="timer" id="timer-box">00:00</div>
+    <h1 id="form-title"></h1>
+    <div class="sub" id="form-intro"></div>
+    <div id="questions-container"></div>
+    <div class="info-box hidden" id="form-outro" style="white-space:pre-wrap;"></div>
+    <div id="fill-progress" class="muted" style="margin:6px 0 10px; font-weight:700;"></div>
+    <div class="error-box hidden" id="submit-error"></div>
+    <button class="btn navy" id="submit-btn" onclick="submitTask()">Сдать бланк</button>
+  </div>
+
+  <div id="screen-done" class="hidden">
+    <div id="done-status"></div>
+    <div id="result-items"></div>
+    <button class="btn outline small hidden" id="refresh-btn" onclick="checkResult()" style="width:auto; padding:10px 16px; background:#fff; color:var(--navy); border:1px solid #ddd;">Обновить</button>
+  </div>
+
+</div>
+
+<style>
+  .btn.outline.small { }
+  .result-row { margin-bottom: 14px; }
+  .result-row .rq { font-size: 13px; font-weight: 700; color: var(--navy); margin-bottom: 6px; }
+  .result-cols { display: flex; gap: 10px; flex-wrap: wrap; }
+  .result-col { flex: 1; min-width: 160px; }
+  .result-col-label { font-size: 11px; color: #999; margin-bottom: 3px; }
+  .result-box { padding: 8px 10px; background: #fafbfc; border: 1px solid #eee; border-radius: 8px; font-size: 14px; white-space: pre-wrap; min-height: 18px; }
+  .verdict { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 20px; margin-top: 6px; }
+  .verdict.ok { background: #e6f4ea; color: #2e9e4f; }
+  .verdict.no { background: #fdecea; color: #d64545; }
+</style>
+
+<script>
+  const CODE = location.pathname.split('/').filter(Boolean).pop();
+  const LS_KEY = 'drawingParticipant_' + CODE;      // бланк сдан — показываем результат
+  const JOIN_KEY = 'drawingJoined_' + CODE;        // бланк в процессе — можно продолжить
+
+  const state = {
+    participantId: null,
+    questions: []
+  };
+
+  function showScreen(id) {
+    ['screen-loading','screen-error','screen-join','screen-form','screen-done'].forEach(s => {
+      document.getElementById(s).classList.toggle('hidden', s !== id);
+    });
+  }
+
+  function showError(msg) {
+    document.getElementById('error-text').textContent = msg;
+    showScreen('screen-error');
+  }
+
+  // ==================== ПРОДОЛЖЕНИЕ С ТОГО ЖЕ МЕСТА ====================
+  // Заполненные поля сохраняются на сервере. Если ученик вышел (закрыл вкладку, села батарея),
+  // при повторном входе он видит свои ответы, а таймер продолжает идти с прежнего срока.
+  let progressTimer = null;
+  function collectAnswers() {
+    return state.questions.map((q, i) => { const el = document.getElementById('ans-' + i); return el ? el.value : ''; });
+  }
+  function scheduleProgress() {
+    if (!state.participantId) return;
+    clearTimeout(progressTimer);
+    progressTimer = setTimeout(sendProgress, 2000);
+  }
+  function sendProgress() {
+    if (!state.participantId || localStorage.getItem(LS_KEY)) return;
+    clearTimeout(progressTimer);
+    try {
+      fetch(`/api/progress/${CODE}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+        body: JSON.stringify({ participantId: state.participantId, draft: { answers: collectAnswers() } })
+      }).catch(() => {});
+    } catch (e) { /* не критично */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) sendProgress(); });
+  window.addEventListener('pagehide', sendProgress);
+
+  function enterForm(data, draft) {
+    state.participantId = data.participantId;
+    state.questions = data.questions;
+    state.outro = data.outro || '';
+    state.timeLimit = data.timeLimit || null;
+    // Срок считает сервер; поправка на разницу часов телефона и сервера.
+    state.deadline = data.deadline ? data.deadline - (data.serverNow - Date.now()) : null;
+    state.startLocal = data.joinedAt ? Date.now() - (data.serverNow - data.joinedAt) : Date.now();
+    document.getElementById('form-title').textContent = data.testTitle;
+    document.getElementById('form-intro').textContent = data.intro || '';
+    renderForm();
+    if (draft && Array.isArray(draft.answers)) {
+      draft.answers.forEach((v, i) => {
+        const el = document.getElementById('ans-' + i);
+        if (el && typeof v === 'string') el.value = v;
+      });
+      updateProgress();
+    }
+    localStorage.setItem(JOIN_KEY, state.participantId);
+    showScreen('screen-form');
+    startTimer();
+  }
+
+  // true — восстановили; 'finished' — бланк уже сдан (например, ушёл по таймеру); false — не нашли.
+  async function resumeDrawing(body) {
+    try {
+      const res = await fetch(`/api/resume/${CODE}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) { if (res.status === 404) localStorage.removeItem(JOIN_KEY); return false; }
+      if (data.finished) {
+        state.participantId = data.participantId;
+        localStorage.removeItem(JOIN_KEY);
+        localStorage.setItem(LS_KEY, data.participantId);
+        showScreen('screen-done');
+        await checkResult();
+        return 'finished';
+      }
+      enterForm(data, data.draft);
+      return true;
+    } catch (e) { return false; }
+  }
+
+  async function init() {
+    const savedId = localStorage.getItem(LS_KEY);
+    if (savedId) {
+      state.participantId = savedId;
+      showScreen('screen-done');
+      await checkResult();
+      return;
+    }
+    const joinedId = localStorage.getItem(JOIN_KEY);
+    if (joinedId && (await resumeDrawing({ participantId: joinedId }))) return;
+    try {
+      const res = await fetch(`/api/drawing-sessions/${CODE}/info`);
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 410) { showError('Задание завершено преподавателем.'); return; }
+        if (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED') { showError(data.message || 'Доступ временно недоступен.'); return; }
+        showError(res.status === 404 ? 'Сессия не найдена. Проверьте код или QR-код.' : (data.error || 'Ошибка загрузки.'));
+        return;
+      }
+      document.getElementById('join-title').textContent = data.testTitle;
+      document.getElementById('join-intro').textContent = data.intro || 'Заполните бланк по чертежу.';
+      if (data.timeLimit) {
+        const ln = document.getElementById('limit-note');
+        ln.textContent = `⏱ Лимит времени: ${data.timeLimit} мин. Отсчёт начнётся сразу после нажатия «Начать». По окончании времени бланк отправится автоматически в том виде, в каком он заполнен.`;
+        ln.classList.remove('hidden');
+      }
+      if (data.scheduledAt && data.scheduledAt > Date.now()) {
+        showScheduledBanner(data.scheduledAt);
+      }
+      showScreen('screen-join');
+    } catch (e) {
+      showError('Не удалось подключиться. Проверьте интернет-соединение.');
+    }
+  }
+
+  let scheduledPollTimer = null;
+  function showScheduledBanner(scheduledAt) {
+    const banner = document.getElementById('scheduled-banner');
+    const dt = new Date(scheduledAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    banner.textContent = `⏰ Задание начнётся ${dt}. Страница обновится автоматически.`;
+    banner.classList.remove('hidden');
+    document.getElementById('join-btn').disabled = true;
+
+    if (scheduledPollTimer) clearInterval(scheduledPollTimer);
+    scheduledPollTimer = setInterval(async () => {
+      if (Date.now() < scheduledAt) return;
+      try {
+        const res = await fetch(`/api/drawing-sessions/${CODE}/info`);
+        const data = await res.json();
+        if (res.ok && (!data.scheduledAt || data.scheduledAt <= Date.now())) {
+          clearInterval(scheduledPollTimer);
+          scheduledPollTimer = null;
+          banner.classList.add('hidden');
+          document.getElementById('join-btn').disabled = false;
+        }
+      } catch (e) { /* попробуем на следующем тике */ }
+    }, 5000);
+  }
+
+  // Выбор при совпадении имени. Встроен в страницу (а не confirm()): во встроенных браузерах
+  // мессенджеров системные окна часто блокируются, и ученика просто «не пускало».
+  let forceNewJoin = false;
+  function showNameConflict(message, canContinue, onContinue, onNew) {
+    const old = document.getElementById('name-conflict');
+    if (old) old.remove();
+    const box = document.createElement('div');
+    box.id = 'name-conflict';
+    box.style.cssText = 'background:#fff8ec; border-left:3px solid #F07C00; border-radius:10px; padding:12px 14px; margin-bottom:12px; font-size:14px; line-height:1.5; color:#2C3E50;';
+    const msg = document.createElement('div'); msg.textContent = message; msg.style.marginBottom = '10px'; box.appendChild(msg);
+    const mk = (text, primary, fn) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = text;
+      b.style.cssText = 'display:block; width:100%; padding:12px; margin-top:8px; border-radius:10px; font-size:15px; font-weight:600; cursor:pointer; ' +
+        (primary ? 'background:#F07C00; color:#fff; border:none;' : 'background:#fff; color:#2C3E50; border:1px solid #ddd;');
+      b.onclick = () => { box.remove(); fn(); };
+      box.appendChild(b);
+    };
+    if (canContinue) mk('Это я — продолжить с того же места', true, onContinue);
+    mk('Я другой человек — войти как новый участник', !canContinue, onNew);
+    document.getElementById('join-btn').insertAdjacentElement('beforebegin', box);
+    box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  async function joinTask() {
+    const name = document.getElementById('student-name').value.trim();
+    const partInfo = document.getElementById('student-part').value.trim();
+    const errEl = document.getElementById('join-error');
+    errEl.classList.add('hidden');
+    if (!name) {
+      errEl.textContent = 'Введите Ф.И.О.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const btn = document.getElementById('join-btn');
+    btn.disabled = true;
+    try {
+      const res = await fetch(`/api/drawing-sessions/${CODE}/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, partInfo, forceNew: forceNewJoin })
+      });
+      const data = await res.json();
+      if (!res.ok && (data.error === 'NAME_IN_PROGRESS' || data.error === 'ALREADY_SUBMITTED')) {
+        btn.disabled = false;
+        showNameConflict(data.message, data.error === 'NAME_IN_PROGRESS',
+          async () => {
+            btn.disabled = true;
+            const r = await resumeDrawing({ name });
+            if (!r) {
+              btn.disabled = false;
+              errEl.textContent = 'Не удалось продолжить. Обновите страницу и попробуйте ещё раз.';
+              errEl.classList.remove('hidden');
+            }
+          },
+          () => { forceNewJoin = true; joinTask(); });
+        return;
+      }
+      if (!res.ok) {
+        errEl.textContent = (data.error === 'TRIAL_ENDED' || data.error === 'BLOCKED' || data.error === 'NOT_STARTED') ? (data.message || 'Ошибка') : (data.error || 'Ошибка');
+        errEl.classList.remove('hidden');
+        btn.disabled = false;
+        if (data.error === 'NOT_STARTED' && data.scheduledAt) showScheduledBanner(data.scheduledAt);
+        return;
+      }
+      enterForm(data, null);
+    } catch (e) {
+      errEl.textContent = 'Не удалось подключиться. Проверьте интернет-соединение.';
+      errEl.classList.remove('hidden');
+      btn.disabled = false;
+    }
+  }
+
+  function renderForm() {
+    const container = document.getElementById('questions-container');
+    container.innerHTML = '';
+    let lastSection = '';
+    state.questions.forEach((q, i) => {
+      if (q.section && q.section !== lastSection) {
+        const h = document.createElement('div');
+        h.className = 'sec-title';
+        h.textContent = q.section;
+        container.appendChild(h);
+        if (q.sectionText) {
+          const t = document.createElement('div');
+          t.className = 'sec-text';
+          t.textContent = q.sectionText;
+          container.appendChild(t);
+        }
+        lastSection = q.section;
+      }
+      const block = document.createElement('div');
+      block.className = 'q-block';
+      block.innerHTML = `
+        <div class="q-num">${i + 1} / ${state.questions.length}</div>
+        <label class="field-label" for="ans-${i}"></label>
+        <textarea id="ans-${i}" rows="2" placeholder="Ваш ответ"></textarea>
+        <div class="q-miss">Заполните это поле (если нечего писать — поставьте «нет» или «—»)</div>
+      `;
+      const label = block.querySelector('.field-label');
+      label.textContent = q.text;
+      if (q.hint) {
+        const hint = document.createElement('div');
+        hint.className = 'q-hint';
+        hint.textContent = q.hint;
+        label.insertAdjacentElement('afterend', hint);
+      }
+      if (q.imageUrl) {
+        const img = document.createElement('img');
+        img.className = 'q-img';
+        img.src = q.imageUrl;
+        img.alt = 'Схема к пункту ' + (i + 1);
+        block.querySelector('textarea').insertAdjacentElement('beforebegin', img);
+      }
+      container.appendChild(block);
+    });
+    container.addEventListener('input', (e) => {
+      const blk = e.target.closest('.q-block');
+      if (blk && e.target.value.trim()) blk.classList.remove('missing');
+      updateProgress();
+      scheduleProgress();
+    });
+    updateProgress();
+    const outro = document.getElementById('form-outro');
+    outro.textContent = state.outro || '';
+    outro.classList.toggle('hidden', !state.outro);
+  }
+
+  let timerInterval = null;
+  const fmt = (sec) => String(Math.floor(sec / 60)).padStart(2, '0') + ':' + String(sec % 60).padStart(2, '0');
+
+  function startTimer() {
+    stopTimer();
+    tickTimer();
+    timerInterval = setInterval(tickTimer, 1000);
+  }
+  function stopTimer() {
+    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  }
+  function tickTimer() {
+    const box = document.getElementById('timer-box');
+    if (state.deadline) {
+      const left = Math.ceil((state.deadline - Date.now()) / 1000);
+      if (left <= 0) { box.textContent = '⏱ Время вышло'; box.classList.add('warn'); stopTimer(); autoSubmit(); return; }
+      box.textContent = '⏱ Осталось ' + fmt(left);
+      box.classList.toggle('warn', left <= 300);
+    } else {
+      box.textContent = '⏱ Время: ' + fmt(Math.floor((Date.now() - state.startLocal) / 1000));
+    }
+  }
+  // Время вышло: поля блокируются, бланк уходит как есть; при сбое связи пробуем повторять.
+  async function autoSubmit() {
+    document.querySelectorAll('#questions-container textarea').forEach(t => { t.readOnly = true; });
+    const errEl = document.getElementById('submit-error');
+    errEl.textContent = 'Время вышло — бланк отправляется автоматически…';
+    errEl.classList.remove('hidden');
+    document.getElementById('submit-btn').disabled = true;
+    const retry = setInterval(() => {
+      if (localStorage.getItem(LS_KEY)) { clearInterval(retry); return; }
+      document.getElementById('submit-btn').disabled = false;
+      submitTask(true);
+    }, 5000);
+    await submitTask(true);
+  }
+
+  function updateProgress() {
+    const total = state.questions.length;
+    const filled = state.questions.filter((q, i) => document.getElementById('ans-' + i).value.trim()).length;
+    const el = document.getElementById('fill-progress');
+    el.textContent = `Заполнено: ${filled} из ${total}`;
+    el.style.color = filled === total ? '#2e9e4f' : '#2C3E50';
+  }
+
+  async function submitTask(auto) {
+    const errEl = document.getElementById('submit-error');
+    errEl.classList.add('hidden');
+    const answers = state.questions.map((q, i) => document.getElementById('ans-' + i).value.trim());
+    const emptyIdx = [];
+    answers.forEach((a, i) => {
+      const blk = document.getElementById('ans-' + i).closest('.q-block');
+      blk.classList.toggle('missing', !a);
+      if (!a) emptyIdx.push(i);
+    });
+    if (emptyIdx.length && !auto) {
+      errEl.textContent = `Заполните все графы перед сдачей. Не заполнено: ${emptyIdx.length} (пункты ${emptyIdx.map(i => i + 1).join(', ')}).`;
+      errEl.classList.remove('hidden');
+      const first = document.getElementById('ans-' + emptyIdx[0]);
+      first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      first.focus();
+      return;
+    }
+    const btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    try {
+      const res = await fetch(`/api/drawing-sessions/${CODE}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ participantId: state.participantId, answers })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        errEl.textContent = data.error || 'Не удалось отправить бланк. Попробуйте ещё раз.';
+        errEl.classList.remove('hidden');
+        btn.disabled = false;
+        return;
+      }
+      stopTimer();
+      clearTimeout(progressTimer);
+      localStorage.removeItem(JOIN_KEY);
+      localStorage.setItem(LS_KEY, state.participantId);
+      showScreen('screen-done');
+      await checkResult();
+    } catch (e) {
+      errEl.textContent = 'Не удалось подключиться. Проверьте интернет-соединение.';
+      errEl.classList.remove('hidden');
+      btn.disabled = false;
+    }
+  }
+
+  async function checkResult() {
+    const statusEl = document.getElementById('done-status');
+    const itemsEl = document.getElementById('result-items');
+    const refreshBtn = document.getElementById('refresh-btn');
+    try {
+      const res = await fetch(`/api/drawing-sessions/${CODE}/result?participantId=${encodeURIComponent(state.participantId)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        statusEl.innerHTML = `<div class="error-box">${data.error || 'Не удалось получить результат.'}</div>`;
+        itemsEl.innerHTML = '';
+        refreshBtn.classList.add('hidden');
+        return;
+      }
+      if (!data.graded) {
+        statusEl.innerHTML = `
+          <div class="ok-box">
+            <strong>Бланк сдан.</strong>${data.timedOut ? ' ⏱ Время вышло — бланк отправлен автоматически.' : ''}<br>
+            ${data.durationSec ? `Время выполнения: ${fmt(data.durationSec)}.<br>` : ''}
+            Преподаватель ещё не проверил бланк. Загляните позже по этой же ссылке.
+          </div>`;
+        itemsEl.innerHTML = '';
+        refreshBtn.classList.remove('hidden');
+        return;
+      }
+      refreshBtn.classList.add('hidden');
+      statusEl.innerHTML = `
+        <div class="ok-box">
+          <strong>Проверено: ${data.score} / ${data.total}</strong>
+          ${data.gradeComment ? `<div style="margin-top:8px;">${escapeHtml(data.gradeComment)}</div>` : ''}
+        </div>`;
+      itemsEl.innerHTML = data.items.map((it, i) => `
+        <div class="result-row">
+          <div class="rq">${i + 1}. ${escapeHtml(it.text)}</div>
+          <div class="result-cols">
+            <div class="result-col">
+              <div class="result-col-label">Ваш ответ</div>
+              <div class="result-box">${escapeHtml(it.given || '(пусто)')}</div>
+            </div>
+            <div class="result-col">
+              <div class="result-col-label">Правильный ответ</div>
+              <div class="result-box">${escapeHtml(it.correctAnswer || '—')}</div>
+            </div>
+          </div>
+          <span class="verdict ${it.correct === true ? 'ok' : 'no'}">${it.correct === true ? '✓ Зачёт' : '✕ Незачёт'}</span>
+        </div>
+      `).join('');
+    } catch (e) {
+      statusEl.innerHTML = `<div class="error-box">Не удалось подключиться. Попробуйте обновить страницу.</div>`;
+      refreshBtn.classList.remove('hidden');
+    }
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s == null ? '' : String(s);
+    return div.innerHTML;
+  }
+
+  init();
+</script>
+</body>
+</html>

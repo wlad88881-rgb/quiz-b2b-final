@@ -909,15 +909,15 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
   const alreadyFinished = Object.values(session.participants).some(
     p => p.finished && p.name.trim().toLowerCase() === nameKey
   );
-  if (alreadyFinished) {
+  if (alreadyFinished && !req.body.forceNew) {
     return res.status(409).json({
       error: 'ALREADY_SUBMITTED',
-      message: 'Участник с таким именем уже проходил это тестирование. Если это ошибка, обратитесь к преподавателю.'
+      message: `Участник «${name.trim()}» уже сдал это тестирование. Если это другой человек с таким же именем, войдите как новый участник.`
     });
   }
 
   const inProgress = findUnfinishedByName(session, name);
-  if (inProgress) return nameInProgress(res, inProgress);
+  if (inProgress && !req.body.forceNew) return nameInProgress(res, inProgress);
 
   const pid = participantId();
 
@@ -941,6 +941,7 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
 
   const participant = {
     id: pid,
+    restarted: !!req.body.forceNew,
     name: name.trim().slice(0, 80),
     joinedAt: Date.now(),
     answers: {},
@@ -1413,11 +1414,12 @@ app.post('/api/lab-sessions/:code/join', joinLimiter, async (req, res) => {
   const lab = safeGet(data.labs, session.labId);
   if (!lab) return res.status(404).json({ error: 'Тренажёр не найден' });
   const inProgress = findUnfinishedByName(session, name);
-  if (inProgress) return nameInProgress(res, inProgress);
+  if (inProgress && !req.body.forceNew) return nameInProgress(res, inProgress);
   const pid = participantId();
   const caseAssignment = assignCases(lab);
   const participant = {
     id: pid,
+    restarted: !!req.body.forceNew,
     name: name.trim().slice(0, 80),
     joinedAt: Date.now(),
     caseAssignment,
@@ -1916,11 +1918,12 @@ app.post('/api/drawing-sessions/:code/join', joinLimiter, async (req, res) => {
   const task = safeGet(data.drawingTasks, session.drawingTaskId);
   if (!task) return res.status(404).json({ error: 'Задание не найдено' });
   const inProgress = findUnfinishedByName(session, name);
-  if (inProgress) return nameInProgress(res, inProgress);
+  if (inProgress && !req.body.forceNew) return nameInProgress(res, inProgress);
   const pid = participantId();
   const joinedAt = Date.now();
   const participant = {
     id: pid,
+    restarted: !!req.body.forceNew,
     name: name.trim().slice(0, 80),
     partInfo: (partInfo || '').trim().slice(0, 200),
     joinedAt,
@@ -2110,7 +2113,7 @@ function findUnfinishedByName(session, name) {
 function nameInProgress(res, p) {
   return res.status(409).json({
     error: 'NAME_IN_PROGRESS',
-    message: `«${p.name}» уже проходит это задание. Если это вы — продолжите с того же места. Если это другой человек с таким же именем, добавьте к имени инициал или номер группы.`
+    message: `«${p.name}» уже проходит это задание. Если это вы — продолжите с того же места. Если это другой человек с таким же именем, войдите как новый участник.`
   });
 }
 
@@ -2354,7 +2357,7 @@ app.post('/api/tolerance-sessions/:code/join', joinLimiter, async (req, res) => 
   if (!task || task.variants.length === 0) return res.status(404).json({ error: 'Задание не найдено' });
 
   const inProgress = findUnfinishedByName(session, name);
-  if (inProgress) return nameInProgress(res, inProgress);
+  if (inProgress && !req.body.forceNew) return nameInProgress(res, inProgress);
   const pid = participantId();
   let variant;
   await db.update((d) => {
@@ -2364,6 +2367,7 @@ app.post('/api/tolerance-sessions/:code/join', joinLimiter, async (req, res) => 
     s.nextVariantIndex = idx + 1;
     s.participants[pid] = {
       id: pid,
+    restarted: !!req.body.forceNew,
       name: name.trim().slice(0, 80),
       variantId: variant.id,
       joinedAt: Date.now(),
