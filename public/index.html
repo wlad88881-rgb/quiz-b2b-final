@@ -201,6 +201,8 @@
       <button class="tab-btn" id="tab-btn-drawing" onclick="switchTab('drawing')">📐 Чертежи</button>
       <button class="tab-btn" id="tab-btn-tolerance" onclick="switchTab('tolerance')">📏 Квалитеты</button>
       <button class="tab-btn" id="tab-btn-stats" onclick="switchTab('stats')">📊 Статистика</button>
+      <button class="tab-btn" onclick="window.open('/groups','_blank')" title="Списки групп студентов">👥 Группы</button>
+      <button class="tab-btn" onclick="window.open('/analytics','_blank')" title="Аналитика по темам и журнал группы">📈 Аналитика</button>
     </div>
 
     <div id="screen-list">
@@ -250,7 +252,7 @@
 
           <div class="muted" style="font-weight:600; margin-bottom:6px;">Сессии</div>
           <table id="stats-sessions-table" style="margin-bottom:20px;">
-            <thead><tr><th>Код</th><th>Дата</th><th>Участников</th><th>Завершили</th><th>Средний балл</th><th>Статус</th></tr></thead>
+            <thead><tr><th>Код</th><th>Дата</th><th>Участников</th><th>Завершили</th><th>Средний балл</th><th>Статус</th><th></th></tr></thead>
             <tbody id="stats-sessions-body"></tbody>
           </table>
           <div class="muted" id="stats-sessions-empty" style="padding:16px 0; text-align:center;"></div>
@@ -333,11 +335,29 @@
   </div>
   <!-- Модальное окно запуска сессии -->
   <div id="session-start-modal" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,0.4); display:flex; align-items:center; justify-content:center; z-index:50;">
-    <div style="width:320px; background:#fff; border-radius:14px; padding:20px;">
+    <div style="width:320px; max-width:94vw; max-height:92vh; overflow-y:auto; background:#fff; border-radius:14px; padding:20px;">
       <h3 style="margin-bottom:10px; color:#2C3E50;">Начать сессию</h3>
       <div id="session-timelimit-wrap">
         <label class="muted" style="display:block; margin-bottom:6px;">Лимит времени, минут (оставьте пустым — без ограничения)</label>
         <input type="text" id="session-time-limit" placeholder="например, 20" inputmode="numeric">
+      </div>
+
+      <div id="session-showanswers-wrap" class="hidden" style="margin-top:10px;">
+        <label class="muted" style="display:block; margin-bottom:6px;">Разбор ответов для студентов после сдачи</label>
+        <select id="session-show-answers" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:8px;">
+          <option value="immediately">Сразу после сдачи</option>
+          <option value="after_end">Только после завершения сессии</option>
+          <option value="score_only">Не показывать — только баллы</option>
+        </select>
+      </div>
+
+      <div id="session-group-wrap" class="hidden" style="margin-top:10px;">
+        <label class="muted" style="display:block; margin-bottom:6px;">Кто может войти</label>
+        <select id="session-group" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:8px;">
+          <option value="">Как в настройках групп (по умолчанию)</option>
+          <option value="none">Любой, кто знает ссылку</option>
+        </select>
+        <div class="muted" style="font-size:12px; margin-top:4px;">Списки групп — кнопка «👥 Группы» сверху.</div>
       </div>
 
       <div class="row" style="margin:10px 0 6px; gap:16px;">
@@ -876,11 +896,36 @@
   function startDrawingSession(taskId) { openSessionModal('drawing', taskId); }
   function startToleranceSession(taskId) { openSessionModal('tolerance', taskId); }
 
+  // Список групп для выбора при запуске сессии. Если групп нет — блок скрыт, всё как раньше.
+  async function loadGroupsForSessionModal() {
+    const wrap = document.getElementById('session-group-wrap');
+    const sel = document.getElementById('session-group');
+    wrap.classList.add('hidden');
+    sel.innerHTML = '<option value="">Как в настройках групп (по умолчанию)</option><option value="none">Любой, кто знает ссылку</option>';
+    try {
+      const res = await authFetch('/api/groups');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.groups || !data.groups.length) return;
+      const activeName = (data.groups.find(g => g.id === data.activeGroupId) || {}).name;
+      sel.options[0].textContent = activeName ? `По умолчанию: группа «${activeName}»` : 'По умолчанию: без привязки к группе';
+      data.groups.forEach(g => {
+        const o = document.createElement('option');
+        o.value = g.id; o.textContent = `Только группа «${g.name}» (${g.count} чел.)`;
+        sel.appendChild(o);
+      });
+      wrap.classList.remove('hidden');
+    } catch (e) { /* без групп работаем как раньше */ }
+  }
+
   function openSessionModal(type, id) {
     pendingSessionType = type;
     pendingSessionId = id;
     document.getElementById('session-time-limit').value = '';
     document.getElementById('session-timelimit-wrap').classList.toggle('hidden', type !== 'test' && type !== 'drawing');
+    document.getElementById('session-showanswers-wrap').classList.toggle('hidden', type !== 'test');
+    document.getElementById('session-show-answers').value = 'immediately';
+    loadGroupsForSessionModal();
     document.querySelector('input[name="session-when"][value="now"]').checked = true;
     document.getElementById('session-schedule-at').classList.add('hidden');
     document.getElementById('session-schedule-at').value = '';
@@ -994,10 +1039,15 @@
 
     const type = pendingSessionType;
     const id = pendingSessionId;
+    const showAnswers = document.getElementById('session-show-answers').value;
+    const groupChoice = document.getElementById('session-group').value; // '' — по умолчанию, 'none' — без группы, иначе id группы
     closeSessionModal();
 
     const endpoint = type === 'lab' ? '/api/lab-sessions' : type === 'drawing' ? '/api/drawing-sessions' : type === 'tolerance' ? '/api/tolerance-sessions' : '/api/sessions';
     const body = type === 'lab' ? { labId: id, scheduledAt } : type === 'drawing' ? { drawingTaskId: id, timeLimit, scheduledAt } : type === 'tolerance' ? { toleranceTaskId: id, scheduledAt } : { testId: id, timeLimit, scheduledAt };
+    if (type === 'test') body.showAnswers = showAnswers;
+    if (groupChoice === 'none') body.groupId = null;
+    else if (groupChoice) body.groupId = groupChoice;
     const res = await authFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1085,6 +1135,11 @@
   }
   setInterval(tickTimeLeft, 1000);
 
+  // Ученик вошёл повторно под тем же именем как новый участник — показываем, чтобы вы видели дубль.
+  function restartedMark(p) {
+    return p.restarted ? ' <span title="Вошёл заново с тем же именем" style="color:#F07C00; font-weight:700;">↻</span>' : '';
+  }
+
   function formatDuration(sec) {
     const m = Math.floor(sec / 60), r = sec % 60;
     return m > 0 ? `${m} мин ${String(r).padStart(2, '0')} с` : `${r} с`;
@@ -1132,7 +1187,7 @@
             : '<span style="color:var(--orange); font-weight:600;">Не проверено</span>';
         }
         const openBtn = p.finished ? `<button class="btn outline small" onclick="openDrawingReview('${p.id}')">Проверить</button>` : '';
-        return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}${p.partInfo ? `<div class="muted" style="font-size:12px;">${escapeHtml(p.partInfo)}</div>` : ''}</td><td>${statusText}</td>${timeCellHtml(p)}<td>${resultText}</td><td>${openBtn}</td></tr>`;
+        return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}${restartedMark(p)}${p.partInfo ? `<div class="muted" style="font-size:12px;">${escapeHtml(p.partInfo)}</div>` : ''}</td><td>${statusText}</td>${timeCellHtml(p)}<td>${resultText}</td><td>${openBtn}</td></tr>`;
       }).join('');
       return;
     }
@@ -1140,14 +1195,14 @@
       body.innerHTML = list.map((p, idx) => {
         const statusText = p.finished ? 'Сдал ответ' : 'Решает';
         const resultText = (p.finished && p.score !== undefined && p.score !== null) ? `${p.score}/6` : '—';
-        return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}</td><td>${statusText}</td><td>${resultText}</td><td>—</td></tr>`;
+        return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}${restartedMark(p)}</td><td>${statusText}</td><td>${resultText}</td><td>—</td></tr>`;
       }).join('');
       return;
     }
     body.innerHTML = list.map((p, idx) => {
       const statusText = p.finished ? 'Завершил' : 'Проходит тест';
       const resultText = (p.finished && p.total) ? `${p.score}/${p.total} (${Math.round(p.score / p.total * 100)}%)` : '—';
-      return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}</td><td>${statusText}</td>${timeCellHtml(p)}<td>${resultText}</td><td>${tabSwitchCellHtml(p)}</td></tr>`;
+      return `<tr id="prow-${p.id}"><td class="muted"><b>${idx + 1}</b></td><td>${escapeHtml(p.name)}${restartedMark(p)}</td><td>${statusText}</td>${timeCellHtml(p)}<td>${resultText}</td><td>${tabSwitchCellHtml(p)}</td></tr>`;
     }).join('');
   }
 
@@ -1288,6 +1343,7 @@
         <div class="row">
           <button class="btn outline small" onclick="openExistingSession('${s.code}')">Открыть</button>
           <button class="btn outline small" onclick="openSessionInNewWindow('${s.code}')">↗ Новое окно</button>
+          ${type === 'test' ? `<button class="btn outline small" onclick="window.open('/analytics?code=${s.code}','_blank')">📈 Аналитика</button>` : ''}
           <button class="btn danger small" onclick="deleteSessions(['${s.code}'], '${type}', '${containerId}', 'Удалить эту сессию вместе с ответами участников?')">Удалить</button>
         </div>
       </div>`).join('');
@@ -1990,6 +2046,7 @@
           <td>${s.finishedParticipants}</td>
           <td>${s.avgScore !== null ? s.avgScore + '%' : '—'}</td>
           <td>${s.ended ? 'Завершена' : 'Активна'}</td>
+          <td><a href="/analytics?code=${encodeURIComponent(s.code)}" target="_blank" style="color:#F07C00;">Аналитика</a></td>
         </tr>
       `).join('');
     }

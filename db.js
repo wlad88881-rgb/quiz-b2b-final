@@ -53,24 +53,114 @@ function normalize(data) {
   return d;
 }
 
-function loadFromFile() {
+// ==================== БЕЗОПАСНАЯ РАБОТА С ЛОКАЛЬНЫМ ФАЙЛОМ ====================
+// 1) Запись атомарная: сначала во временный файл, затем rename. Если питание/процесс
+//    оборвутся посреди записи, рабочий db.json останется целым (старой версии).
+// 2) Ротация копий: не чаще раза в BACKUP_EVERY_MS в data/backups/ кладётся копия
+//    текущего db.json, хранится последних BACKUP_KEEP штук.
+// 3) При повреждении db.json сервер сам берёт самую свежую рабочую копию, а битый
+//    файл не удаляет, а переименовывает в db.corrupt-<время>.json (для разбора).
+// 4) Запись на диск откладывается на FILE_WRITE_DELAY_MS и склеивается: десятки
+//    сдач подряд дают одну запись, а не десятки полных перезаписей базы.
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const BACKUP_KEEP = 10;
+const BACKUP_EVERY_MS = 5 * 60 * 1000;
+const FILE_WRITE_DELAY_MS = 1000;
+
+function tryReadJson(file) {
   try {
-    if (!fs.existsSync(FILE_PATH)) return null;
-    const raw = fs.readFileSync(FILE_PATH, 'utf8');
-    return normalize(JSON.parse(raw));
+    return { ok: true, data: normalize(JSON.parse(fs.readFileSync(file, 'utf8'))) };
   } catch (e) {
-    console.error('[db] Ошибка чтения локального файла:', e);
-    return null;
+    return { ok: false, error: e };
   }
 }
 
-function saveToFile(data) {
+function listBackups() {
   try {
-    fs.writeFileSync(FILE_PATH, JSON.stringify(data, null, 2));
+    return fs.readdirSync(BACKUP_DIR)
+      .filter(f => /^db-.*\.json$/.test(f))
+      .sort() // имя содержит время ГГГГММДД-ЧЧММСС → сортировка по имени = по времени
+      .reverse()
+      .map(f => path.join(BACKUP_DIR, f));
+  } catch (e) {
+    return [];
+  }
+}
+
+function loadFromFile() {
+  if (!fs.existsSync(FILE_PATH)) {
+    // Основного файла нет (например, удалили вручную) — пробуем копии.
+    for (const b of listBackups()) {
+      const r = tryReadJson(b);
+      if (r.ok) {
+        console.warn('[db] db.json не найден — восстановлено из копии ' + path.basename(b));
+        return r.data;
+      }
+    }
+    return null;
+  }
+  const main = tryReadJson(FILE_PATH);
+  if (main.ok) return main.data;
+
+  console.error('[db] ОШИБКА: db.json повреждён:', main.error && main.error.message);
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.renameSync(FILE_PATH, path.join(DATA_DIR, 'db.corrupt-' + stamp + '.json'));
+  } catch (e) { /* не критично */ }
+  for (const b of listBackups()) {
+    const r = tryReadJson(b);
+    if (r.ok) {
+      console.warn('[db] Восстановлено из резервной копии ' + path.basename(b) + ' (последние минуты работы могли не войти в копию)');
+      return r.data;
+    }
+  }
+  console.error('[db] Рабочих копий нет — запуск с пустой базой. Повреждённый файл сохранён как db.corrupt-*.json в папке data.');
+  return null;
+}
+
+function rotateBackupIfNeeded() {
+  try {
+    if (!fs.existsSync(FILE_PATH)) return;
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const existing = listBackups();
+    if (existing.length) {
+      const age = Date.now() - fs.statSync(existing[0]).mtimeMs;
+      if (age < BACKUP_EVERY_MS) return;
+    }
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+    fs.copyFileSync(FILE_PATH, path.join(BACKUP_DIR, 'db-' + stamp + '.json'));
+    listBackups().slice(BACKUP_KEEP).forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
+  } catch (e) {
+    console.error('[db] Не удалось сделать резервную копию:', e);
+  }
+}
+
+let fileWriteTimer = null;
+let filePending = null;
+
+function flushFileSync() {
+  if (fileWriteTimer) { clearTimeout(fileWriteTimer); fileWriteTimer = null; }
+  if (!filePending) return;
+  const data = filePending;
+  filePending = null;
+  try {
+    rotateBackupIfNeeded();
+    const tmp = FILE_PATH + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(data));
+    fs.renameSync(tmp, FILE_PATH);
   } catch (e) {
     console.error('[db] Ошибка записи локального файла:', e);
   }
 }
+
+function saveToFile(data) {
+  filePending = data;
+  if (!fileWriteTimer) fileWriteTimer = setTimeout(flushFileSync, FILE_WRITE_DELAY_MS);
+}
+
+// При штатном завершении (Ctrl+C, остановка службы, process.exit) дописываем отложенное.
+process.on('exit', flushFileSync);
+['SIGINT', 'SIGTERM'].forEach(sig => process.on(sig, () => { flushFileSync(); process.exit(0); }));
 
 async function persistToSupabase(data) {
   if (!USE_SUPABASE) return;
@@ -167,4 +257,4 @@ async function restore(newData) {
   return run;
 }
 
-module.exports = { load, save, update, restore, initCache };
+module.exports = { load, save, update, restore, initCache, flush: flushFileSync, DATA_DIR };

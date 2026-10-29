@@ -201,7 +201,14 @@
       <button class="btn outline" id="prev-btn" onclick="goPrev()" data-i18n="prevBtn"></button>
       <button class="btn" id="next-btn" onclick="goNext()" data-i18n="nextBtn"></button>
     </div>
+    <div class="info-box hidden" id="submit-status" style="margin-top:10px;"></div>
+    <button class="btn hidden" id="submit-retry-btn" onclick="retrySubmitNow()" style="margin-top:6px; background:var(--orange);"></button>
     <button class="btn" id="submit-btn" onclick="submitTest(false)" style="margin-top:10px; background:var(--navy);" data-i18n="submitBtn"></button>
+  </div>
+
+  <div id="screen-sending" class="hidden">
+    <div class="info-box" id="sending-text" style="margin-top:40px; text-align:center;"></div>
+    <button class="btn hidden" id="sending-retry-btn" onclick="retrySubmitNow()" style="margin-top:6px; background:var(--orange);"></button>
   </div>
 
   <div id="screen-result" class="hidden">
@@ -271,6 +278,14 @@
       prevBtn: '← Назад',
       nextBtn: 'Далее →',
       submitBtn: 'Завершить тест',
+      submitRetrying: '⚠️ Нет связи с сервером. Ваши ответы сохранены на этом устройстве и будут отправлены автоматически. Не закрывайте страницу и не отправляйте тест заново.',
+      submitSending: 'Отправляю ответы…',
+      submitRetryNow: 'Отправить сейчас',
+      sendingScreen: 'Отправляем ваши ответы…',
+      reviewAfterEnd: 'Разбор ответов откроется после того, как преподаватель завершит тестирование. Эта страница обновится сама.',
+      reviewScoreOnly: 'Преподаватель не показывает разбор ответов — только результат.',
+      reviewCheckBtn: 'Проверить, открылся ли разбор',
+      reviewStillClosed: 'Пока закрыт.',
       resultTitle: 'Результат',
       reviewTitle: 'Разбор ответов',
       autoSubmitNote: 'Тест был автоматически отправлен по истечении времени.',
@@ -313,6 +328,14 @@
       prevBtn: '← Артқа',
       nextBtn: 'Келесі →',
       submitBtn: 'Тестті аяқтау',
+      submitRetrying: '⚠️ Серверамен байланыс жоқ. Жауаптарыңыз осы құрылғыда сақталды және автоматты түрде жіберіледі. Бетті жаппаңыз және тестті қайта жібермеңіз.',
+      submitSending: 'Жауаптар жіберілуде…',
+      submitRetryNow: 'Қазір жіберу',
+      sendingScreen: 'Жауаптарыңыз жіберілуде…',
+      reviewAfterEnd: 'Жауаптар талдауы оқытушы тестілеуді аяқтаған соң ашылады. Бет өздігінен жаңарады.',
+      reviewScoreOnly: 'Оқытушы жауаптар талдауын көрсетпейді — тек нәтиже.',
+      reviewCheckBtn: 'Талдау ашылғанын тексеру',
+      reviewStillClosed: 'Әзірге жабық.',
       resultTitle: 'Нәтиже',
       reviewTitle: 'Жауаптарды талдау',
       autoSubmitNote: 'Уақыт аяқталғандықтан тест автоматты түрде жіберілді.',
@@ -379,7 +402,7 @@
   }
 
   function showScreen(id) {
-    ['screen-loading','screen-error','screen-join','screen-quiz','screen-result','screen-retry'].forEach(s => {
+    ['screen-loading','screen-error','screen-join','screen-quiz','screen-result','screen-retry','screen-sending'].forEach(s => {
       document.getElementById(s).classList.toggle('hidden', s !== id);
     });
   }
@@ -455,6 +478,7 @@
         return;
       }
       if (data.ended) {
+        if (await resumePendingSubmit()) return;
         showError(t('testEnded'));
         return;
       }
@@ -470,6 +494,7 @@
       if (data.scheduledAt && data.scheduledAt > Date.now()) {
         showScheduledBanner(data.scheduledAt);
       }
+      if (await resumePendingSubmit()) return;
       const savedId = localStorage.getItem(LS_KEY);
       if (savedId && (await resumeTest({ participantId: savedId })) === true) return;
       showScreen('screen-join');
@@ -572,6 +597,30 @@
     }
   }
 
+  // Выбор при совпадении имени. Встроен в страницу (а не confirm()): во встроенных браузерах
+  // мессенджеров системные окна часто блокируются, и ученика просто «не пускало».
+  let forceNewJoin = false;
+  function showNameConflict(message, canContinue, onContinue, onNew, rosterMode) {
+    const old = document.getElementById('name-conflict');
+    if (old) old.remove();
+    const box = document.createElement('div');
+    box.id = 'name-conflict';
+    box.style.cssText = 'background:#fff8ec; border-left:3px solid #F07C00; border-radius:10px; padding:12px 14px; margin-bottom:12px; font-size:14px; line-height:1.5; color:#2C3E50;';
+    const msg = document.createElement('div'); msg.textContent = message; msg.style.marginBottom = '10px'; box.appendChild(msg);
+    const mk = (text, primary, fn) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = text;
+      b.style.cssText = 'display:block; width:100%; padding:12px; margin-top:8px; border-radius:10px; font-size:15px; font-weight:600; cursor:pointer; ' +
+        (primary ? 'background:#F07C00; color:#fff; border:none;' : 'background:#fff; color:#2C3E50; border:1px solid #ddd;');
+      b.onclick = () => { box.remove(); fn(); };
+      box.appendChild(b);
+    };
+    if (canContinue) mk('Это я — продолжить с того же места', true, onContinue);
+    if (!rosterMode) mk('Я другой человек — войти как новый участник', !canContinue, onNew);
+    document.getElementById('join-btn').insertAdjacentElement('beforebegin', box);
+    box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
   async function joinTest() {
     const nameInput = document.getElementById('student-name');
     const name = nameInput.value.trim();
@@ -588,21 +637,22 @@
       const res = await fetch(`/api/sessions/${CODE}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
+        body: JSON.stringify({ name, forceNew: forceNewJoin })
       });
       const data = await res.json();
-      if (!res.ok && data.error === 'NAME_IN_PROGRESS') {
+      if (!res.ok && (data.error === 'NAME_IN_PROGRESS' || data.error === 'ALREADY_SUBMITTED')) {
         btn.disabled = false;
-        if (confirm(data.message + '\n\nПродолжить с того же места как «' + name + '»?')) {
-          btn.disabled = true;
-          const r = await resumeTest({ name });
-          if (r === true) return;
-          btn.disabled = false;
-          errEl.textContent = 'Не удалось продолжить. Обновите страницу и попробуйте ещё раз.';
-        } else {
-          errEl.textContent = data.message;
-        }
-        errEl.classList.remove('hidden');
+        showNameConflict(data.message, data.error === 'NAME_IN_PROGRESS',
+          async () => {
+            btn.disabled = true;
+            const r = await resumeTest({ name });
+            if (!r) {
+              btn.disabled = false;
+              errEl.textContent = 'Не удалось продолжить. Обновите страницу и попробуйте ещё раз.';
+              errEl.classList.remove('hidden');
+            }
+          },
+          () => { forceNewJoin = true; joinTest(); }, !!data.roster);
         return;
       }
       if (!res.ok) {
@@ -792,28 +842,121 @@
     document.getElementById('tab-warn-overlay').classList.add('hidden');
   }
 
+  // ==================== НАДЁЖНАЯ ОТПРАВКА ОТВЕТОВ ====================
+  // Перед отправкой ответы сохраняются на устройстве (localStorage). Если связи нет или сервер
+  // не ответил, отправка повторяется сама (с нарастающей паузой и сразу при появлении сети) —
+  // в том числе после перезагрузки страницы. Студент не теряет ответы из-за плохого Wi-Fi.
+  const LS_PENDING = 'testPending_' + CODE;
+  let submitting = false;
+  let retryTimer = null;
+  let retryDelay = 3000;
+
+  function readPending() {
+    try { const v = JSON.parse(localStorage.getItem(LS_PENDING) || 'null'); return v && v.participantId ? v : null; } catch (e) { return null; }
+  }
+  function clearPending() { try { localStorage.removeItem(LS_PENDING); } catch (e) {} }
+
+  function setSubmitStatus(text, showRetry) {
+    const box = document.getElementById('submit-status');
+    box.textContent = text || '';
+    box.classList.toggle('hidden', !text);
+    document.getElementById('submit-retry-btn').classList.toggle('hidden', !showRetry);
+    document.getElementById('submit-retry-btn').textContent = t('submitRetryNow');
+    const sending = document.getElementById('sending-text');
+    if (sending) sending.textContent = text || t('sendingScreen');
+    const rb = document.getElementById('sending-retry-btn');
+    if (rb) { rb.classList.toggle('hidden', !showRetry); rb.textContent = t('submitRetryNow'); }
+  }
+
+  async function fetchOwnResult(pid) {
+    try {
+      const res = await fetch(`/api/sessions/${CODE}/review?participantId=${encodeURIComponent(pid)}`);
+      if (!res.ok) return null;
+      const d = await res.json();
+      return { score: d.score, total: d.total, review: d.review || [], reviewHidden: d.available ? null : (d.reviewHidden || 'immediately') };
+    } catch (e) { return null; }
+  }
+
+  function finishSubmit(data, auto, pid) {
+    if (pid) state.participantId = pid;
+    clearTimeout(retryTimer); retryTimer = null;
+    clearTimeout(progressTimer);
+    localStorage.removeItem(LS_KEY);
+    clearPending();
+    setSubmitStatus('', false);
+    lastResult = data;
+    lastResult.review = lastResult.review || [];
+    lastResult.auto = auto;
+    showResult();
+  }
+
+  function scheduleRetry(payload) {
+    setSubmitStatus(t('submitRetrying'), true);
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => trySubmit(payload), retryDelay);
+    retryDelay = Math.min(Math.round(retryDelay * 1.6), 20000);
+  }
+
+  async function trySubmit(payload) {
+    if (submitting) return;
+    submitting = true;
+    clearTimeout(retryTimer); retryTimer = null;
+    try {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 20000);
+      let res;
+      try {
+        res = await fetch(`/api/sessions/${CODE}/submit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ participantId: payload.participantId, answers: payload.answers, tabSwitchLog: payload.tabSwitchLog }),
+          signal: ctrl.signal
+        });
+      } finally { clearTimeout(to); }
+      let data = {};
+      try { data = await res.json(); } catch (e) { /* не JSON — сервер/прокси отдал ошибку */ }
+      if (res.ok) { finishSubmit(data, payload.auto, payload.participantId); return; }
+      if (res.status === 400 && /уже сдан/i.test(data.error || '')) {
+        // Предыдущая попытка дошла, а ответ потерялся по дороге — забираем свой результат.
+        const own = await fetchOwnResult(payload.participantId);
+        if (own) { finishSubmit(own, payload.auto, payload.participantId); return; }
+      }
+      if (res.status >= 500 || res.status === 429 || res.status === 408 || (!data.error && res.status !== 404)) { scheduleRetry(payload); return; }
+      clearPending();
+      showError(data.error || t('notFound'));
+    } catch (e) {
+      scheduleRetry(payload); // обрыв сети, таймаут, переключение Wi-Fi
+    } finally {
+      submitting = false;
+    }
+  }
+
+  function retrySubmitNow() {
+    const p = readPending();
+    if (p) { retryDelay = 3000; trySubmit(p); }
+  }
+  window.addEventListener('online', () => { if (readPending() && !submitting) retrySubmitNow(); });
+
   async function submitTest(auto) {
+    if (submitting || readPending()) return; // уже отправляем
     if (state.timerInterval) clearInterval(state.timerInterval);
     document.getElementById('submit-btn').disabled = true;
-    try {
-      const res = await fetch(`/api/sessions/${CODE}/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ participantId: state.participantId, answers: state.answers, tabSwitchLog })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        showError(data.error || t('notFound'));
-        return;
-      }
-      clearTimeout(progressTimer);
-      localStorage.removeItem(LS_KEY);
-      lastResult = data;
-      lastResult.auto = auto;
-      showResult();
-    } catch (e) {
-      showError(t('notFound'));
-    }
+    const payload = { participantId: state.participantId, answers: state.answers, tabSwitchLog, auto: !!auto };
+    try { localStorage.setItem(LS_PENDING, JSON.stringify(payload)); } catch (e) { /* хранилище недоступно — отправим без страховки */ }
+    retryDelay = 3000;
+    setSubmitStatus(t('submitSending'), false);
+    await trySubmit(payload);
+  }
+
+  // Если страницу перезагрузили, пока ответы не дошли — досылаем их, а не начинаем заново.
+  async function resumePendingSubmit() {
+    const p = readPending();
+    if (!p) return false;
+    showScreen('screen-sending');
+    setSubmitStatus(t('sendingScreen'), false);
+    retryDelay = 3000;
+    trySubmit(p);
+    return true;
   }
 
   function showResult() {
@@ -958,6 +1101,10 @@
 
     const container = document.getElementById('review-container');
     container.innerHTML = '';
+    if (lastResult.reviewHidden && !lastResult.review.length) {
+      renderReviewHidden(container);
+      return;
+    }
     lastResult.review.forEach((r, ridx) => {
       const div = document.createElement('div');
       div.className = 'review-item';
@@ -990,6 +1137,50 @@
       `;
       container.appendChild(div);
     });
+  }
+
+  // ---- разбор скрыт режимом преподавателя («после завершения» / «только баллы») ----
+  let reviewPollTimer = null;
+
+  function renderReviewHidden(container) {
+    const box = document.createElement('div');
+    box.className = 'info-box';
+    box.textContent = lastResult.reviewHidden === 'after_end' ? t('reviewAfterEnd') : t('reviewScoreOnly');
+    container.appendChild(box);
+    if (lastResult.reviewHidden === 'after_end') {
+      const btn = document.createElement('button');
+      btn.className = 'btn outline'; btn.type = 'button';
+      btn.textContent = t('reviewCheckBtn');
+      const note = document.createElement('div');
+      note.className = 'muted'; note.style.cssText = 'font-size:13px; margin-top:6px; text-align:center;';
+      btn.onclick = async () => { const ok = await checkReviewOpened(); note.textContent = ok ? '' : t('reviewStillClosed'); };
+      container.appendChild(btn);
+      container.appendChild(note);
+      if (!reviewPollTimer) reviewPollTimer = setInterval(checkReviewOpened, 30000);
+    }
+  }
+
+  async function checkReviewOpened() {
+    if (!lastResult || !state.participantId) return false;
+    try {
+      const pid = state.participantId;
+      const res = await fetch(`/api/sessions/${CODE}/review?participantId=${encodeURIComponent(pid)}`);
+      if (!res.ok) return false;
+      const d = await res.json();
+      if (!d.available) return false;
+      clearInterval(reviewPollTimer); reviewPollTimer = null;
+      lastResult.review = d.review || [];
+      lastResult.reviewHidden = null;
+      renderResultTexts();
+      const wrongCount = lastResult.review.filter(r => !r.isCorrect).length;
+      const retryBtn = document.getElementById('retry-wrong-btn');
+      if (wrongCount > 0) {
+        retryBtn.textContent = t('retryWrongBtn').replace('{n}', wrongCount);
+        retryBtn.classList.remove('hidden');
+      }
+      translateExplains();
+      return true;
+    } catch (e) { return false; }
   }
 
   function escapeHtml(s) {

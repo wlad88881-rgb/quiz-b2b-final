@@ -33,8 +33,29 @@ const PORT = process.env.PORT || 3000;
 //   ADMIN_PASSWORD       — ваш собственный пароль для входа в /admin
 //   SESSION_SECRET       — любая длинная случайная строка (секрет для подписи токенов)
 //   DEVELOPER_CONTACTS   — текст с вашими контактами, который увидят клиенты после окончания пробного периода
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin-change-me-2024';
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const fs = require('fs');
+// Секрет и пароль админа, если не заданы в окружении, один раз создаются и сохраняются
+// в папке data/ — поэтому после перезапуска сервера (в т.ч. .exe) преподаватели не
+// разлогиниваются, а известного всем пароля по умолчанию больше нет.
+function persistentSecret(fileName, generate) {
+  try {
+    const file = path.join(db.DATA_DIR, fileName);
+    if (fs.existsSync(file)) {
+      const v = fs.readFileSync(file, 'utf8').trim();
+      if (v) return { value: v, created: false, persisted: true };
+    }
+    const v = generate();
+    fs.mkdirSync(db.DATA_DIR, { recursive: true });
+    fs.writeFileSync(file, v, { mode: 0o600 });
+    return { value: v, created: true, persisted: true };
+  } catch (e) {
+    return { value: generate(), created: true, persisted: false };
+  }
+}
+const secretInfo = process.env.SESSION_SECRET ? null : persistentSecret('secret.key', () => crypto.randomBytes(32).toString('hex'));
+const adminInfo = process.env.ADMIN_PASSWORD ? null : persistentSecret('admin-password.txt', () => crypto.randomBytes(6).toString('hex'));
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || adminInfo.value;
+const SESSION_SECRET = process.env.SESSION_SECRET || secretInfo.value;
 const DEVELOPER_CONTACTS = process.env.DEVELOPER_CONTACTS ||
   'Свяжитесь с разработчиком, чтобы продолжить работу (контакты не настроены — задайте переменную окружения DEVELOPER_CONTACTS).';
 
@@ -53,11 +74,14 @@ function sanitizeQuestionImage(img) {
 }
 const FREE_MAX_SUBMISSIONS = 20;
 
-if (!process.env.ADMIN_PASSWORD) {
-  console.warn('[security] ВНИМАНИЕ: ADMIN_PASSWORD не задан в переменных окружения — используется пароль по умолчанию. Задайте свой пароль перед выходом в продакшн!');
+if (adminInfo) {
+  if (adminInfo.created) {
+    console.warn('[security] ADMIN_PASSWORD не задан — создан случайный пароль админ-панели: ' + adminInfo.value +
+      (adminInfo.persisted ? '  (сохранён в data/admin-password.txt, можно заменить своим — просто отредактируйте файл или задайте переменную ADMIN_PASSWORD)' : '  (сохранить в файл не удалось — после перезапуска будет новый!)'));
+  }
 }
-if (!process.env.SESSION_SECRET) {
-  console.warn('[security] ВНИМАНИЕ: SESSION_SECRET не задан — сгенерирован случайный на время работы процесса (все токены станут недействительны при перезапуске сервера). Рекомендуется задать постоянный секрет в переменных окружения.');
+if (secretInfo && !secretInfo.persisted) {
+  console.warn('[security] SESSION_SECRET не задан и сохранить его в data/ не удалось — после перезапуска сервера все войдут заново.');
 }
 
 app.set('trust proxy', 1);
@@ -799,7 +823,994 @@ app.get('/api/sessions/:code/qr', async (req, res) => {
   res.send(Buffer.from(qrDataUrl.split(',')[1], 'base64'));
 });
 
+// ==================== ГРУППЫ И СПИСКИ СТУДЕНТОВ ====================
+// Преподаватель заводит группу (список ФИО) на странице /groups и привязывает её к новым
+// сессиям. Тогда при входе введённое имя сопоставляется со списком: опечатки, регистр,
+// «Иван Иванов» вместо «Иванов Иван» и «Иванов И.» приводятся к одному написанию из списка.
+// Посторонний человек (или тот, кто ошибся в фамилии) в сессию не попадёт, а повторные
+// заходы под разными написаниями одного имени невозможны. Если группа не привязана —
+// всё работает как раньше (вход по любому имени).
+const MAX_GROUPS_PER_COMPANY = 50;
+const MAX_STUDENTS_PER_GROUP = 300;
+
+function normName(s) {
+  return String(s || '').toLowerCase().replace(/ё/g, 'е')
+    .replace(/[^a-zа-я0-9\s-]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function sortedNameKey(s) { return normName(s).split(' ').filter(Boolean).sort().join(' '); }
+
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+// Каждое введённое слово должно быть началом какого-то (своего) слова из ФИО: «иванов и» → «иванов иван».
+function prefixMatches(inputTokens, studentTokens) {
+  const used = new Set();
+  for (const t of inputTokens) {
+    const idx = studentTokens.findIndex((st, i) => !used.has(i) && st.startsWith(t));
+    if (idx === -1) return false;
+    used.add(idx);
+  }
+  return true;
+}
+
+// Разбор вставленного списка: по строке на студента; из Excel берутся текстовые ячейки,
+// номера строк («1.», «2)», отдельные числовые столбцы) отбрасываются.
+function parseStudentList(input) {
+  const raw = Array.isArray(input) ? input.map(String) : String(input || '').split(/\r?\n|;/);
+  const seen = new Set();
+  const students = [];
+  let duplicates = 0;
+  for (const line of raw) {
+    const cells = line.split('\t').map(c => c.trim()).filter(c => c && !/^\d+[.)]?$/.test(c));
+    let name = cells.join(' ').replace(/^\d+[.)]\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!name) continue;
+    const key = sortedNameKey(name);
+    if (!key) continue;
+    if (seen.has(key)) { duplicates++; continue; }
+    seen.add(key);
+    students.push({ id: companyIdGen().slice(0, 8), name });
+  }
+  return { students: students.slice(0, MAX_STUDENTS_PER_GROUP), duplicates, truncated: students.length > MAX_STUDENTS_PER_GROUP };
+}
+
+function getGroup(data, session) {
+  if (!session || !session.groupId) return null;
+  const company = safeGet(data.companies, session.companyId);
+  const group = company && company.groups ? safeGet(company.groups, session.groupId) : null;
+  return group && Array.isArray(group.students) && group.students.length ? group : null;
+}
+
+// null — сессия без списка (работаем как раньше); {ok:true,name} — найден; {ok:false,message} — отказ.
+function resolveRoster(data, session, rawName) {
+  const group = getGroup(data, session);
+  if (!group) return null;
+  const students = group.students;
+  const key = sortedNameKey(rawName);
+  const exact = students.find(s => sortedNameKey(s.name) === key);
+  if (exact) return { ok: true, name: exact.name };
+
+  const tokens = normName(rawName).split(' ').filter(Boolean);
+  if (tokens.join('').length >= 3) {
+    const cands = students.filter(s => prefixMatches(tokens, normName(s.name).split(' ')));
+    if (cands.length === 1) return { ok: true, name: cands[0].name };
+    if (cands.length > 1) {
+      return { ok: false, message: `Уточните имя — в группе «${group.name}» подходят несколько человек: ${cands.slice(0, 5).map(c => c.name).join('; ')}. Введите фамилию и имя полностью.` };
+    }
+  }
+  const near = students
+    .map(s => ({ name: s.name, d: levenshtein(key, sortedNameKey(s.name)) }))
+    .filter(x => x.d <= Math.max(2, Math.round(key.length * 0.3)))
+    .sort((a, b) => a.d - b.d).slice(0, 3);
+  const hint = near.length ? ` Возможно, вы имели в виду: ${near.map(n => n.name).join('; ')}.` : '';
+  return { ok: false, message: `Вас нет в списке группы «${group.name}». Проверьте написание фамилии и имени.${hint} Если вы не нашли себя — сообщите преподавателю.` };
+}
+
+// Какую группу привязать к создаваемой сессии: явный groupId из запроса
+// (пустой/неизвестный — «без группы»), иначе — активная группа компании.
+function pickGroupId(req) {
+  const groups = (req.company && req.company.groups) || {};
+  const explicit = req.body ? req.body.groupId : undefined;
+  if (explicit !== undefined) return explicit && safeGet(groups, explicit) ? explicit : null;
+  const active = req.company && req.company.activeGroupId;
+  return active && safeGet(groups, active) ? active : null;
+}
+
+function groupSummary(g) { return { id: g.id, name: g.name, count: g.students.length }; }
+
+app.get('/api/groups', checkAuth, (req, res) => {
+  const groups = Object.values(req.company.groups || {}).map(groupSummary)
+    .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  const active = req.company.activeGroupId && safeGet(req.company.groups || {}, req.company.activeGroupId)
+    ? req.company.activeGroupId : null;
+  res.json({ groups, activeGroupId: active });
+});
+
+app.get('/api/groups/:id', checkAuth, (req, res) => {
+  const g = safeGet(req.company.groups || {}, req.params.id);
+  if (!g) return res.status(404).json({ error: 'Группа не найдена' });
+  res.json(g);
+});
+
+function cleanGroupName(v) { return String(v || '').replace(/\s+/g, ' ').trim().slice(0, 80); }
+
+app.post('/api/groups', checkAuth, async (req, res) => {
+  const name = cleanGroupName(req.body.name);
+  if (!name) return res.status(400).json({ error: 'Введите название группы' });
+  const parsed = parseStudentList(req.body.students !== undefined ? req.body.students : req.body.text);
+  if (!parsed.students.length) return res.status(400).json({ error: 'Список студентов пуст' });
+  if (Object.keys(req.company.groups || {}).length >= MAX_GROUPS_PER_COMPANY) {
+    return res.status(400).json({ error: `Не более ${MAX_GROUPS_PER_COMPANY} групп` });
+  }
+  const id = companyIdGen();
+  await db.update((d) => {
+    const c = safeGet(d.companies, req.companyId);
+    if (!c.groups) c.groups = {};
+    c.groups[id] = { id, name, students: parsed.students, createdAt: Date.now() };
+  });
+  res.json({ ok: true, id, count: parsed.students.length, duplicates: parsed.duplicates, truncated: parsed.truncated });
+});
+
+app.put('/api/groups/:id', checkAuth, async (req, res) => {
+  const existing = safeGet(req.company.groups || {}, req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Группа не найдена' });
+  const name = req.body.name !== undefined ? cleanGroupName(req.body.name) : existing.name;
+  if (!name) return res.status(400).json({ error: 'Введите название группы' });
+  let students = existing.students, duplicates = 0, truncated = false;
+  if (req.body.students !== undefined || req.body.text !== undefined) {
+    const parsed = parseStudentList(req.body.students !== undefined ? req.body.students : req.body.text);
+    if (!parsed.students.length) return res.status(400).json({ error: 'Список студентов пуст' });
+    // Тем, кто остался в списке, сохраняем прежний id (имя могло лишь поменять написание).
+    const byKey = new Map(existing.students.map(s => [sortedNameKey(s.name), s.id]));
+    students = parsed.students.map(s => ({ id: byKey.get(sortedNameKey(s.name)) || s.id, name: s.name }));
+    duplicates = parsed.duplicates; truncated = parsed.truncated;
+  }
+  await db.update((d) => {
+    const c = safeGet(d.companies, req.companyId);
+    c.groups[req.params.id] = { ...c.groups[req.params.id], name, students, updatedAt: Date.now() };
+  });
+  res.json({ ok: true, count: students.length, duplicates, truncated });
+});
+
+app.delete('/api/groups/:id', checkAuth, async (req, res) => {
+  if (!safeGet(req.company.groups || {}, req.params.id)) return res.status(404).json({ error: 'Группа не найдена' });
+  await db.update((d) => {
+    const c = safeGet(d.companies, req.companyId);
+    delete c.groups[req.params.id];
+    if (c.activeGroupId === req.params.id) c.activeGroupId = null;
+  });
+  res.json({ ok: true });
+});
+
+app.post('/api/groups/active', checkAuth, async (req, res) => {
+  const gid = req.body.groupId || null;
+  if (gid && !safeGet(req.company.groups || {}, gid)) return res.status(404).json({ error: 'Группа не найдена' });
+  await db.update((d) => { safeGet(d.companies, req.companyId).activeGroupId = gid; });
+  res.json({ ok: true, activeGroupId: gid });
+});
+
+// Кто из группы пришёл / проходит / сдал / не пришёл — для любой сессии, привязанной к группе.
+app.get('/api/sessions/:code/roster-status', checkAuth, (req, res) => {
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.companyId !== req.companyId) return res.status(404).json({ error: 'Сессия не найдена' });
+  const group = getGroup(data, session);
+  if (!group) return res.json({ hasRoster: false });
+  const byKey = new Map();
+  Object.values(session.participants || {}).forEach(p => {
+    const k = sortedNameKey(p.name);
+    const prev = byKey.get(k);
+    if (!prev || (p.finished && !prev.finished)) byKey.set(k, p); // лучший статус из дублей
+  });
+  const rows = group.students.map(s => {
+    const p = byKey.get(sortedNameKey(s.name));
+    const status = !p ? 'absent' : p.finished ? 'finished' : 'in_progress';
+    return { name: s.name, status, score: p && p.finished ? p.score : null, total: p && p.finished ? p.total : null };
+  });
+  const listed = new Set(group.students.map(s => sortedNameKey(s.name)));
+  const unlisted = Object.values(session.participants || {}).filter(p => !listed.has(sortedNameKey(p.name))).map(p => p.name);
+  const counts = { total: rows.length, finished: 0, in_progress: 0, absent: 0 };
+  rows.forEach(r => { counts[r.status]++; });
+  res.json({ hasRoster: true, groupName: group.name, counts, rows, unlisted });
+});
+
+const GROUPS_PAGE_HTML = String.raw`<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Группы и списки студентов</title>
+<style>
+  :root { --bg:#f4f6fa; --card:#fff; --text:#1c2333; --muted:#667085; --line:#dfe3ec; --accent:#2f6fed; --ok:#12a150; --warn:#d9822b; --bad:#d64545; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151c; --card:#1b2030; --text:#e8ebf3; --muted:#9aa3b8; --line:#2b3248; --accent:#6a9bff; --ok:#3ecf7d; --warn:#f0a050; --bad:#ff7070; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:860px; margin:0 auto; padding:16px; }
+  h1 { font-size:22px; margin:8px 0 14px; }
+  h2 { font-size:17px; margin:0 0 10px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+  input, textarea { width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font:inherit; }
+  textarea { min-height:160px; resize:vertical; }
+  button { padding:8px 14px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--bad); }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .grow { flex:1 1 200px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .banner { padding:10px 12px; border-radius:10px; border:1px solid var(--warn); background:rgba(217,130,43,.12); margin-bottom:14px; }
+  .banner.off { border-color:var(--line); background:transparent; color:var(--muted); }
+  .err { color:var(--bad); margin-top:8px; }
+  .group { display:flex; gap:8px; align-items:center; justify-content:space-between; flex-wrap:wrap; padding:10px 0; border-top:1px solid var(--line); }
+  .group:first-of-type { border-top:0; }
+  table { width:100%; border-collapse:collapse; margin-top:10px; }
+  td, th { padding:6px 8px; border-bottom:1px solid var(--line); text-align:left; }
+  .s-finished { color:var(--ok); } .s-in_progress { color:var(--warn); } .s-absent { color:var(--bad); }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Группы и списки студентов</h1>
+  <p class="muted"><a href="/analytics" style="color:var(--accent);text-decoration:none">Аналитика и журнал →</a></p>
+
+  <div id="loginBox" class="card hidden">
+    <h2>Вход преподавателя</h2>
+    <div class="row">
+      <input id="email" class="grow" type="email" placeholder="Email">
+      <input id="password" class="grow" type="password" placeholder="Пароль">
+      <button class="primary" id="loginBtn">Войти</button>
+    </div>
+    <div id="loginErr" class="err"></div>
+  </div>
+
+  <div id="main" class="hidden">
+    <div id="activeBanner" class="banner off"></div>
+
+    <div class="card">
+      <h2 id="formTitle">Новая группа</h2>
+      <input id="gName" placeholder="Название группы, например: ТОиР-21">
+      <p class="muted">Вставьте список студентов — по одному в строке (можно прямо из Excel: номера и лишние столбцы с цифрами отбрасываются). Студент при входе вводит имя как угодно — оно автоматически сопоставится со списком.</p>
+      <textarea id="gStudents" placeholder="Иванов Иван&#10;Петров Пётр&#10;Сидорова Анна"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="saveBtn">Сохранить группу</button>
+        <button id="cancelBtn" class="hidden">Отмена</button>
+        <span id="formMsg" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Мои группы</h2>
+      <div id="groupList" class="muted">Загрузка…</div>
+    </div>
+
+    <div class="card">
+      <h2>Кто пришёл и сдал</h2>
+      <div class="row">
+        <input id="codeInput" class="grow" placeholder="Код сессии (5 символов, как в ссылке /s/XXXXX)" maxlength="12">
+        <button class="primary" id="statusBtn">Показать</button>
+        <button id="copyAbsent" class="hidden">Копировать «не пришли»</button>
+      </div>
+      <div id="statusOut"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var TOKEN_KEY = 'groupsPageToken';
+  var token = sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem('b2bToken') || '';
+  var editingId = null;
+  var groups = [];
+  var activeGroupId = null;
+  var lastAbsent = [];
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, props, children) {
+    var e = document.createElement(tag);
+    if (props) Object.keys(props).forEach(function (k) {
+      if (k === 'text') e.textContent = props[k];
+      else if (k === 'class') e.className = props[k];
+      else if (k.indexOf('on') === 0) e.addEventListener(k.slice(2), props[k]);
+      else e.setAttribute(k, props[k]);
+    });
+    (children || []).forEach(function (c) { if (c) e.appendChild(c); });
+    return e;
+  }
+  function api(method, url, body) {
+    return fetch(url, {
+      method: method,
+      headers: { 'Content-Type': 'application/json', 'x-company-id': token },
+      body: body ? JSON.stringify(body) : undefined
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (r.status === 401) { showLogin(); throw new Error('Нужен вход'); }
+        if (!r.ok) throw new Error(d.error || d.message || ('Ошибка ' + r.status));
+        return d;
+      });
+    });
+  }
+
+  function showLogin() {
+    token = ''; sessionStorage.removeItem(TOKEN_KEY);
+    $('loginBox').classList.remove('hidden'); $('main').classList.add('hidden');
+  }
+  function showMain() {
+    $('loginBox').classList.add('hidden'); $('main').classList.remove('hidden');
+    load();
+  }
+
+  $('loginBtn').addEventListener('click', function () {
+    $('loginErr').textContent = '';
+    fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: $('email').value, password: $('password').value }) })
+      .then(function (r) { return r.json().then(function (d) { return { r: r, d: d }; }); })
+      .then(function (x) {
+        if (!x.r.ok || !x.d.token) { $('loginErr').textContent = x.d.error || x.d.message || 'Не удалось войти'; return; }
+        token = x.d.token; sessionStorage.setItem(TOKEN_KEY, token); showMain();
+      })
+      .catch(function () { $('loginErr').textContent = 'Нет связи с сервером'; });
+  });
+
+  function renderBanner() {
+    var b = $('activeBanner');
+    var g = groups.filter(function (x) { return x.id === activeGroupId; })[0];
+    b.textContent = '';
+    if (g) {
+      b.className = 'banner';
+      b.appendChild(el('div', { text: 'Все НОВЫЕ сессии сейчас привязаны к группе «' + g.name + '»: войти смогут только студенты из списка.' }));
+      b.appendChild(el('div', { class: 'row', style: 'margin-top:8px' }, [
+        el('button', { text: 'Отключить привязку (вход для всех)', onclick: function () { setActive(null); } })
+      ]));
+    } else {
+      b.className = 'banner off';
+      b.textContent = 'Привязка к группе выключена: в новые сессии может войти любой, кто знает ссылку.';
+    }
+  }
+
+  function renderList() {
+    var box = $('groupList'); box.textContent = '';
+    if (!groups.length) { box.textContent = 'Групп пока нет — создайте первую выше.'; return; }
+    groups.forEach(function (g) {
+      var isActive = g.id === activeGroupId;
+      box.appendChild(el('div', { class: 'group' }, [
+        el('div', {}, [
+          el('strong', { text: g.name + (isActive ? '  ✓ активная' : '') }),
+          el('div', { class: 'muted', text: g.count + ' чел.' })
+        ]),
+        el('div', { class: 'row' }, [
+          isActive ? null : el('button', { text: 'Привязать к новым сессиям', onclick: function () { setActive(g.id); } }),
+          el('button', { text: 'Изменить', onclick: function () { edit(g.id); } }),
+          el('button', { class: 'danger', text: 'Удалить', onclick: function () { remove(g); } })
+        ])
+      ]));
+    });
+  }
+
+  function load() {
+    api('GET', '/api/groups').then(function (d) {
+      groups = d.groups || []; activeGroupId = d.activeGroupId || null;
+      renderBanner(); renderList();
+    }).catch(function (e) { $('groupList').textContent = e.message; });
+  }
+
+  function setActive(id) {
+    api('POST', '/api/groups/active', { groupId: id }).then(load).catch(function (e) { alert(e.message); });
+  }
+
+  function resetForm() {
+    editingId = null; $('formTitle').textContent = 'Новая группа';
+    $('gName').value = ''; $('gStudents').value = ''; $('formMsg').textContent = '';
+    $('cancelBtn').classList.add('hidden');
+  }
+  function edit(id) {
+    api('GET', '/api/groups/' + encodeURIComponent(id)).then(function (g) {
+      editingId = id; $('formTitle').textContent = 'Изменение группы';
+      $('gName').value = g.name; $('gStudents').value = g.students.map(function (s) { return s.name; }).join('\n');
+      $('cancelBtn').classList.remove('hidden'); window.scrollTo(0, 0);
+    }).catch(function (e) { alert(e.message); });
+  }
+  function remove(g) {
+    if (!confirm('Удалить группу «' + g.name + '»? Уже прошедшие результаты останутся.')) return;
+    api('DELETE', '/api/groups/' + encodeURIComponent(g.id)).then(load).catch(function (e) { alert(e.message); });
+  }
+
+  $('cancelBtn').addEventListener('click', resetForm);
+  $('saveBtn').addEventListener('click', function () {
+    var body = { name: $('gName').value, text: $('gStudents').value };
+    var req = editingId ? api('PUT', '/api/groups/' + encodeURIComponent(editingId), body) : api('POST', '/api/groups', body);
+    $('formMsg').textContent = 'Сохраняю…';
+    req.then(function (d) {
+      var msg = 'Сохранено: ' + d.count + ' чел.';
+      if (d.duplicates) msg += ' (повторов отброшено: ' + d.duplicates + ')';
+      resetForm(); $('formMsg').textContent = msg; load();
+    }).catch(function (e) { $('formMsg').textContent = e.message; });
+  });
+
+  var LABELS = { finished: 'сдал', in_progress: 'проходит', absent: 'не пришёл' };
+  $('statusBtn').addEventListener('click', function () {
+    var code = $('codeInput').value.trim().toUpperCase();
+    var out = $('statusOut'); out.textContent = ''; $('copyAbsent').classList.add('hidden');
+    if (!code) return;
+    api('GET', '/api/sessions/' + encodeURIComponent(code) + '/roster-status').then(function (d) {
+      if (!d.hasRoster) { out.appendChild(el('p', { class: 'muted', text: 'Эта сессия не привязана к группе — список недоступен.' })); return; }
+      out.appendChild(el('p', { text: 'Группа «' + d.groupName + '»: сдали ' + d.counts.finished + ', проходят ' + d.counts.in_progress + ', не пришли ' + d.counts.absent + ' из ' + d.counts.total + '.' }));
+      var tb = el('table');
+      tb.appendChild(el('tr', {}, [el('th', { text: 'Студент' }), el('th', { text: 'Статус' }), el('th', { text: 'Результат' })]));
+      d.rows.forEach(function (r) {
+        tb.appendChild(el('tr', {}, [
+          el('td', { text: r.name }),
+          el('td', { class: 's-' + r.status, text: LABELS[r.status] }),
+          el('td', { text: r.status === 'finished' && r.total ? (r.score + ' / ' + r.total) : '' })
+        ]));
+      });
+      out.appendChild(tb);
+      lastAbsent = d.rows.filter(function (r) { return r.status === 'absent'; }).map(function (r) { return r.name; });
+      if (lastAbsent.length) $('copyAbsent').classList.remove('hidden');
+      if (d.unlisted && d.unlisted.length) out.appendChild(el('p', { class: 'muted', text: 'Вне списка (вошли до привязки): ' + d.unlisted.join(', ') }));
+    }).catch(function (e) { out.appendChild(el('p', { class: 'err', text: e.message })); });
+  });
+  $('copyAbsent').addEventListener('click', function () {
+    var text = lastAbsent.join('\n');
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { $('copyAbsent').textContent = 'Скопировано'; });
+    else window.prompt('Скопируйте:', text);
+  });
+
+  if (token) showMain(); else showLogin();
+})();
+</script>
+</body>
+</html>
+`;
+app.get('/groups', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(GROUPS_PAGE_HTML);
+});
+
+// ==================== АНАЛИТИКА: ТЕМЫ, ВОПРОСЫ, ГРУППА ====================
+// Считается по уже сохранённым ответам (p.answers), поэтому работает и во время
+// занятия (по тем, кто успел сдать), и после него. Страница — /analytics.
+const WEAK_PCT = 60;              // ниже этого процента тема считается «слабой»
+const WEAK_MIN_ATTEMPTS_STUDENT = 2; // у одного студента — не меньше 2 вопросов по теме
+const WEAK_MIN_ATTEMPTS_GROUP = 5;   // по группе — не меньше 5 ответов по теме
+const NO_TAG = 'Без темы';
+
+function pct(correct, total) { return total > 0 ? Math.round((correct / total) * 1000) / 10 : null; }
+
+function addTagStat(map, tag, ok) {
+  const t = map.get(tag) || { tag, attempts: 0, correct: 0 };
+  t.attempts++; if (ok) t.correct++;
+  map.set(tag, t);
+}
+function tagList(map, minAttempts) {
+  return [...map.values()]
+    .map(t => ({ tag: t.tag, attempts: t.attempts, correct: t.correct, pct: pct(t.correct, t.attempts), weak: t.attempts >= minAttempts && pct(t.correct, t.attempts) < WEAK_PCT }))
+    .sort((a, b) => (a.pct - b.pct) || (b.attempts - a.attempts));
+}
+function xl(v) { // защита от «формул» в ячейках Excel
+  return typeof v === 'string' && /^[=+\-@]/.test(v) ? "'" + v : v;
+}
+function shortText(s, n) { s = String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+// Самый частый неверный выбор по вопросу (анализ «отвлекающих» вариантов).
+function topWrongAnswer(q, answers) {
+  const picks = new Map(); let noAnswer = 0;
+  answers.forEach(a => {
+    if (a.isCorrect) return;
+    if (q.multi) {
+      const given = Array.isArray(a.given) ? a.given : [];
+      const correct = Array.isArray(q.correct) ? q.correct : [];
+      if (!given.length) noAnswer++;
+      given.filter(i => !correct.includes(i)).forEach(i => picks.set('лишний: ' + i, (picks.get('лишний: ' + i) || 0) + 1));
+      correct.filter(i => !given.includes(i)).forEach(i => picks.set('пропущен: ' + i, (picks.get('пропущен: ' + i) || 0) + 1));
+    } else if (a.given === undefined || a.given === null || a.given === '') {
+      noAnswer++;
+    } else {
+      picks.set('выбран: ' + a.given, (picks.get('выбран: ' + a.given) || 0) + 1);
+    }
+  });
+  let best = null;
+  picks.forEach((count, key) => { if (!best || count > best.count) best = { key, count }; });
+  let top = null;
+  if (best) {
+    const idx = parseInt(best.key.split(': ')[1], 10);
+    const label = (q.options && q.options[idx] !== undefined) ? shortText(q.options[idx], 80) : ('вариант ' + (idx + 1));
+    top = { kind: best.key.split(': ')[0], option: label, count: best.count };
+  }
+  return { top, noAnswer };
+}
+
+function analyzeTestSessions(test, sessions) {
+  // Результаты завершивших по всем переданным сессиям одного теста.
+  const results = [];
+  sessions.forEach(s => {
+    Object.values(s.participants || {}).forEach(p => {
+      if (!p.finished || !p.answers) return;
+      results.push({ session: s, p });
+    });
+  });
+  const tagMap = new Map();
+  const questionRows = test.questions.map(q => {
+    const tags = (q.tags && q.tags.length) ? q.tags : [NO_TAG];
+    const answers = [];
+    results.forEach(({ p }) => { const a = p.answers[q.id]; if (a) answers.push(a); });
+    const correct = answers.filter(a => a.isCorrect).length;
+    answers.forEach(a => tags.forEach(t => addTagStat(tagMap, t, a.isCorrect)));
+    const wrong = topWrongAnswer(q, answers);
+    return { id: q.id, text: shortText(q.text, 140), tags: q.tags || [], total: answers.length, correct, pct: pct(correct, answers.length), topWrong: wrong.top, noAnswer: wrong.noAnswer };
+  }).filter(r => r.total > 0).sort((a, b) => a.pct - b.pct);
+  return { results, tagMap, questionRows };
+}
+
+function studentTagStats(test, p) {
+  const m = new Map();
+  test.questions.forEach(q => {
+    const a = p.answers && p.answers[q.id]; if (!a) return;
+    ((q.tags && q.tags.length) ? q.tags : [NO_TAG]).forEach(t => addTagStat(m, t, a.isCorrect));
+  });
+  return tagList(m, WEAK_MIN_ATTEMPTS_STUDENT).filter(t => t.weak).map(t => t.tag);
+}
+
+function median(arr) {
+  if (!arr.length) return null;
+  const s = [...arr].sort((a, b) => a - b), m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : Math.round(((s[m - 1] + s[m]) / 2) * 10) / 10;
+}
+
+function sendXlsx(res, wb, fileName) {
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
+}
+
+app.get('/api/sessions/:code/analytics', checkAuth, (req, res) => {
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.companyId !== req.companyId || session.type) return res.status(404).json({ error: 'Сессия с тестом не найдена' });
+  const test = safeGet(data.tests, session.testId);
+  if (!test) return res.status(404).json({ error: 'Тест не найден' });
+
+  const { results, tagMap, questionRows } = analyzeTestSessions(test, [session]);
+  const pcts = results.map(({ p }) => pct(p.score, p.total) || 0);
+  const buckets = [
+    { label: '0–39%', count: pcts.filter(v => v < 40).length },
+    { label: '40–59%', count: pcts.filter(v => v >= 40 && v < 60).length },
+    { label: '60–79%', count: pcts.filter(v => v >= 60 && v < 80).length },
+    { label: '80–100%', count: pcts.filter(v => v >= 80).length }
+  ];
+  const students = results.map(({ p }) => ({
+    name: p.name, score: p.score, total: p.total, pct: pct(p.score, p.total),
+    late: !!p.late, tabLong: p.tabSwitchLongCount || 0, weakTags: studentTagStats(test, p)
+  })).sort((a, b) => b.pct - a.pct || a.name.localeCompare(b.name, 'ru'));
+  const tags = tagList(tagMap, WEAK_MIN_ATTEMPTS_GROUP);
+  const group = getGroup(data, session);
+  const payload = {
+    session: { code: session.code, testTitle: test.title, startedAt: session.startedAt, ended: !!session.ended,
+      groupName: group ? group.name : null, participants: Object.keys(session.participants || {}).length, finished: results.length },
+    summary: { count: results.length, avg: results.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / results.length * 10) / 10 : null,
+      median: median(pcts), min: pcts.length ? Math.min(...pcts) : null, max: pcts.length ? Math.max(...pcts) : null, buckets },
+    tags, weakTags: tags.filter(t => t.weak).map(t => t.tag),
+    questions: questionRows, students
+  };
+  if (req.query.format === 'xlsx') {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tags.map(t => ({ 'Тема': xl(t.tag), 'Ответов': t.attempts, 'Верных': t.correct, '% верных': t.pct, 'Слабая': t.weak ? 'да' : '' }))), 'Темы');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(questionRows.map(q => ({
+      'Вопрос': xl(q.text), 'Темы': xl(q.tags.join(', ')), 'Ответов': q.total, '% верных': q.pct,
+      'Частая ошибка': q.topWrong ? xl(q.topWrong.kind + ': ' + q.topWrong.option + ' (' + q.topWrong.count + ')') : '', 'Без ответа': q.noAnswer }))), 'Вопросы');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(students.map(s => ({
+      'Студент': xl(s.name), 'Баллы': s.score, 'Из': s.total, '%': s.pct, 'Слабые темы': xl(s.weakTags.join(', ')),
+      'Сдан с опозданием': s.late ? 'да' : '', 'Долгих уходов с вкладки': s.tabLong }))), 'Студенты');
+    return sendXlsx(res, wb, `analytics_${session.code}.xlsx`);
+  }
+  res.json(payload);
+});
+
+// Журнал группы: все тестовые сессии, привязанные к группе (последние 30).
+app.get('/api/groups/:id/analytics', checkAuth, (req, res) => {
+  const data = db.load();
+  const group = safeGet(req.company.groups || {}, req.params.id);
+  if (!group) return res.status(404).json({ error: 'Группа не найдена' });
+  const sessions = Object.values(data.sessions)
+    .filter(s => s.companyId === req.companyId && !s.type && s.groupId === group.id && safeGet(data.tests, s.testId))
+    .sort((a, b) => a.startedAt - b.startedAt).slice(-30);
+
+  const students = group.students.map(st => ({ name: st.name, key: sortedNameKey(st.name), results: [], tagMap: new Map() }));
+  const byKey = new Map(students.map(s => [s.key, s]));
+  const groupTags = new Map();
+  const sessionRows = sessions.map(s => {
+    const test = safeGet(data.tests, s.testId);
+    let finished = 0, sum = 0;
+    const seen = new Set();
+    Object.values(s.participants || {}).forEach(p => {
+      const st = byKey.get(sortedNameKey(p.name));
+      if (!st || !p.finished || !p.answers || seen.has(st.key)) return;
+      seen.add(st.key);
+      const v = pct(p.score, p.total);
+      st.results[sessions.indexOf(s)] = v;
+      finished++; sum += v;
+      test.questions.forEach(q => {
+        const a = p.answers[q.id]; if (!a) return;
+        ((q.tags && q.tags.length) ? q.tags : [NO_TAG]).forEach(t => { addTagStat(st.tagMap, t, a.isCorrect); addTagStat(groupTags, t, a.isCorrect); });
+      });
+    });
+    return { code: s.code, testTitle: test.title, startedAt: s.startedAt, finished, absent: group.students.length - finished, avg: finished ? Math.round(sum / finished * 10) / 10 : null };
+  });
+  const out = students.map(st => {
+    const cells = sessions.map((_, i) => (st.results[i] === undefined ? null : st.results[i]));
+    const done = cells.filter(v => v !== null);
+    const weakTags = tagList(st.tagMap, WEAK_MIN_ATTEMPTS_STUDENT).filter(t => t.weak).map(t => t.tag);
+    return {
+      name: st.name, cells, done: done.length, missed: sessions.length - done.length,
+      avg: done.length ? Math.round(done.reduce((a, b) => a + b, 0) / done.length * 10) / 10 : null,
+      trend: done.length >= 2 ? Math.round((done[done.length - 1] - done[0]) * 10) / 10 : null,
+      weakTags
+    };
+  });
+  const tags = tagList(groupTags, WEAK_MIN_ATTEMPTS_GROUP);
+  if (req.query.format === 'xlsx') {
+    const wb = XLSX.utils.book_new();
+    const rows = out.map(s => {
+      const r = { 'Студент': xl(s.name) };
+      sessionRows.forEach((sr, i) => { r[new Date(sr.startedAt).toLocaleDateString('ru-RU') + ' ' + shortText(sr.testTitle, 25) + ' (' + sr.code + ')'] = s.cells[i] === null ? 'не сдал' : s.cells[i]; });
+      r['Среднее %'] = s.avg; r['Пропусков'] = s.missed; r['Слабые темы'] = xl(s.weakTags.join(', '));
+      return r;
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Журнал');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tags.map(t => ({ 'Тема': xl(t.tag), 'Ответов': t.attempts, '% верных': t.pct, 'Слабая': t.weak ? 'да' : '' }))), 'Темы');
+    return sendXlsx(res, wb, 'journal.xlsx');
+  }
+  res.json({ group: groupSummary(group), sessions: sessionRows, students: out, tags, weakTags: tags.filter(t => t.weak).map(t => t.tag) });
+});
+
+const ANALYTICS_PAGE_HTML = String.raw`<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Аналитика</title>
+<style>
+  :root { --bg:#f4f6fa; --card:#fff; --text:#1c2333; --muted:#667085; --line:#dfe3ec; --accent:#2f6fed; --ok:#12a150; --warn:#d9822b; --bad:#d64545; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151c; --card:#1b2030; --text:#e8ebf3; --muted:#9aa3b8; --line:#2b3248; --accent:#6a9bff; --ok:#3ecf7d; --warn:#f0a050; --bad:#ff7070; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:980px; margin:0 auto; padding:16px; }
+  h1 { font-size:22px; margin:8px 0 6px; }
+  h2 { font-size:17px; margin:0 0 10px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; overflow-x:auto; }
+  input, select { padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font:inherit; }
+  button { padding:8px 14px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .grow { flex:1 1 200px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .err { color:var(--bad); margin:8px 0; }
+  .hidden { display:none; }
+  .kpis { display:flex; gap:10px; flex-wrap:wrap; }
+  .kpi { flex:1 1 120px; border:1px solid var(--line); border-radius:10px; padding:10px; }
+  .kpi b { display:block; font-size:22px; }
+  table { width:100%; border-collapse:collapse; }
+  td, th { padding:6px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  th { font-size:13px; color:var(--muted); font-weight:600; }
+  .bar { height:10px; border-radius:5px; background:var(--line); overflow:hidden; min-width:90px; }
+  .bar > i { display:block; height:100%; }
+  .good { background:var(--ok); } .mid { background:var(--warn); } .low { background:var(--bad); }
+  .tag { display:inline-block; padding:1px 8px; margin:1px 3px 1px 0; border-radius:10px; font-size:12px; border:1px solid var(--line); }
+  .tag.weak { border-color:var(--bad); color:var(--bad); }
+  .cell { text-align:center; min-width:46px; border-radius:6px; font-size:13px; }
+  .c-none { color:var(--muted); }
+  .c-good { background:rgba(18,161,80,.22); } .c-mid { background:rgba(217,130,43,.25); } .c-low { background:rgba(214,69,69,.25); }
+  .nav a { color:var(--accent); text-decoration:none; margin-right:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Аналитика</h1>
+  <p class="nav muted"><a href="/groups">← Группы и списки</a></p>
+
+  <div id="loginBox" class="card hidden">
+    <h2>Вход преподавателя</h2>
+    <div class="row">
+      <input id="email" class="grow" type="email" placeholder="Email">
+      <input id="password" class="grow" type="password" placeholder="Пароль">
+      <button class="primary" id="loginBtn">Войти</button>
+    </div>
+    <div id="loginErr" class="err"></div>
+  </div>
+
+  <div id="main" class="hidden">
+    <div class="card">
+      <div class="row" style="margin-bottom:10px">
+        <button id="tabSession" class="on">По сессии</button>
+        <button id="tabGroup">По группе (журнал)</button>
+      </div>
+      <div id="sessionCtl" class="row">
+        <input id="codeInput" class="grow" placeholder="Код сессии теста" maxlength="12">
+        <button class="primary" id="showSession">Показать</button>
+      </div>
+      <div id="groupCtl" class="row hidden">
+        <select id="groupSel" class="grow"></select>
+        <button class="primary" id="showGroup">Показать</button>
+      </div>
+      <div id="msg" class="err"></div>
+    </div>
+    <div id="out"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var TOKEN_KEY = 'groupsPageToken';
+  var token = sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem('b2bToken') || '';
+  var current = null; // {kind:'session'|'group', id}
+  var groupData = null, sortMode = 'name';
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, props, children) {
+    var e = document.createElement(tag);
+    if (props) Object.keys(props).forEach(function (k) {
+      if (k === 'text') e.textContent = props[k];
+      else if (k === 'class') e.className = props[k];
+      else if (k.indexOf('on') === 0) e.addEventListener(k.slice(2), props[k]);
+      else e.setAttribute(k, props[k]);
+    });
+    (children || []).forEach(function (c) { if (c) e.appendChild(c); });
+    return e;
+  }
+  function headers() { return { 'Content-Type': 'application/json', 'x-company-id': token }; }
+  function api(method, url, body) {
+    return fetch(url, { method: method, headers: headers(), body: body ? JSON.stringify(body) : undefined }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (r.status === 401) { showLogin(); throw new Error('Нужен вход'); }
+        if (!r.ok) throw new Error(d.error || d.message || ('Ошибка ' + r.status));
+        return d;
+      });
+    });
+  }
+  function showLogin() { token = ''; sessionStorage.removeItem(TOKEN_KEY); $('loginBox').classList.remove('hidden'); $('main').classList.add('hidden'); }
+  function showMain() { $('loginBox').classList.add('hidden'); $('main').classList.remove('hidden'); loadGroups().then(handleParams); }
+
+  $('loginBtn').addEventListener('click', function () {
+    $('loginErr').textContent = '';
+    fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email').value, password: $('password').value }) })
+      .then(function (r) { return r.json().then(function (d) { return { r: r, d: d }; }); })
+      .then(function (x) {
+        if (!x.r.ok || !x.d.token) { $('loginErr').textContent = x.d.error || x.d.message || 'Не удалось войти'; return; }
+        token = x.d.token; sessionStorage.setItem(TOKEN_KEY, token); showMain();
+      }).catch(function () { $('loginErr').textContent = 'Нет связи с сервером'; });
+  });
+
+  function loadGroups() {
+    return api('GET', '/api/groups').then(function (d) {
+      var sel = $('groupSel'); sel.textContent = '';
+      if (!d.groups.length) sel.appendChild(el('option', { value: '', text: 'Групп нет — создайте на странице «Группы»' }));
+      d.groups.forEach(function (g) { sel.appendChild(el('option', { value: g.id, text: g.name + ' (' + g.count + ' чел.)' })); });
+    }).catch(function () {});
+  }
+
+  function setTab(kind) {
+    $('tabSession').className = kind === 'session' ? 'on' : ''; $('tabGroup').className = kind === 'group' ? 'on' : '';
+    $('sessionCtl').classList.toggle('hidden', kind !== 'session'); $('groupCtl').classList.toggle('hidden', kind !== 'group');
+    $('out').textContent = ''; $('msg').textContent = '';
+  }
+  $('tabSession').addEventListener('click', function () { setTab('session'); });
+  $('tabGroup').addEventListener('click', function () { setTab('group'); });
+
+  function level(p) { return p === null || p === undefined ? '' : p >= 80 ? 'good' : p >= 60 ? 'mid' : 'low'; }
+  function fmt(p) { return p === null || p === undefined ? '—' : (Math.round(p * 10) / 10) + '%'; }
+  function bar(p) { return el('div', { class: 'bar' }, [el('i', { class: level(p), style: 'width:' + Math.max(0, Math.min(100, p || 0)) + '%' })]); }
+  function tags(list, weakList) {
+    var box = el('span');
+    (list || []).forEach(function (t) { box.appendChild(el('span', { class: 'tag' + ((weakList || []).indexOf(t) >= 0 ? ' weak' : ''), text: t })); });
+    return box;
+  }
+  function table(head, rows) {
+    var t = el('table');
+    t.appendChild(el('tr', {}, head.map(function (h) { return el('th', { text: h }); })));
+    rows.forEach(function (r) { t.appendChild(el('tr', {}, r.map(function (c) { return el('td', {}, [typeof c === 'string' ? document.createTextNode(c) : c]); }))); });
+    return t;
+  }
+  function card(title, child) { return el('div', { class: 'card' }, [el('h2', { text: title }), child]); }
+
+  function download(url, name) {
+    fetch(url, { headers: headers() }).then(function (r) {
+      if (!r.ok) throw new Error('Не удалось скачать');
+      return r.blob();
+    }).then(function (b) {
+      var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; document.body.appendChild(a); a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    }).catch(function (e) { $('msg').textContent = e.message; });
+  }
+
+  function weakTestForm(weakTags) {
+    var box = el('div', { class: 'card' });
+    box.appendChild(el('h2', { text: 'Тест по слабым темам' }));
+    if (!weakTags.length) { box.appendChild(el('p', { class: 'muted', text: 'Слабых тем (ниже 60%) пока нет — ничего повторять не нужно.' })); return box; }
+    box.appendChild(el('p', {}, [document.createTextNode('Слабые темы: '), tags(weakTags, weakTags)]));
+    var title = el('input', { class: 'grow', value: 'Повторение: ' + weakTags.slice(0, 3).join(', ') });
+    var count = el('input', { type: 'number', min: '1', max: '200', value: '10', style: 'width:90px' });
+    var result = el('div', { class: 'muted', style: 'margin-top:8px' });
+    var btn = el('button', { class: 'primary', text: 'Создать тест', onclick: function () {
+      result.className = 'muted'; result.textContent = 'Создаю…';
+      api('POST', '/api/tests/generate', { title: title.value, tags: weakTags, count: parseInt(count.value, 10) || 10 })
+        .then(function (d) { result.textContent = 'Готово: тест «' + d.test.title + '» — ' + d.selectedCount + ' вопросов (в банке по этим темам: ' + d.availableInPool + '). Он появился в списке ваших тестов.'; })
+        .catch(function (e) { result.className = 'err'; result.textContent = e.message; });
+    } });
+    box.appendChild(el('div', { class: 'row' }, [title, el('span', { class: 'muted', text: 'вопросов:' }), count, btn]));
+    box.appendChild(result);
+    box.appendChild(el('p', { class: 'muted', text: 'Вопросы берутся из ваших тестов по тегам этих тем. Если вопросов без повторов не хватает, тест будет короче.' }));
+    return box;
+  }
+
+  function renderSession(d) {
+    var out = $('out'); out.textContent = '';
+    var s = d.session, sm = d.summary;
+    out.appendChild(el('div', { class: 'card' }, [
+      el('h2', { text: s.testTitle + ' — сессия ' + s.code }),
+      el('p', { class: 'muted', text: new Date(s.startedAt).toLocaleString('ru-RU') + (s.groupName ? ' · группа «' + s.groupName + '»' : '') + (s.ended ? ' · завершена' : ' · идёт') + ' · сдали ' + s.finished + ' из ' + s.participants }),
+      el('div', { class: 'kpis' }, [
+        el('div', { class: 'kpi' }, [el('b', { text: fmt(sm.avg) }), document.createTextNode('средний результат')]),
+        el('div', { class: 'kpi' }, [el('b', { text: fmt(sm.median) }), document.createTextNode('медиана')]),
+        el('div', { class: 'kpi' }, [el('b', { text: fmt(sm.min) + ' – ' + fmt(sm.max) }), document.createTextNode('разброс')])
+      ]),
+      el('div', { style: 'margin-top:10px' }, [el('button', { text: 'Скачать в Excel', onclick: function () { download('/api/sessions/' + encodeURIComponent(s.code) + '/analytics?format=xlsx', 'analytics_' + s.code + '.xlsx'); } })])
+    ]));
+    if (!sm.count) { out.appendChild(el('div', { class: 'card muted', text: 'Пока никто не сдал — аналитика появится после первых сдач (можно обновлять во время занятия).' })); return; }
+    out.appendChild(card('Распределение результатов', table(['Диапазон', 'Человек', ''], sm.buckets.map(function (b) {
+      return [b.label, String(b.count), bar(sm.count ? b.count / sm.count * 100 : 0)];
+    }))));
+    out.appendChild(card('Темы (слабые — первыми)', table(['Тема', 'Верных', 'Ответов', ''], d.tags.map(function (t) {
+      return [el('span', { class: 'tag' + (t.weak ? ' weak' : ''), text: t.tag }), fmt(t.pct), String(t.attempts), bar(t.pct)];
+    }))));
+    out.appendChild(card('Сложные вопросы и частые ошибки', table(['Вопрос', 'Верных', 'Частая ошибка'], d.questions.slice(0, 15).map(function (q) {
+      var wrong = q.topWrong ? (q.topWrong.kind + ': «' + q.topWrong.option + '» — ' + q.topWrong.count + ' чел.') : '';
+      if (q.noAnswer) wrong += (wrong ? '; ' : '') + 'без ответа: ' + q.noAnswer;
+      return [el('div', {}, [document.createTextNode(q.text), el('div', {}, [tags(q.tags)])]), fmt(q.pct), wrong];
+    }))));
+    out.appendChild(card('Студенты', table(['Студент', 'Результат', 'Слабые темы', 'Отметки'], d.students.map(function (st) {
+      var notes = []; if (st.late) notes.push('сдал с опозданием'); if (st.tabLong) notes.push('уходов с вкладки: ' + st.tabLong);
+      return [st.name, st.score + '/' + st.total + ' (' + fmt(st.pct) + ')', tags(st.weakTags, st.weakTags), notes.join('; ')];
+    }))));
+    out.appendChild(weakTestForm(d.weakTags));
+  }
+
+  function renderGroup() {
+    var d = groupData, out = $('out'); out.textContent = '';
+    out.appendChild(el('div', { class: 'card' }, [
+      el('h2', { text: 'Журнал группы «' + d.group.name + '»' }),
+      el('p', { class: 'muted', text: 'Тестовых сессий с привязкой к группе: ' + d.sessions.length + ' (показаны последние 30). Ячейка — % верных, «—» — не сдал.' }),
+      el('div', { class: 'row' }, [
+        el('span', { class: 'muted', text: 'Сортировка:' }),
+        (function () {
+          var sel = el('select', {}, [el('option', { value: 'name', text: 'по алфавиту' }), el('option', { value: 'low', text: 'сначала отстающие' }), el('option', { value: 'high', text: 'сначала лучшие' }), el('option', { value: 'missed', text: 'по пропускам' })]);
+          sel.value = sortMode; sel.addEventListener('change', function () { sortMode = sel.value; renderGroup(); }); return sel;
+        })(),
+        el('button', { text: 'Скачать журнал в Excel', onclick: function () { download('/api/groups/' + encodeURIComponent(d.group.id) + '/analytics?format=xlsx', 'journal.xlsx'); } })
+      ])
+    ]));
+    if (!d.sessions.length) { out.appendChild(el('div', { class: 'card muted', text: 'Нет сессий, привязанных к этой группе. Включите «Привязать к новым сессиям» на странице групп и проведите тест.' })); return; }
+    var students = d.students.slice();
+    function avgKey(s, empty) { return s.avg === null ? empty : s.avg; }
+    if (sortMode === 'low') students.sort(function (a, b) { return avgKey(a, -1) - avgKey(b, -1); });
+    else if (sortMode === 'high') students.sort(function (a, b) { return avgKey(b, -1) - avgKey(a, -1); });
+    else if (sortMode === 'missed') students.sort(function (a, b) { return b.missed - a.missed; });
+    else students.sort(function (a, b) { return a.name.localeCompare(b.name, 'ru'); });
+
+    var t = el('table');
+    var head = [el('th', { text: 'Студент' })];
+    d.sessions.forEach(function (s) { head.push(el('th', { title: s.testTitle + ' (' + s.code + ')', text: new Date(s.startedAt).toLocaleDateString('ru-RU').slice(0, 5) })); });
+    head.push(el('th', { text: 'Среднее' })); head.push(el('th', { text: 'Динамика' })); head.push(el('th', { text: 'Слабые темы' }));
+    t.appendChild(el('tr', {}, head));
+    students.forEach(function (s) {
+      var tr = el('tr', {}, [el('td', { text: s.name })]);
+      s.cells.forEach(function (v) { tr.appendChild(el('td', {}, [el('div', { class: 'cell ' + (v === null ? 'c-none' : 'c-' + level(v)), text: v === null ? '—' : String(Math.round(v)) })])); });
+      tr.appendChild(el('td', { text: fmt(s.avg) }));
+      tr.appendChild(el('td', { text: s.trend === null ? '' : (s.trend > 0 ? '▲ +' : s.trend < 0 ? '▼ ' : '= ') + s.trend }));
+      tr.appendChild(el('td', {}, [tags(s.weakTags, s.weakTags)]));
+      t.appendChild(tr);
+    });
+    out.appendChild(el('div', { class: 'card' }, [t]));
+    out.appendChild(card('Темы по группе', table(['Тема', 'Верных', 'Ответов', ''], d.tags.map(function (x) {
+      return [el('span', { class: 'tag' + (x.weak ? ' weak' : ''), text: x.tag }), fmt(x.pct), String(x.attempts), bar(x.pct)];
+    }))));
+    out.appendChild(weakTestForm(d.weakTags));
+  }
+
+  function handleParams() {
+    var q = new URLSearchParams(location.search);
+    if (q.get('code')) { $('codeInput').value = q.get('code'); $('showSession').click(); }
+    else if (q.get('group')) { setTab('group'); $('groupSel').value = q.get('group'); $('showGroup').click(); }
+  }
+
+  $('showSession').addEventListener('click', function () {
+    var code = $('codeInput').value.trim().toUpperCase(); $('msg').textContent = ''; $('out').textContent = '';
+    if (!code) return;
+    api('GET', '/api/sessions/' + encodeURIComponent(code) + '/analytics').then(renderSession).catch(function (e) { $('msg').textContent = e.message; });
+  });
+  $('showGroup').addEventListener('click', function () {
+    var id = $('groupSel').value; $('msg').textContent = ''; $('out').textContent = '';
+    if (!id) return;
+    api('GET', '/api/groups/' + encodeURIComponent(id) + '/analytics').then(function (d) { groupData = d; renderGroup(); }).catch(function (e) { $('msg').textContent = e.message; });
+  });
+
+  if (token) showMain(); else showLogin();
+})();
+</script>
+</body>
+</html>
+`;
+app.get('/analytics', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(ANALYTICS_PAGE_HTML);
+});
+
 // ==================== СЕССИИ ====================
+
+// Режим показа разбора студенту после сдачи теста:
+//   immediately — сразу (как раньше), after_end — только после завершения сессии
+//   преподавателем, score_only — никогда, только баллы.
+const SHOW_ANSWERS_MODES = ['immediately', 'after_end', 'score_only'];
+function normalizeShowAnswers(v) { return SHOW_ANSWERS_MODES.includes(v) ? v : 'immediately'; }
+const SUBMIT_GRACE_MS = 30 * 1000; // допуск на задержку сети при автоотправке по таймеру
+
+function buildReview(test, detail) {
+  return test.questions.map(q => ({
+    text: q.text,
+    options: q.options,
+    multi: q.multi,
+    given: detail[q.id].given,
+    correct: detail[q.id].correct,
+    isCorrect: detail[q.id].isCorrect,
+    explain: q.explain || '',
+    image: q.image || null
+  }));
+}
+function reviewAllowed(session) {
+  const mode = session.showAnswers || 'immediately';
+  if (mode === 'immediately') return true;
+  if (mode === 'after_end') return !!session.ended;
+  return false;
+}
+
+app.post('/api/sessions/:code/show-answers', checkAuth, async (req, res) => {
+  const mode = req.body && req.body.mode;
+  if (!SHOW_ANSWERS_MODES.includes(mode)) return res.status(400).json({ error: 'Неверный режим' });
+  let found = false;
+  await db.update((d) => {
+    const s = safeGet(d.sessions, req.params.code);
+    if (s && s.companyId === req.companyId) { s.showAnswers = mode; found = true; }
+  });
+  if (!found) return res.status(404).json({ error: 'Сессия не найдена' });
+  res.json({ ok: true, mode });
+});
+
+// Студент запрашивает разбор позже (когда преподаватель завершил сессию).
+app.get('/api/sessions/:code/review', (req, res) => {
+  const data = db.load();
+  const session = safeGet(data.sessions, req.params.code);
+  if (!session || session.type === 'lab') return res.status(404).json({ error: 'Сессия не найдена' });
+  const p = safeGet(session.participants, req.query.participantId);
+  if (!p || !p.finished) return res.status(404).json({ error: 'Участник не найден' });
+  const test = safeGet(data.tests, session.testId);
+  if (!test) return res.status(404).json({ error: 'Тест не найден' });
+  if (!reviewAllowed(session)) {
+    return res.json({ available: false, reviewHidden: session.showAnswers || 'immediately', score: p.score, total: p.total, review: [] });
+  }
+  res.json({ available: true, score: p.score, total: p.total, review: buildReview(test, p.answers || {}) });
+});
 
 app.post('/api/sessions', checkAuth, async (req, res) => {
   const { testId } = req.body;
@@ -813,16 +1824,19 @@ app.post('/api/sessions', checkAuth, async (req, res) => {
   }
   let code;
   do { code = nanoid(); } while (safeGet(data.sessions, code));
+  const tl = Number(req.body.timeLimit);
   const session = {
     code,
     companyId: req.companyId,
     testId,
     testTitle: test.title,
-    timeLimit: req.body.timeLimit || null,
+    timeLimit: Number.isFinite(tl) && tl > 0 && tl <= 600 ? tl : null,
+    showAnswers: normalizeShowAnswers(req.body.showAnswers),
     startedAt: Date.now(),
     scheduledAt,
     ended: false,
-    participants: {}
+    participants: {},
+    groupId: pickGroupId(req)
   };
   await db.update((d) => { d.sessions[code] = session; });
   const url = `${getBaseUrl()}/s/${code}`;
@@ -883,7 +1897,7 @@ app.get('/api/sessions/:code/present', async (req, res) => {
 });
 
 app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
-  const { name } = req.body;
+  let { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Введите имя' });
   const data = db.load();
   const session = safeGet(data.sessions, req.params.code);
@@ -898,6 +1912,12 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
   }
   const trialMsg = trialBlockedForCompany(data, session.companyId);
   if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
+  const roster = resolveRoster(data, session, name);
+  if (roster) {
+    if (!roster.ok) return res.status(400).json({ error: roster.message, code: 'NOT_IN_ROSTER', message: roster.message });
+    name = roster.name; // каноническое написание из списка группы
+    req.body.forceNew = false; // в списочной сессии «другого человека с таким же именем» не бывает
+  }
   const test = safeGet(data.tests, session.testId);
   if (!test) return res.status(404).json({ error: 'Тест не найден' });
 
@@ -912,12 +1932,14 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
   if (alreadyFinished && !req.body.forceNew) {
     return res.status(409).json({
       error: 'ALREADY_SUBMITTED',
-      message: `Участник «${name.trim()}» уже сдал это тестирование. Если это другой человек с таким же именем, войдите как новый участник.`
+      roster: !!roster,
+      message: `Участник «${name.trim()}» уже сдал это тестирование.` +
+        (roster ? ' Если это произошло по ошибке — сообщите преподавателю.' : ' Если это другой человек с таким же именем, войдите как новый участник.')
     });
   }
 
   const inProgress = findUnfinishedByName(session, name);
-  if (inProgress && !req.body.forceNew) return nameInProgress(res, inProgress);
+  if (inProgress && !req.body.forceNew) return nameInProgress(res, inProgress, !!roster);
 
   const pid = participantId();
 
@@ -1003,11 +2025,16 @@ app.post('/api/sessions/:code/submit', async (req, res) => {
     if (isCorrect) score++;
     detail[q.id] = { given, correct: q.correct, isCorrect };
   }
+  const submittedAt = Date.now();
+  const testDeadline = session.timeLimit ? participant.joinedAt + session.timeLimit * 60 * 1000 : null;
+  const lateMs = testDeadline ? Math.max(0, submittedAt - testDeadline) : 0;
+  const isLate = lateMs > SUBMIT_GRACE_MS;
   const result = await db.update((d) => {
     const p = safeGet(d.sessions[req.params.code].participants, pid);
     p.answers = detail;
     p.finished = true;
-    p.finishedAt = Date.now();
+    p.finishedAt = submittedAt;
+    if (isLate) { p.late = true; p.lateSec = Math.round(lateMs / 1000); }
     p.score = score;
     p.total = total;
     const totalAwayMs = safeTabLog.reduce((sum, e) => sum + (Math.max(0, parseInt(e.awayMs, 10) || 0)), 0);
@@ -1017,18 +2044,13 @@ app.post('/api/sessions/:code/submit', async (req, res) => {
     return p;
   });
   await incrementSubmissions(session.companyId);
-  const review = test.questions.map(q => ({
-    text: q.text,
-    options: q.options,
-    multi: q.multi,
-    given: detail[q.id].given,
-    correct: detail[q.id].correct,
-    isCorrect: detail[q.id].isCorrect,
-    explain: q.explain || '',
-    image: q.image || null
-  }));
   io.to('session:' + req.params.code).emit('participant:finished', result);
-  res.json({ score, total, review });
+  const canReview = reviewAllowed(session);
+  res.json({
+    score, total,
+    review: canReview ? buildReview(test, detail) : [],
+    reviewHidden: canReview ? null : (session.showAnswers || 'immediately')
+  });
 });
 
 // Анонимный топ-3 по сессии для студента: без имён, только позиции и проценты,
@@ -1077,7 +2099,8 @@ app.get('/api/sessions/:code/export', checkAuth, (req, res) => {
       'Статус': p.finished ? 'Завершил' : 'В процессе',
       'Переключений вкладки': p.tabSwitchCount || 0,
       'Из них долгих (5+ сек)': p.tabSwitchLongCount || 0,
-      'Время вне теста, сек': p.tabSwitchTotalMs ? Math.round(p.tabSwitchTotalMs / 1000) : 0
+      'Время вне теста, сек': p.tabSwitchTotalMs ? Math.round(p.tabSwitchTotalMs / 1000) : 0,
+      'Сдан с опозданием, сек': p.late ? (p.lateSec || 0) : ''
     };
     if (test) {
       test.questions.forEach((q, i) => {
@@ -1355,7 +2378,8 @@ app.post('/api/lab-sessions', checkAuth, async (req, res) => {
     startedAt: Date.now(),
     scheduledAt,
     ended: false,
-    participants: {}
+    participants: {},
+    groupId: pickGroupId(req)
   };
   await db.update((d) => { d.sessions[code] = session; });
   const url = `${getBaseUrl()}/l/${code}`;
@@ -1396,7 +2420,7 @@ app.get('/api/lab-sessions/:code/info', (req, res) => {
 });
 
 app.post('/api/lab-sessions/:code/join', joinLimiter, async (req, res) => {
-  const { name } = req.body;
+  let { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Введите имя' });
   const data = db.load();
   const session = safeGet(data.sessions, req.params.code);
@@ -1411,10 +2435,16 @@ app.post('/api/lab-sessions/:code/join', joinLimiter, async (req, res) => {
   }
   const trialMsg = trialBlockedForCompany(data, session.companyId);
   if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
+  const roster = resolveRoster(data, session, name);
+  if (roster) {
+    if (!roster.ok) return res.status(400).json({ error: roster.message, code: 'NOT_IN_ROSTER', message: roster.message });
+    name = roster.name; // каноническое написание из списка группы
+    req.body.forceNew = false; // в списочной сессии «другого человека с таким же именем» не бывает
+  }
   const lab = safeGet(data.labs, session.labId);
   if (!lab) return res.status(404).json({ error: 'Тренажёр не найден' });
   const inProgress = findUnfinishedByName(session, name);
-  if (inProgress && !req.body.forceNew) return nameInProgress(res, inProgress);
+  if (inProgress && !req.body.forceNew) return nameInProgress(res, inProgress, !!roster);
   const pid = participantId();
   const caseAssignment = assignCases(lab);
   const participant = {
@@ -1836,7 +2866,8 @@ app.post('/api/drawing-sessions', checkAuth, async (req, res) => {
     timeLimit: (Number.isInteger(parseInt(req.body.timeLimit, 10)) && parseInt(req.body.timeLimit, 10) > 0)
       ? Math.min(parseInt(req.body.timeLimit, 10), 600) : null,
     ended: false,
-    participants: {}
+    participants: {},
+    groupId: pickGroupId(req)
   };
   await db.update((d) => { d.sessions[code] = session; });
   const url = `${getBaseUrl()}/d/${code}`;
@@ -1900,7 +2931,7 @@ app.get('/api/drawing-sessions/:code/info', (req, res) => {
 });
 
 app.post('/api/drawing-sessions/:code/join', joinLimiter, async (req, res) => {
-  const { name, partInfo } = req.body;
+  let { name, partInfo } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Введите имя' });
   const data = db.load();
   const session = safeGet(data.sessions, req.params.code);
@@ -1915,10 +2946,16 @@ app.post('/api/drawing-sessions/:code/join', joinLimiter, async (req, res) => {
   }
   const trialMsg = trialBlockedForCompany(data, session.companyId);
   if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
+  const roster = resolveRoster(data, session, name);
+  if (roster) {
+    if (!roster.ok) return res.status(400).json({ error: roster.message, code: 'NOT_IN_ROSTER', message: roster.message });
+    name = roster.name; // каноническое написание из списка группы
+    req.body.forceNew = false; // в списочной сессии «другого человека с таким же именем» не бывает
+  }
   const task = safeGet(data.drawingTasks, session.drawingTaskId);
   if (!task) return res.status(404).json({ error: 'Задание не найдено' });
   const inProgress = findUnfinishedByName(session, name);
-  if (inProgress && !req.body.forceNew) return nameInProgress(res, inProgress);
+  if (inProgress && !req.body.forceNew) return nameInProgress(res, inProgress, !!roster);
   const pid = participantId();
   const joinedAt = Date.now();
   const participant = {
@@ -2110,10 +3147,12 @@ function findUnfinishedByName(session, name) {
 
 // Ответ join, если участник с таким именем уже проходит эту сессию: вместо дубля
 // предлагаем продолжить (клиент вызывает /api/resume по имени).
-function nameInProgress(res, p) {
+function nameInProgress(res, p, hasRoster) {
   return res.status(409).json({
     error: 'NAME_IN_PROGRESS',
-    message: `«${p.name}» уже проходит это задание. Если это вы — продолжите с того же места. Если это другой человек с таким же именем, войдите как новый участник.`
+    roster: !!hasRoster,
+    message: `«${p.name}» уже проходит это задание. Если это вы — продолжите с того же места.` +
+      (hasRoster ? ' Если не получается — сообщите преподавателю.' : ' Если это другой человек с таким же именем, войдите как новый участник.')
   });
 }
 
@@ -2293,7 +3332,8 @@ app.post('/api/tolerance-sessions', checkAuth, async (req, res) => {
     scheduledAt,
     ended: false,
     nextVariantIndex: 0,
-    participants: {}
+    participants: {},
+    groupId: pickGroupId(req)
   };
   await db.update((d) => { d.sessions[code] = session; });
   const url = `${getBaseUrl()}/k/${code}`;
@@ -2338,7 +3378,7 @@ app.get('/api/tolerance-sessions/:code/info', (req, res) => {
 });
 
 app.post('/api/tolerance-sessions/:code/join', joinLimiter, async (req, res) => {
-  const { name } = req.body;
+  let { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Введите имя' });
   const data = db.load();
   const session = safeGet(data.sessions, req.params.code);
@@ -2353,11 +3393,17 @@ app.post('/api/tolerance-sessions/:code/join', joinLimiter, async (req, res) => 
   }
   const trialMsg = trialBlockedForCompany(data, session.companyId);
   if (trialMsg) return res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg });
+  const roster = resolveRoster(data, session, name);
+  if (roster) {
+    if (!roster.ok) return res.status(400).json({ error: roster.message, code: 'NOT_IN_ROSTER', message: roster.message });
+    name = roster.name; // каноническое написание из списка группы
+    req.body.forceNew = false; // в списочной сессии «другого человека с таким же именем» не бывает
+  }
   const task = safeGet(data.toleranceTasks, session.toleranceTaskId);
   if (!task || task.variants.length === 0) return res.status(404).json({ error: 'Задание не найдено' });
 
   const inProgress = findUnfinishedByName(session, name);
-  if (inProgress && !req.body.forceNew) return nameInProgress(res, inProgress);
+  if (inProgress && !req.body.forceNew) return nameInProgress(res, inProgress, !!roster);
   const pid = participantId();
   let variant;
   await db.update((d) => {
