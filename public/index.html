@@ -203,6 +203,7 @@
       <button class="tab-btn" id="tab-btn-stats" onclick="switchTab('stats')">📊 Статистика</button>
       <button class="tab-btn" onclick="window.open('/groups','_blank')" title="Списки групп студентов">👥 Группы</button>
       <button class="tab-btn" onclick="window.open('/analytics','_blank')" title="Аналитика по темам и журнал группы">📈 Аналитика</button>
+      <button class="tab-btn hidden" id="net-btn" onclick="window.open('/network','_blank')" title="Адрес, по которому студенты заходят в тест">📶 Сеть</button>
     </div>
 
     <div id="screen-list">
@@ -351,6 +352,15 @@
         </select>
       </div>
 
+      <div id="session-remote-wrap" class="hidden" style="margin-top:10px;">
+        <label style="display:flex; gap:8px; align-items:flex-start; font-size:13.5px; cursor:pointer;">
+          <input type="checkbox" id="session-remote" style="margin-top:3px;">
+          <span>Для студентов вне локальной Wi-Fi сети (удалённый доступ)
+            <div class="muted" style="font-size:12px;">QR-код поведёт на адрес удалённого доступа (Tailscale). Обычным студентам в аудитории не нужно.</div>
+          </span>
+        </label>
+      </div>
+
       <div id="session-group-wrap" class="hidden" style="margin-top:10px;">
         <label class="muted" style="display:block; margin-bottom:6px;">Кто может войти</label>
         <select id="session-group" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:8px;">
@@ -457,6 +467,7 @@
     document.getElementById('blocked-screen').classList.add('hidden');
     document.getElementById('auth-screen').classList.add('hidden');
     document.getElementById('screen-main').classList.remove('hidden');
+    initNetworkUi();
     document.getElementById('company-display').textContent = localStorage.getItem('b2bEmail') || 'Компания';
     refreshMe();
     loadTestsList();
@@ -896,6 +907,17 @@
   function startDrawingSession(taskId) { openSessionModal('drawing', taskId); }
   function startToleranceSession(taskId) { openSessionModal('tolerance', taskId); }
 
+  // Локальная версия: показываем кнопку «Сеть» и (если настроен удалённый доступ) переключатель в окне запуска.
+  let networkInfo = null;
+  async function initNetworkUi() {
+    try {
+      const res = await authFetch('/api/network');
+      if (!res.ok) return;
+      networkInfo = await res.json();
+      if (networkInfo.localMode) document.getElementById('net-btn').classList.remove('hidden');
+    } catch (e) { /* облачная версия или нет связи — кнопка не нужна */ }
+  }
+
   // Список групп для выбора при запуске сессии. Если групп нет — блок скрыт, всё как раньше.
   async function loadGroupsForSessionModal() {
     const wrap = document.getElementById('session-group-wrap');
@@ -925,6 +947,8 @@
     document.getElementById('session-timelimit-wrap').classList.toggle('hidden', type !== 'test' && type !== 'drawing');
     document.getElementById('session-showanswers-wrap').classList.toggle('hidden', type !== 'test');
     document.getElementById('session-show-answers').value = 'immediately';
+    document.getElementById('session-remote').checked = false;
+    document.getElementById('session-remote-wrap').classList.toggle('hidden', !(networkInfo && networkInfo.localMode && networkInfo.remote && networkInfo.remote.available));
     loadGroupsForSessionModal();
     document.querySelector('input[name="session-when"][value="now"]').checked = true;
     document.getElementById('session-schedule-at').classList.add('hidden');
@@ -1040,11 +1064,13 @@
     const type = pendingSessionType;
     const id = pendingSessionId;
     const showAnswers = document.getElementById('session-show-answers').value;
+    const remoteChecked = document.getElementById('session-remote').checked;
     const groupChoice = document.getElementById('session-group').value; // '' — по умолчанию, 'none' — без группы, иначе id группы
     closeSessionModal();
 
     const endpoint = type === 'lab' ? '/api/lab-sessions' : type === 'drawing' ? '/api/drawing-sessions' : type === 'tolerance' ? '/api/tolerance-sessions' : '/api/sessions';
     const body = type === 'lab' ? { labId: id, scheduledAt } : type === 'drawing' ? { drawingTaskId: id, timeLimit, scheduledAt } : type === 'tolerance' ? { toleranceTaskId: id, scheduledAt } : { testId: id, timeLimit, scheduledAt };
+    if (remoteChecked) body.remote = true;
     if (type === 'test') body.showAnswers = showAnswers;
     if (groupChoice === 'none') body.groupId = null;
     else if (groupChoice) body.groupId = groupChoice;
@@ -2138,6 +2164,28 @@
       navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('SW не зарегистрирован:', e));
     });
   }
+</script>
+
+<!-- Индикатор состояния сервера (облако: Render + Supabase / локальный сервер) -->
+<div id="server-status" title="Состояние сервера. Обновляется каждые 20 секунд." style="position:fixed; right:10px; bottom:10px; z-index:50; font-size:12px; padding:4px 10px; border-radius:14px; background:#fff; border:1px solid #ddd; color:#555; box-shadow:0 1px 4px rgba(0,0,0,.12); pointer-events:none;">…</div>
+<script>
+(function () {
+  const el = document.getElementById('server-status');
+  function set(text, color) { el.textContent = text; el.style.color = color; el.style.borderColor = color; }
+  async function tick() {
+    try {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 8000);
+      const r = await fetch('/health', { signal: ctrl.signal, cache: 'no-store' });
+      clearTimeout(to);
+      const d = await r.json();
+      if (d.db && d.db.ready === false) set('⚠ База данных подключается…', '#d9822b');
+      else if (d.db && d.db.unsavedChanges) set('⚠ Сохранение задерживается', '#d9822b');
+      else set('● Сервер на связи', '#12a150');
+    } catch (e) { set('✖ Нет связи с сервером', '#d64545'); }
+  }
+  tick(); setInterval(tick, 20000);
+})();
 </script>
 </body>
 </html>

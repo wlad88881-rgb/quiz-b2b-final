@@ -26,7 +26,29 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const PORT = process.env.PORT || 3000;
+const { LOCAL_MODE, APP_DIR } = db;
+
+// config.json рядом с программой (только локальный режим). Создаётся при первом запуске.
+//   port        — порт сервера (если занят, берётся следующий свободный)
+//   openBrowser — открывать панель преподавателя в браузере при запуске
+//   publicUrl   — принудительный адрес для студентов (если определился неверно)
+//   remoteUrl   — адрес для удалённых студентов (Tailscale Funnel и т.п.), см. README
+function loadLocalConfig() {
+  const defaults = { port: 3000, openBrowser: true, publicUrl: '', remoteUrl: '' };
+  const file = path.join(APP_DIR, 'config.json');
+  try {
+    if (!require('fs').existsSync(file)) {
+      require('fs').writeFileSync(file, JSON.stringify(defaults, null, 2));
+      return defaults;
+    }
+    return Object.assign({}, defaults, JSON.parse(require('fs').readFileSync(file, 'utf8')));
+  } catch (e) {
+    console.warn('[config] Не удалось прочитать config.json — используются настройки по умолчанию:', e.message);
+    return defaults;
+  }
+}
+const localCfg = LOCAL_MODE ? loadLocalConfig() : {};
+let PORT = parseInt(process.env.PORT || localCfg.port || 3000, 10) || 3000;
 
 // ==================== КОНФИГУРАЦИЯ БЕЗОПАСНОСТИ И ТАРИФОВ ====================
 // ВАЖНО: перед деплоем в продакшн задайте эти переменные окружения на хостинге (например, в Render → Environment):
@@ -54,8 +76,8 @@ function persistentSecret(fileName, generate) {
 }
 const secretInfo = process.env.SESSION_SECRET ? null : persistentSecret('secret.key', () => crypto.randomBytes(32).toString('hex'));
 const adminInfo = process.env.ADMIN_PASSWORD ? null : persistentSecret('admin-password.txt', () => crypto.randomBytes(6).toString('hex'));
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || adminInfo.value;
-const SESSION_SECRET = process.env.SESSION_SECRET || secretInfo.value;
+let ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || adminInfo.value;
+let SESSION_SECRET = process.env.SESSION_SECRET || secretInfo.value;
 const DEVELOPER_CONTACTS = process.env.DEVELOPER_CONTACTS ||
   'Свяжитесь с разработчиком, чтобы продолжить работу (контакты не настроены — задайте переменную окружения DEVELOPER_CONTACTS).';
 
@@ -87,7 +109,60 @@ if (secretInfo && !secretInfo.persisted) {
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(express.json({ limit: '3mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+
+// ---- Облачный режим (Render + Supabase): секреты в самой базе, состояние и «защита от пустой базы» ----
+// Диск Render стирается при каждом перезапуске, поэтому файлы secret.key / admin-password.txt там
+// не живут. Если SESSION_SECRET / ADMIN_PASSWORD не заданы в переменных окружения, они один раз
+// создаются и хранятся в Supabase вместе с остальными данными — преподаватели не разлогиниваются
+// при перезапусках сервиса. (Пароль админки при создании печатается в журнал Render.)
+let cloudSecretsPromise = null;
+function ensureCloudSecrets() {
+  if (LOCAL_MODE || !db.USE_SUPABASE) return Promise.resolve();
+  if (!cloudSecretsPromise) {
+    cloudSecretsPromise = (async () => {
+      let adminCreated = false;
+      await db.update((d) => {
+        d.meta = d.meta || {};
+        if (!process.env.SESSION_SECRET) {
+          if (!d.meta.sessionSecret) d.meta.sessionSecret = crypto.randomBytes(32).toString('hex');
+          SESSION_SECRET = d.meta.sessionSecret;
+        }
+        if (!process.env.ADMIN_PASSWORD) {
+          if (!d.meta.adminPassword) { d.meta.adminPassword = crypto.randomBytes(6).toString('hex'); adminCreated = true; }
+          ADMIN_PASSWORD = d.meta.adminPassword;
+        }
+      });
+      if (adminCreated) console.warn('[security] ADMIN_PASSWORD не задан в Render — создан пароль админ-панели: ' + ADMIN_PASSWORD + '  (сохранён в базе; задайте свой в Environment → ADMIN_PASSWORD, чтобы заменить)');
+    })().catch((e) => { cloudSecretsPromise = null; throw e; });
+  }
+  return cloudSecretsPromise;
+}
+
+// Проверка состояния для пингеров/мониторинга: без авторизации и без личных данных.
+app.get('/health', (req, res) => {
+  const st = db.status();
+  res.json({ ok: true, uptimeSec: Math.round(process.uptime()), db: { ready: st.ready, unsavedChanges: st.unsavedChanges } });
+});
+
+// Пока облачная база не подключена, API не принимает запросы (иначе преподаватель увидел бы пустые
+// списки, а новые записи могли бы затереть настоящие данные). Страницы студентов повторяют отправку.
+app.use('/api', (req, res, next) => {
+  if (!db.isReady()) {
+    return res.status(503).json({ error: 'База данных подключается. Подождите 10–20 секунд и повторите.', code: 'DB_UNAVAILABLE' });
+  }
+  ensureCloudSecrets().then(() => next()).catch(() => res.status(503).json({ error: 'Сервер ещё запускается. Повторите через несколько секунд.', code: 'DB_UNAVAILABLE' }));
+});
+// Страницы: если рядом с программой лежит папка public — берём файлы оттуда (их можно править
+// и заменять без пересборки .exe), иначе — встроенные в программу.
+const BUNDLED_PUBLIC = path.join(__dirname, 'public');
+const EXTERNAL_PUBLIC = path.join(APP_DIR, 'public');
+function publicFile(name) {
+  const ext = path.join(EXTERNAL_PUBLIC, name);
+  try { if (LOCAL_MODE && require('fs').existsSync(ext)) return ext; } catch (e) { /* берём встроенный */ }
+  return path.join(BUNDLED_PUBLIC, name);
+}
+if (LOCAL_MODE && EXTERNAL_PUBLIC !== BUNDLED_PUBLIC) app.use(express.static(EXTERNAL_PUBLIC)); // папка может появиться и позже
+app.use(express.static(BUNDLED_PUBLIC));
 
 // Ограничение частоты запросов на чувствительные маршруты (защита от подбора паролей и злоупотреблений)
 const authLimiter = rateLimit({
@@ -151,22 +226,63 @@ function verifyToken(token) {
   }
 }
 
-function getLocalIp() {
+// ==================== СЕТЬ: АДРЕС ДЛЯ QR-КОДА ====================
+// В локальном режиме студенты заходят по IP компьютера преподавателя в общей Wi-Fi сети.
+// У компьютера бывает несколько адресов (Wi-Fi, Ethernet, VPN, виртуальные адаптеры, точка
+// доступа Windows), поэтому адреса ранжируются, а преподаватель может выбрать нужный на
+// странице /network. Выбор хранится в data/network.json.
+const NET_PREFS_FILE = path.join(db.DATA_DIR, 'network.json');
+let netPrefs = {};
+try { netPrefs = JSON.parse(require('fs').readFileSync(NET_PREFS_FILE, 'utf8')) || {}; } catch (e) { netPrefs = {}; }
+
+const VIRTUAL_RE = /vethernet|virtualbox|vmware|vmnet|hyper-v|docker|wsl|veth|br-|bluetooth|loopback|tap-|openvpn|zerotier|vpn|virbr|utun|tun\d/i;
+function isPrivateIp(ip) { return /^10\./.test(ip) || /^192\.168\./.test(ip) || /^172\.(1[6-9]|2\d|3[01])\./.test(ip); }
+function isTailscaleIp(ip) { const p = ip.split('.').map(Number); return p[0] === 100 && p[1] >= 64 && p[1] <= 127; }
+
+function listNetworkCandidates() {
+  const out = [];
   const ifaces = os.networkInterfaces();
-  for (const name of Object.keys(ifaces)) {
-    for (const iface of ifaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
+  Object.keys(ifaces).forEach(name => (ifaces[name] || []).forEach(i => {
+    if (!(i.family === 'IPv4' || i.family === 4) || i.internal) return;
+    const ip = i.address;
+    if (ip.startsWith('169.254.')) return; // адрес «без сети»
+    let kind = 'lan', score = 50;
+    if (isTailscaleIp(ip) || /tailscale/i.test(name)) { kind = 'remote'; score = 0; }
+    else if (ip === '192.168.137.1') { kind = 'hotspot'; score = 100; } // «Мобильный хот-спот» Windows
+    else if (VIRTUAL_RE.test(name)) { kind = 'virtual'; score = 10; }
+    else {
+      if (/wi-?fi|wlan|wireless|беспровод|ethernet|local area|локальной сети/i.test(name)) score += 20;
+      if (isPrivateIp(ip)) score += 20;
     }
-  }
-  return 'localhost';
+    out.push({ name, ip, kind, score });
+  }));
+  return out.sort((a, b) => b.score - a.score);
 }
 
-function getBaseUrl() {
+function getLocalIp() {
+  const lan = listNetworkCandidates().filter(c => c.kind !== 'remote');
+  const pref = netPrefs.preferredIp && lan.find(c => c.ip === netPrefs.preferredIp);
+  return (pref || lan[0] || { ip: 'localhost' }).ip;
+}
+
+function getRemoteBase() {
+  if (!LOCAL_MODE) return null;
+  if (localCfg.remoteUrl) return String(localCfg.remoteUrl).replace(/\/$/, '');
+  const ts = listNetworkCandidates().find(c => c.kind === 'remote');
+  return ts ? `http://${ts.ip}:${PORT}` : null;
+}
+
+// session (необязательно): сессия, открытая «для удалённых студентов», получает адрес Tailscale.
+function getBaseUrl(session) {
   if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/$/, '');
   if (process.env.RENDER_EXTERNAL_URL) return process.env.RENDER_EXTERNAL_URL.replace(/\/$/, '');
+  if (LOCAL_MODE && session && session.remote) { const r = getRemoteBase(); if (r) return r; }
+  if (LOCAL_MODE && localCfg.publicUrl) return String(localCfg.publicUrl).replace(/\/$/, '');
   return `http://${getLocalIp()}:${PORT}`;
+}
+
+function wantsRemote(req) {
+  return LOCAL_MODE && !!(req.body && req.body.remote) && !!getRemoteBase();
 }
 
 // ==================== B2B: АВТОРИЗАЦИЯ И ТАРИФЫ ====================
@@ -419,7 +535,14 @@ async function incrementSubmissions(companyId) {
 
 // ==================== РЕГИСТРАЦИЯ / ВХОД ====================
 
+// REGISTRATION=first-only — регистрация открыта только пока нет ни одной учётной записи
+// (для сервера в интернете: после создания вашей записи посторонние зарегистрироваться не смогут);
+// REGISTRATION=closed — закрыта полностью. Чтобы добавить преподавателя, временно уберите настройку.
 app.post('/api/register', authLimiter, async (req, res) => {
+  const regMode = process.env.REGISTRATION;
+  if (regMode === 'closed' || (regMode === 'first-only' && Object.keys(db.load().companies).length > 0)) {
+    return res.status(403).json({ error: 'Регистрация закрыта администратором. Для нового преподавателя обратитесь к владельцу сервера.' });
+  }
   const { email, password, name } = req.body;
   if (!email || !password || !email.trim() || !password.trim()) {
     return res.status(400).json({ error: 'Заполните email и пароль' });
@@ -443,14 +566,14 @@ app.post('/api/register', authLimiter, async (req, res) => {
     email: cleanEmail,
     name: name ? name.trim().slice(0, 120) : 'Моя компания',
     passwordHash,
-    plan: 'free',
+    plan: LOCAL_MODE ? 'unlimited' : 'free',
     blocked: false,
     usage: { submissions: 0 },
     registeredAt: Date.now()
   };
   await db.update((d) => { d.companies[id] = company; });
   const token = signToken({ companyId: id }, 30 * 24 * 60 * 60 * 1000);
-  res.json({ ok: true, companyId: id, token, email: cleanEmail, plan: 'free' });
+  res.json({ ok: true, companyId: id, token, email: cleanEmail, plan: LOCAL_MODE ? 'unlimited' : 'free' });
 });
 
 app.post('/api/login', authLimiter, async (req, res) => {
@@ -817,7 +940,7 @@ app.get('/api/sessions/:code/qr', async (req, res) => {
   const data = db.load();
   const session = safeGet(data.sessions, req.params.code);
   if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
-  const url = `${getBaseUrl()}/s/${req.params.code}`;
+  const url = `${getBaseUrl(session)}/s/${req.params.code}`;
   const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
   res.setHeader('Content-Type', 'image/png');
   res.send(Buffer.from(qrDataUrl.split(',')[1], 'base64'));
@@ -1757,6 +1880,175 @@ app.get('/analytics', (req, res) => {
   res.send(ANALYTICS_PAGE_HTML);
 });
 
+// ---------- страница «Сеть»: какой адрес увидят студенты ----------
+app.get('/api/network', checkAuth, async (req, res) => {
+  const baseUrl = getBaseUrl();
+  let qr = '';
+  try { qr = await QRCode.toDataURL(baseUrl, { width: 300, margin: 1 }); } catch (e) {}
+  const remoteBase = getRemoteBase();
+  res.json({
+    localMode: LOCAL_MODE, port: PORT, baseUrl, qr,
+    candidates: listNetworkCandidates().filter(c => c.kind !== 'remote').map(c => ({ name: c.name, ip: c.ip, kind: c.kind, url: `http://${c.ip}:${PORT}` })),
+    preferredIp: netPrefs.preferredIp || null,
+    remote: { available: !!remoteBase, url: remoteBase }
+  });
+});
+
+app.post('/api/network', checkAuth, async (req, res) => {
+  if (!LOCAL_MODE) return res.status(400).json({ error: 'Выбор адреса доступен только в локальной версии' });
+  const ip = req.body && req.body.preferredIp ? String(req.body.preferredIp) : null;
+  if (ip && !listNetworkCandidates().some(c => c.ip === ip && c.kind !== 'remote')) {
+    return res.status(400).json({ error: 'Такого сетевого адреса сейчас нет на этом компьютере' });
+  }
+  netPrefs.preferredIp = ip;
+  try { require('fs').writeFileSync(NET_PREFS_FILE, JSON.stringify(netPrefs)); } catch (e) { console.error('[net] не удалось сохранить network.json', e); }
+  res.json({ ok: true, baseUrl: getBaseUrl() });
+});
+
+const NETWORK_PAGE_HTML = String.raw`<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Сеть — адрес для студентов</title>
+<style>
+  :root { --bg:#f4f6fa; --card:#fff; --text:#1c2333; --muted:#667085; --line:#dfe3ec; --accent:#2f6fed; --ok:#12a150; --warn:#d9822b; --bad:#d64545; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151c; --card:#1b2030; --text:#e8ebf3; --muted:#9aa3b8; --line:#2b3248; --accent:#6a9bff; --ok:#3ecf7d; --warn:#f0a050; --bad:#ff7070; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:760px; margin:0 auto; padding:16px; }
+  h1 { font-size:22px; margin:8px 0 14px; }
+  h2 { font-size:17px; margin:0 0 10px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+  input[type=email], input[type=password] { padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font:inherit; }
+  button { padding:8px 14px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .grow { flex:1 1 200px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .err { color:var(--bad); margin:8px 0; }
+  .hidden { display:none; }
+  .big { font-size:22px; font-weight:700; word-break:break-all; }
+  .cand { display:flex; gap:10px; align-items:flex-start; padding:10px 0; border-top:1px solid var(--line); cursor:pointer; }
+  .cand:first-of-type { border-top:0; }
+  .badge { font-size:12px; padding:1px 8px; border-radius:10px; border:1px solid var(--line); color:var(--muted); }
+  .badge.hotspot { border-color:var(--ok); color:var(--ok); }
+  .badge.virtual { border-color:var(--warn); color:var(--warn); }
+  img.qr { width:180px; height:180px; border-radius:8px; background:#fff; padding:4px; }
+  ol { margin:6px 0 0 18px; padding:0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Сеть: адрес для студентов</h1>
+
+  <div id="loginBox" class="card hidden">
+    <h2>Вход преподавателя</h2>
+    <div class="row">
+      <input id="email" class="grow" type="email" placeholder="Email">
+      <input id="password" class="grow" type="password" placeholder="Пароль">
+      <button class="primary" id="loginBtn">Войти</button>
+    </div>
+    <div id="loginErr" class="err"></div>
+  </div>
+
+  <div id="main" class="hidden">
+    <div class="card">
+      <h2>Сейчас QR-коды ведут на</h2>
+      <div class="big" id="baseUrl">…</div>
+      <div class="row" style="margin-top:10px">
+        <img id="qr" class="qr hidden" alt="QR">
+        <div class="muted grow">Проверка: возьмите телефон, подключённый к <b>той же Wi-Fi сети</b>, и наведите камеру на этот код. Если открылась страница теста — студенты тоже зайдут. Если нет — смотрите подсказки ниже.</div>
+      </div>
+    </div>
+
+    <div class="card" id="candCard">
+      <h2>Адреса этого компьютера</h2>
+      <div class="muted" style="margin-bottom:6px">Выберите тот, что в одной сети со студентами. Обычно подходит первый.</div>
+      <div id="cands"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="saveBtn">Использовать выбранный</button>
+        <button id="autoBtn">Выбирать автоматически</button>
+        <span id="msg" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Если студенты не могут открыть страницу</h2>
+      <ol class="muted">
+        <li>Телефон и компьютер должны быть в <b>одной Wi-Fi сети</b>. В гостевых и офисных сетях часто включена «изоляция клиентов» — устройства не видят друг друга. Надёжный вариант: включить на ноутбуке <b>«Мобильный хот-спот»</b> (Параметры → Сеть и Интернет) и подключить телефоны к нему.</li>
+        <li>При первом запуске Windows спрашивает про брандмауэр — нужно нажать <b>«Разрешить доступ»</b> (отметьте и «частные», и «общедоступные» сети). Если окно не появилось или доступ уже запретили — запустите файл «open-firewall.bat» от администратора.</li>
+        <li>Если адрес определился неверно — выберите другой в списке выше или впишите нужный в <code>config.json</code> (поле <code>publicUrl</code>).</li>
+      </ol>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var TOKEN_KEY = 'groupsPageToken';
+  var token = sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem('b2bToken') || '';
+  var data = null, selected = null;
+  function $(id) { return document.getElementById(id); }
+  function api(method, url, body) {
+    return fetch(url, { method: method, headers: { 'Content-Type': 'application/json', 'x-company-id': token }, body: body ? JSON.stringify(body) : undefined })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          if (r.status === 401) { showLogin(); throw new Error('Нужен вход'); }
+          if (!r.ok) throw new Error(d.error || d.message || ('Ошибка ' + r.status));
+          return d;
+        });
+      });
+  }
+  function showLogin() { token = ''; sessionStorage.removeItem(TOKEN_KEY); $('loginBox').classList.remove('hidden'); $('main').classList.add('hidden'); }
+  function showMain() { $('loginBox').classList.add('hidden'); $('main').classList.remove('hidden'); load(); }
+  $('loginBtn').addEventListener('click', function () {
+    $('loginErr').textContent = '';
+    fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email').value, password: $('password').value }) })
+      .then(function (r) { return r.json().then(function (d) { return { r: r, d: d }; }); })
+      .then(function (x) {
+        if (!x.r.ok || !x.d.token) { $('loginErr').textContent = x.d.error || x.d.message || 'Не удалось войти'; return; }
+        token = x.d.token; sessionStorage.setItem(TOKEN_KEY, token); showMain();
+      }).catch(function () { $('loginErr').textContent = 'Нет связи с сервером'; });
+  });
+
+  var KIND = { hotspot: 'точка доступа Windows', lan: 'локальная сеть', virtual: 'виртуальный адаптер — обычно не подходит' };
+  function render() {
+    $('baseUrl').textContent = data.baseUrl;
+    if (data.qr) { $('qr').src = data.qr; $('qr').classList.remove('hidden'); }
+    var box = $('cands'); box.textContent = '';
+    if (!data.localMode) { $('candCard').classList.add('hidden'); return; }
+    if (!data.candidates.length) { box.textContent = 'Сеть не найдена. Подключитесь к Wi-Fi или включите «Мобильный хот-спот».'; return; }
+    data.candidates.forEach(function (c, i) {
+      var row = document.createElement('label'); row.className = 'cand';
+      var radio = document.createElement('input'); radio.type = 'radio'; radio.name = 'cand'; radio.value = c.ip;
+      radio.checked = selected ? selected === c.ip : (data.preferredIp ? data.preferredIp === c.ip : data.baseUrl.indexOf('//' + c.ip + ':') >= 0);
+      radio.addEventListener('change', function () { selected = c.ip; });
+      var info = document.createElement('div');
+      var t = document.createElement('div'); t.textContent = c.url; t.style.fontWeight = '600';
+      var m = document.createElement('div'); m.className = 'muted'; m.textContent = c.name + ' ';
+      var b = document.createElement('span'); b.className = 'badge ' + c.kind; b.textContent = KIND[c.kind] || c.kind; m.appendChild(b);
+      info.appendChild(t); info.appendChild(m); row.appendChild(radio); row.appendChild(info); box.appendChild(row);
+    });
+  }
+  function load() { api('GET', '/api/network').then(function (d) { data = d; selected = null; render(); }).catch(function (e) { $('baseUrl').textContent = e.message; }); }
+  function save(ip) {
+    $('msg').textContent = 'Сохраняю…';
+    api('POST', '/api/network', { preferredIp: ip }).then(function () { $('msg').textContent = 'Сохранено'; load(); }).catch(function (e) { $('msg').textContent = e.message; });
+  }
+  $('saveBtn').addEventListener('click', function () { var r = document.querySelector('input[name=cand]:checked'); if (r) save(r.value); });
+  $('autoBtn').addEventListener('click', function () { save(null); });
+  if (token) showMain(); else showLogin();
+})();
+</script>
+</body>
+</html>
+`;
+app.get('/network', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(NETWORK_PAGE_HTML);
+});
+
 // ==================== СЕССИИ ====================
 
 // Режим показа разбора студенту после сдачи теста:
@@ -1836,10 +2128,11 @@ app.post('/api/sessions', checkAuth, async (req, res) => {
     scheduledAt,
     ended: false,
     participants: {},
-    groupId: pickGroupId(req)
+    groupId: pickGroupId(req),
+    remote: wantsRemote(req)
   };
   await db.update((d) => { d.sessions[code] = session; });
-  const url = `${getBaseUrl()}/s/${code}`;
+  const url = `${getBaseUrl(session)}/s/${code}`;
   const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
   res.json({ session, url, qrDataUrl });
 });
@@ -1879,7 +2172,7 @@ app.get('/api/sessions/:code/present', async (req, res) => {
   const session = safeGet(data.sessions, req.params.code);
   if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
   const pathPrefix = session.type === 'lab' ? 'l' : session.type === 'drawing' ? 'd' : session.type === 'tolerance' ? 'k' : 's';
-  const url = `${getBaseUrl()}/${pathPrefix}/${session.code}`;
+  const url = `${getBaseUrl(session)}/${pathPrefix}/${session.code}`;
   try {
     const qrDataUrl = await QRCode.toDataURL(url, { width: 500, margin: 1 });
     res.json({
@@ -2379,10 +2672,11 @@ app.post('/api/lab-sessions', checkAuth, async (req, res) => {
     scheduledAt,
     ended: false,
     participants: {},
-    groupId: pickGroupId(req)
+    groupId: pickGroupId(req),
+    remote: wantsRemote(req)
   };
   await db.update((d) => { d.sessions[code] = session; });
-  const url = `${getBaseUrl()}/l/${code}`;
+  const url = `${getBaseUrl(session)}/l/${code}`;
   const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
   res.json({ session, url, qrDataUrl });
 });
@@ -2572,19 +2866,19 @@ app.get('/api/lab-sessions/:code/export', checkAuth, (req, res) => {
 });
 
 app.get('/l/:code', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'lab-student.html'));
+  res.sendFile(publicFile('lab-student.html'));
 });
 
 app.get('/s/:code', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'student.html'));
+  res.sendFile(publicFile('student.html'));
 });
 
 app.get('/d/:code', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'drawing-student.html'));
+  res.sendFile(publicFile('drawing-student.html'));
 });
 
 app.get('/k/:code', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'tolerance-student.html'));
+  res.sendFile(publicFile('tolerance-student.html'));
 });
 
 // ==================== ЗАДАНИЯ ПО ЧЕРТЕЖАМ (открытые вопросы, ручная проверка) ====================
@@ -2867,10 +3161,11 @@ app.post('/api/drawing-sessions', checkAuth, async (req, res) => {
       ? Math.min(parseInt(req.body.timeLimit, 10), 600) : null,
     ended: false,
     participants: {},
-    groupId: pickGroupId(req)
+    groupId: pickGroupId(req),
+    remote: wantsRemote(req)
   };
   await db.update((d) => { d.sessions[code] = session; });
-  const url = `${getBaseUrl()}/d/${code}`;
+  const url = `${getBaseUrl(session)}/d/${code}`;
   const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
   res.json({ session, url, qrDataUrl });
 });
@@ -3258,7 +3553,7 @@ app.get('/api/my-sessions/:code', checkAuth, async (req, res) => {
   const data = db.load();
   const session = safeGet(data.sessions, req.params.code);
   if (!session || session.companyId !== req.companyId) return res.status(404).json({ error: 'Сессия не найдена' });
-  const url = `${getBaseUrl()}/${sessionPathPrefix(session.type)}/${session.code}`;
+  const url = `${getBaseUrl(session)}/${sessionPathPrefix(session.type)}/${session.code}`;
   let qrDataUrl = '';
   try { qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 }); } catch (e) {}
   res.json({ session, url, qrDataUrl, serverNow: Date.now() });
@@ -3333,10 +3628,11 @@ app.post('/api/tolerance-sessions', checkAuth, async (req, res) => {
     ended: false,
     nextVariantIndex: 0,
     participants: {},
-    groupId: pickGroupId(req)
+    groupId: pickGroupId(req),
+    remote: wantsRemote(req)
   };
   await db.update((d) => { d.sessions[code] = session; });
-  const url = `${getBaseUrl()}/k/${code}`;
+  const url = `${getBaseUrl(session)}/k/${code}`;
   const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1 });
   res.json({ session, url, qrDataUrl });
 });
@@ -3568,7 +3864,7 @@ app.get('/api/tolerance-sessions/:code/export', checkAuth, (req, res) => {
 });
 
 app.get('/admin', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+  res.sendFile(publicFile('admin.html'));
 });
 
 io.on('connection', (socket) => {
@@ -3768,20 +4064,112 @@ process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection] Сервер продолжает работу:', reason);
 });
 
+function listenOnFreePort() {
+  // Локальный режим: если порт занят (например, запущена вторая копия) — берём следующий.
+  return new Promise((resolve, reject) => {
+    let attempts = 0;
+    const tryListen = (port) => {
+      const onError = (e) => {
+        server.removeListener('listening', onOk);
+        if (e.code === 'EADDRINUSE' && LOCAL_MODE && attempts < 20) { attempts++; tryListen(port + 1); }
+        else reject(e);
+      };
+      const onOk = () => { server.removeListener('error', onError); PORT = port; resolve(port); };
+      server.once('error', onError);
+      server.once('listening', onOk);
+      server.listen(port, process.env.HOST || '0.0.0.0');
+    };
+    tryListen(PORT);
+  });
+}
+
+function openInBrowser(url) {
+  try {
+    const { exec } = require('child_process');
+    if (process.platform === 'win32') exec(`start "" "${url}"`);
+    else if (process.platform === 'darwin') exec(`open "${url}"`);
+    else exec(`xdg-open "${url}"`);
+  } catch (e) { /* не критично: адрес выведен в консоль */ }
+}
+
+// Облако (Render): бесплатный сервис засыпает через 15 минут без запросов, а бесплатный проект
+// Supabase — через неделю без обращений к базе. Поэтому сервер сам изредка обращается к себе
+// и к базе. Отключить: переменная KEEP_ALIVE=0. Учтите: бесплатные 750 часов в месяц Render
+// выдаёт на ВСЕ сервисы аккаунта, круглосуточно хватает только на один сервис.
+function startKeepAlive() {
+  if (LOCAL_MODE || process.env.KEEP_ALIVE === '0') return;
+  const self = (process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
+  if (self) {
+    setInterval(() => {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 20000);
+      fetch(self + '/health', { signal: ctrl.signal }).catch(() => {}).finally(() => clearTimeout(to));
+    }, Number(process.env.KEEP_ALIVE_MS) || 9 * 60 * 1000).unref();
+    console.log('[keep-alive] сервис будет сам обращаться к ' + self + '/health каждые 9 минут, чтобы не засыпать');
+  }
+  if (db.USE_SUPABASE) {
+    setTimeout(() => db.touch(), Number(process.env.TOUCH_FIRST_MS) || 30 * 1000).unref();
+    setInterval(() => db.touch(), Number(process.env.TOUCH_MS) || 12 * 3600 * 1000).unref();
+    console.log('[keep-alive] проверочный запрос к Supabase — раз в 12 часов (чтобы проект не ушёл на паузу)');
+  }
+}
+
 async function start() {
-  await db.initCache();
-  await seedLabs();
-  await seedDrawingTasks();
-  await seedAnswerKeys();
-  await seedToleranceTasks();
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log('');
+  const prepareData = async () => {
+    await seedLabs();
+    await seedDrawingTasks();
+    await seedAnswerKeys();
+    await seedToleranceTasks();
+    await ensureCloudSecrets();
+  };
+  // Облако (Supabase): порт открываем СРАЗУ, а базу подключаем уже под работающим сервером —
+  // пока она не готова, API отвечает 503, а /health показывает «база подключается». Так деплой
+  // на Render не зависает, даже если Supabase отвечает медленно или проект на паузе.
+  // Файловый режим: данные читаются мгновенно, поэтому сначала загрузка, затем приём запросов.
+  const earlyListen = !LOCAL_MODE && db.USE_SUPABASE;
+  if (earlyListen) {
+    await listenOnFreePort();
+    startKeepAlive();
+    db.onReady(prepareData);
+    db.initCache()
+      .then(() => { if (db.isReady()) return prepareData(); })
+      .catch((e) => console.error('[start] Ошибка подготовки данных:', e));
+  } else {
+    await db.initCache();
+    await prepareData();
+  }
+  if (LOCAL_MODE) {
+    // В локальной версии пробных ограничений нет: все учётные записи — без лимитов.
+    await db.update((d) => { Object.values(d.companies).forEach(c => { c.plan = 'unlimited'; c.blocked = false; }); });
+    process.title = 'Тестирование — локальный сервер';
+  }
+  if (!earlyListen) {
+    await listenOnFreePort();
+    startKeepAlive();
+  }
+  console.log('');
+  if (LOCAL_MODE) {
+    const lan = listNetworkCandidates().filter(c => c.kind !== 'remote');
+    console.log('=========== Тестирование: ЛОКАЛЬНЫЙ РЕЖИМ ===========');
+    console.log(`Панель преподавателя:  http://localhost:${PORT}`);
+    console.log(`Адрес для студентов:   ${getBaseUrl()}`);
+    if (!lan.length) console.log('ВНИМАНИЕ: компьютер не подключён к сети — студенты не смогут зайти. Подключитесь к Wi-Fi или включите «Мобильный хот-спот».');
+    if (lan.length > 1) console.log('Другие адреса этого компьютера: ' + lan.map(c => `${c.ip} (${c.name})`).join('; ') + '  — выбрать нужный: http://localhost:' + PORT + '/network');
+    console.log(`Данные:                ${db.DATA_DIR}`);
+    console.log('Не закрывайте это окно, пока идёт занятие. Остановка — закрыть окно или Ctrl+C.');
+    console.log('======================================================');
+    if (localCfg.openBrowser !== false && !process.env.NO_BROWSER) openInBrowser(`http://localhost:${PORT}`);
+  } else {
     console.log('=== Приложение для тестирования запущено ===');
     console.log(`Панель преподавателя: http://localhost:${PORT}`);
     console.log(`Админ-панель: ${getBaseUrl()}/admin`);
     console.log(`Публичный адрес (для QR): ${getBaseUrl()}`);
     console.log('==============================================');
-  });
+  }
 }
 
-start();
+start().catch((e) => {
+  console.error('[start] Не удалось запустить сервер:', e);
+  if (LOCAL_MODE) { console.error('Нажмите Enter, чтобы закрыть окно…'); process.stdin.resume(); process.stdin.once('data', () => process.exit(1)); }
+  else process.exit(1);
+});
