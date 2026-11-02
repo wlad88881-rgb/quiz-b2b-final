@@ -336,6 +336,47 @@ if (USE_YANDEX) {
   console.warn('[translate] ВНИМАНИЕ: YANDEX_TRANSLATE_API_KEY/YANDEX_FOLDER_ID не заданы — используется анонимный MyMemory (менее надёжен на общем IP Render, может упираться в лимит запросов). Задайте переменные окружения, чтобы включить Yandex.');
 }
 
+
+function emptyTranslationMeta() {
+  return { status: 'none', updatedAt: 0, provider: null, progress: { done: 0, total: 0 }, error: null };
+}
+
+function markTranslationStale(test) {
+  if (!test.translation) test.translation = emptyTranslationMeta();
+  if (test.translation.status === 'ready' || test.translation.status === 'stale') {
+    test.translation.status = 'stale';
+  }
+}
+
+function buildQuestionsKkFromCache(test, translationsMap, target) {
+  const get = (text) => {
+    const clean = (text || '').toString();
+    if (!clean.trim()) return clean;
+    const key = translationCacheKey(clean, target);
+    return translationsMap[key] || null;
+  };
+  let missing = 0;
+  const title_kk = get(test.title);
+  if (test.title && test.title.trim() && !title_kk) missing++;
+  const questions_kk = (test.questions || []).map(q => {
+    const text = get(q.text);
+    if (q.text && q.text.trim() && !text) missing++;
+    const options = (q.options || []).map(o => {
+      const t = get(o);
+      if (o && String(o).trim() && !t) missing++;
+      return t || o;
+    });
+    let explain = '';
+    if (q.explain) {
+      const te = get(q.explain);
+      if (!te) missing++;
+      explain = te || q.explain;
+    }
+    return { id: q.id, text: text || q.text, options, explain };
+  });
+  return { title_kk: title_kk || test.title, questions_kk, missing };
+}
+
 function translationCacheKey(text, target) {
   return crypto.createHash('sha1').update(target + '::' + text).digest('hex');
 }
@@ -686,6 +727,7 @@ app.post('/api/tests', checkAuth, async (req, res) => {
     id,
     companyId: req.companyId,
     title,
+    title_kk: '',
     questions: questions.map((q, i) => ({
       id: 'q' + i,
       text: q.text,
@@ -696,6 +738,8 @@ app.post('/api/tests', checkAuth, async (req, res) => {
       explain: (q.explain || '').toString().trim(),
       image: sanitizeQuestionImage(q.image)
     })),
+    questions_kk: [],
+    translation: emptyTranslationMeta(),
     createdAt: Date.now()
   };
   await db.update((data) => { data.tests[id] = test; });
@@ -721,6 +765,7 @@ app.put('/api/tests/:id', checkAuth, async (req, res) => {
       explain: (q.explain || '').toString().trim(),
       image: sanitizeQuestionImage(q.image)
     }));
+    markTranslationStale(test);
     return test;
   });
   if (!result) return res.status(404).json({ error: 'Тест не найден' });
@@ -762,10 +807,17 @@ app.post('/api/tests/generate', checkAuth, async (req, res) => {
   Object.values(data.tests)
     .filter(t => t.companyId === req.companyId)
     .forEach(t => {
-      t.questions.forEach(q => {
+      // Карта id → казахская версия вопроса (если у исходного теста перевод ready)
+      const kkById = {};
+      if (t.translation && t.translation.status === 'ready' && Array.isArray(t.questions_kk)) {
+        t.questions_kk.forEach(kq => { kkById[kq.id] = kq; });
+      }
+      (t.questions || []).forEach(q => {
         if ((q.tags || []).some(tag => tagSet.has(tag)) && !seenText.has(q.text)) {
           seenText.add(q.text);
-          pool.push(q);
+          const kk = kkById[q.id] || null;
+          // Тащим KZ вместе с RU: привязка по id внутри исходного теста
+          pool.push({ q, kk });
         }
       });
     });
@@ -780,12 +832,9 @@ app.post('/api/tests/generate', checkAuth, async (req, res) => {
   const maxAllowed = req.company.plan === 'free' ? Math.min(wantCount, FREE_MAX_QUESTIONS) : wantCount;
   const selected = pool.slice(0, Math.min(maxAllowed, pool.length));
 
-  const id = participantId();
-  const test = {
-    id,
-    companyId: req.companyId,
-    title,
-    questions: selected.map((q, i) => ({
+  const questions = selected.map((item, i) => {
+    const q = item.q;
+    return {
       id: 'q' + i,
       text: q.text,
       options: q.options,
@@ -794,11 +843,62 @@ app.post('/api/tests/generate', checkAuth, async (req, res) => {
       tags: q.tags || [],
       explain: q.explain || '',
       image: q.image || null
-    })),
+    };
+  });
+
+  // Собираем questions_kk в том же порядке и с теми же новыми id
+  const questions_kk = [];
+  let kkCount = 0;
+  selected.forEach((item, i) => {
+    const q = item.q;
+    const kk = item.kk;
+    if (kk && kk.text && Array.isArray(kk.options) && kk.options.length >= (q.options || []).length) {
+      questions_kk.push({
+        id: 'q' + i,
+        text: kk.text,
+        options: (q.options || []).map((_, j) => (kk.options[j] != null ? kk.options[j] : q.options[j])),
+        explain: kk.explain || ''
+      });
+      kkCount++;
+    } else {
+      // Заглушка: без KZ этот слот пустой — статус ниже станет stale, если не все покрыты
+      questions_kk.push({
+        id: 'q' + i,
+        text: q.text,
+        options: (q.options || []).slice(),
+        explain: q.explain || ''
+      });
+    }
+  });
+
+  const allKkReady = kkCount === selected.length && selected.length > 0;
+  const id = participantId();
+  const test = {
+    id,
+    companyId: req.companyId,
+    title,
+    title_kk: allKkReady ? title : '',
+    questions,
+    questions_kk: allKkReady ? questions_kk : (kkCount > 0 ? questions_kk : []),
+    translation: {
+      status: allKkReady ? 'ready' : (kkCount > 0 ? 'stale' : 'none'),
+      updatedAt: allKkReady ? Date.now() : 0,
+      provider: allKkReady ? 'inherited-from-bank' : null,
+      progress: { done: kkCount, total: selected.length },
+      error: allKkReady ? null : (kkCount > 0
+        ? ('Перенесено KZ: ' + kkCount + ' из ' + selected.length + '. Допереведите или загрузите Excel.')
+        : null)
+    },
     createdAt: Date.now()
   };
   await db.update((d) => { d.tests[id] = test; });
-  res.json({ test, availableInPool: pool.length, selectedCount: selected.length });
+  res.json({
+    test,
+    availableInPool: pool.length,
+    selectedCount: selected.length,
+    kkInherited: kkCount,
+    translationStatus: test.translation.status
+  });
 });
 
 // Очистка истории прохождений теста (сессии удаляются, счётчик пробного периода НЕ сбрасывается)
@@ -836,16 +936,133 @@ app.post('/api/tests/:id/translate', checkAuth, async (req, res) => {
   test.questions.forEach(q => {
     texts.push(q.text);
     (q.options || []).forEach(o => texts.push(o));
+    if (q.explain) texts.push(q.explain);
   });
   const uniqueTexts = [...new Set(texts.filter(t => (t || '').toString().trim()))];
 
+  await db.update((d) => {
+    const t = safeGet(d.tests, req.params.id);
+    if (!t) return;
+    if (!t.translation) t.translation = emptyTranslationMeta();
+    t.translation.status = 'pending';
+    t.translation.progress = { done: 0, total: uniqueTexts.length };
+    t.translation.error = null;
+    t.translation.provider = USE_YANDEX ? 'yandex' : 'mymemory';
+  });
+
   try {
     await translateBatch(uniqueTexts, 'kk');
-    res.json({ ok: true, translated: uniqueTexts.length, provider: USE_YANDEX ? 'yandex' : 'mymemory' });
+    const data2 = db.load();
+    const map = data2.translations || {};
+    const built = buildQuestionsKkFromCache(test, map, 'kk');
+
+    await db.update((d) => {
+      const t = safeGet(d.tests, req.params.id);
+      if (!t) return;
+      t.title_kk = built.title_kk;
+      t.questions_kk = built.questions_kk;
+      if (!t.translation) t.translation = emptyTranslationMeta();
+      t.translation.status = built.missing > 0 ? 'stale' : 'ready';
+      t.translation.updatedAt = Date.now();
+      t.translation.progress = { done: uniqueTexts.length - built.missing, total: uniqueTexts.length };
+      t.translation.error = built.missing > 0
+        ? ('Не переведено строк: ' + built.missing + '. Нажмите «Перевести» ещё раз или проверьте ключ Yandex.')
+        : null;
+      t.translation.provider = USE_YANDEX ? 'yandex' : 'mymemory';
+    });
+
+    res.json({
+      ok: true,
+      translated: uniqueTexts.length - built.missing,
+      total: uniqueTexts.length,
+      missing: built.missing,
+      status: built.missing > 0 ? 'stale' : 'ready',
+      provider: USE_YANDEX ? 'yandex' : 'mymemory'
+    });
   } catch (e) {
     console.error('[translate] Ошибка предварительного перевода теста:', e.message);
+    await db.update((d) => {
+      const t = safeGet(d.tests, req.params.id);
+      if (!t) return;
+      if (!t.translation) t.translation = emptyTranslationMeta();
+      t.translation.status = 'error';
+      t.translation.error = e.message || 'Ошибка перевода';
+    }).catch(() => {});
     res.status(500).json({ error: 'Не удалось выполнить перевод, попробуйте ещё раз' });
   }
+});
+
+// Загрузка готового казахского перевода из Excel (порядок вопросов = как в русском тесте).
+app.post('/api/tests/:id/import-kk', checkAuth, upload.single('file'), async (req, res) => {
+  const data = db.load();
+  const test = safeGet(data.tests, req.params.id);
+  if (!test || test.companyId !== req.companyId) return res.status(404).json({ error: 'Тест не найден' });
+  if (!req.file) return res.status(400).json({ error: 'Нужен Excel-файл' });
+
+  let workbook;
+  try {
+    workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+  } catch (e) {
+    return res.status(400).json({ error: 'Не удалось прочитать Excel' });
+  }
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  if (!rows.length) return res.status(400).json({ error: 'Пустой файл' });
+
+  let start = 0;
+  const h0 = String(rows[0][0] || '').toLowerCase();
+  if (h0.includes('сұрақ') || h0.includes('вопрос') || h0.includes('question')) start = 1;
+
+  const kkRows = [];
+  for (let i = start; i < rows.length; i++) {
+    const row = rows[i];
+    const text = String(row[0] || '').trim();
+    if (!text) continue;
+    const options = [];
+    for (let c = 1; c <= 5; c++) {
+      const v = String(row[c] || '').trim();
+      if (v) options.push(v);
+    }
+    const explain = String(row[8] || '').trim();
+    kkRows.push({ text, options, explain });
+  }
+
+  if (kkRows.length === 0) return res.status(400).json({ error: 'В файле нет вопросов' });
+  if (kkRows.length !== test.questions.length) {
+    return res.status(400).json({
+      error: 'Число вопросов не совпадает: в тесте ' + test.questions.length + ', в файле ' + kkRows.length + '. Нужен тот же порядок, что в русском тесте.'
+    });
+  }
+
+  for (let i = 0; i < test.questions.length; i++) {
+    const need = (test.questions[i].options || []).length;
+    const got = kkRows[i].options.length;
+    if (got < need) {
+      return res.status(400).json({
+        error: 'Вопрос ' + (i + 1) + ': в русском ' + need + ' вариантов, в KZ-файле ' + got + '.'
+      });
+    }
+  }
+
+  await db.update((d) => {
+    const t = safeGet(d.tests, req.params.id);
+    if (!t) return;
+    t.title_kk = t.title_kk || t.title;
+    t.questions_kk = t.questions.map((q, i) => ({
+      id: q.id,
+      text: kkRows[i].text,
+      options: (q.options || []).map((_, j) => kkRows[i].options[j] || q.options[j]),
+      explain: kkRows[i].explain || ''
+    }));
+    if (!t.translation) t.translation = emptyTranslationMeta();
+    t.translation.status = 'ready';
+    t.translation.updatedAt = Date.now();
+    t.translation.provider = 'manual-excel';
+    t.translation.progress = { done: t.questions.length, total: t.questions.length };
+    t.translation.error = null;
+  });
+
+  res.json({ ok: true, status: 'ready', count: kkRows.length });
 });
 
 
@@ -2765,15 +2982,24 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
   // Карта optionShuffle[qId][новая_позиция] = исходный_индекс — сохраняется у
   // участника, чтобы при проверке ответов перевести их обратно в исходную систему координат.
   const optionShuffle = {};
+  const kkById = {};
+  if (test.translation && test.translation.status === 'ready' && Array.isArray(test.questions_kk)) {
+    test.questions_kk.forEach(q => { kkById[q.id] = q; });
+  }
   const shuffledQuestions = test.questions.map(q => {
     const order = shuffleArr(q.options.map((_, i) => i));
     optionShuffle[q.id] = order;
+    const kk = kkById[q.id];
     return {
       id: q.id,
       text: q.text,
       options: order.map(origIdx => q.options[origIdx]),
       multi: !!q.multi,
-      image: q.image || null
+      image: q.image || null,
+      // Готовая казахская версия (тот же порядок вариантов после shuffle)
+      text_kk: kk ? kk.text : null,
+      options_kk: kk ? order.map(origIdx => (kk.options && kk.options[origIdx] != null) ? kk.options[origIdx] : null) : null,
+      explain_kk: kk ? (kk.explain || '') : null
     };
   });
   const orderedQuestions = shuffleArr(shuffledQuestions);
@@ -4010,10 +4236,24 @@ app.post('/api/resume/:code', joinLimiter, (req, res) => {
     const byId = {}; test.questions.forEach(q => { byId[q.id] = q; });
     const mapping = p.optionShuffle || {};
     const order = (p.questionOrder && p.questionOrder.length ? p.questionOrder : test.questions.map(q => q.id)).filter(id => byId[id]);
+    const kkById = {};
+    if (test.translation && test.translation.status === 'ready' && Array.isArray(test.questions_kk)) {
+      test.questions_kk.forEach(q => { kkById[q.id] = q; });
+    }
     const questions = order.map(id => {
       const q = byId[id];
       const m = mapping[id] || q.options.map((_, i) => i);
-      return { id: q.id, text: q.text, options: m.map(i => q.options[i]), multi: !!q.multi, image: q.image || null };
+      const kk = kkById[id];
+      return {
+        id: q.id,
+        text: q.text,
+        options: m.map(i => q.options[i]),
+        multi: !!q.multi,
+        image: q.image || null,
+        text_kk: kk ? kk.text : null,
+        options_kk: kk ? m.map(i => (kk.options && kk.options[i] != null) ? kk.options[i] : null) : null,
+        explain_kk: kk ? (kk.explain || '') : null
+      };
     });
     return res.json({ ...base, testTitle: test.title, timeLimit: session.timeLimit || null,
       deadline: session.timeLimit ? p.joinedAt + session.timeLimit * 60 * 1000 : null, questions });
