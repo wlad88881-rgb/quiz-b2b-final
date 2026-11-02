@@ -275,6 +275,8 @@
         <h2 id="editor-title" style="margin:0;">Новый тест</h2>
         <div class="row">
           <button class="btn outline small hidden" id="translate-kk-btn" onclick="translateTestToKK()">🌐 Перевести на казахский</button>
+          <button class="btn outline small hidden" id="import-kk-btn" onclick="document.getElementById('import-kk-file').click()">📥 Загрузить KZ из Excel</button>
+          <input type="file" id="import-kk-file" accept=".xlsx,.xls" style="display:none;" onchange="importKkFromExcel(event)">
           <button class="btn outline small" onclick="showList()">Отмена</button>
         </div>
       </div>
@@ -629,20 +631,25 @@
     if (tests.length === 0) {
       container.innerHTML = '<div class="muted" style="padding:30px 0; text-align:center;">Тестов пока нет.</div>';
     } else {
-      container.innerHTML = tests.map(t => `
+      container.innerHTML = tests.map(t => {
+        const tr = t.translation || {};
+        const st = tr.status || 'none';
+        const stLabel = st === 'ready' ? '🟢 KZ готов' : st === 'stale' ? '🟡 KZ устарел' : st === 'pending' ? '⏳ KZ…' : st === 'error' ? '🔴 KZ ошибка' : '⚪ KZ нет';
+        return `
         <div class="card row between">
           <div>
             <strong>${escapeHtml(t.title)}</strong>
-            <div class="muted">${t.questions.length} вопрос(ов)</div>
+            <div class="muted">${t.questions.length} вопрос(ов) · ${stLabel}</div>
           </div>
-          <div class="row">
+          <div class="row" style="flex-wrap:wrap; gap:6px;">
             <button class="btn small" onclick="startSession('${t.id}')">Начать сессию</button>
             <button class="btn outline small" onclick="editTest('${t.id}')">Изменить</button>
+            <button class="btn outline small" onclick="importKkForTest('${t.id}')" title="Загрузить казахский Excel (тот же порядок вопросов)">📥 KZ Excel</button>
             <button class="btn outline small" onclick="exportTestExcel('${t.id}')">Экспорт Excel</button>
             <button class="btn danger small" onclick="deleteTest('${t.id}')">Удалить</button>
           </div>
-        </div>
-      `).join('');
+        </div>`;
+      }).join('');
     }
   }
 
@@ -670,6 +677,7 @@
     document.getElementById('save-error').textContent = '';
     document.getElementById('translate-kk-status').textContent = '';
     document.getElementById('translate-kk-btn').classList.add('hidden'); // у нового теста ещё нет id — сначала сохрани
+    const ik2 = document.getElementById('import-kk-btn'); if (ik2) ik2.classList.add('hidden');
     addQuestion();
     document.getElementById('screen-list').classList.add('hidden');
     document.getElementById('screen-editor').classList.remove('hidden');
@@ -682,11 +690,84 @@
     document.getElementById('editor-title').textContent = 'Редактирование';
     document.getElementById('test-title').value = test.title;
     document.getElementById('questions-container').innerHTML = '';
-    document.getElementById('translate-kk-status').textContent = '';
+    const tr = test.translation || {};
+    const st = tr.status || 'none';
+    let stText = '';
+    if (st === 'ready') stText = '🟢 Казахская версия готова' + (tr.updatedAt ? ' · ' + new Date(tr.updatedAt).toLocaleString('ru-RU') : '');
+    else if (st === 'stale') stText = '🟡 Казахская версия устарела — загрузите Excel или переведите заново';
+    else if (st === 'error') stText = '🔴 Ошибка перевода: ' + (tr.error || '');
+    else if (st === 'pending') stText = '⏳ Идёт перевод…';
+    else stText = 'Казахская версия ещё не загружена. Нажмите «Загрузить KZ из Excel» или «Перевести».';
+    document.getElementById('translate-kk-status').textContent = stText;
     document.getElementById('translate-kk-btn').classList.remove('hidden');
+    const ik = document.getElementById('import-kk-btn'); if (ik) ik.classList.remove('hidden');
     test.questions.forEach(q => addQuestion(q));
     document.getElementById('screen-list').classList.add('hidden');
     document.getElementById('screen-editor').classList.remove('hidden');
+  }
+
+
+  async function importKkFromExcel(ev) {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = '';
+    if (!file) return;
+    if (!editingTestId) {
+      alert('Сначала сохраните тест, затем загрузите казахский Excel.');
+      return;
+    }
+    const statusEl = document.getElementById('translate-kk-status');
+    const btn = document.getElementById('import-kk-btn');
+    if (statusEl) statusEl.textContent = 'Загружаю казахскую версию из Excel…';
+    if (btn) btn.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      // Не указываем Content-Type — браузер сам поставит multipart/form-data с boundary
+      const res = await authFetch('/api/tests/' + editingTestId + '/import-kk', {
+        method: 'POST',
+        body: fd
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (statusEl) statusEl.textContent = 'Ошибка: ' + (data.error || res.status);
+        alert(data.error || 'Не удалось загрузить казахский Excel');
+      } else {
+        if (statusEl) statusEl.textContent = '✅ Казахская версия загружена (' + data.count + ' вопросов). Статус: ready. Студенты увидят KZ без перевода на лету.';
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = 'Сеть недоступна';
+      alert('Сеть недоступна, попробуйте позже');
+    }
+    if (btn) btn.disabled = false;
+  }
+
+  // Быстрая загрузка KZ из списка тестов (без входа в редактор)
+  function importKkForTest(testId) {
+    const input = document.getElementById('import-kk-file-list');
+    if (!input) return;
+    input.dataset.testId = testId;
+    input.click();
+  }
+
+  async function importKkFromExcelList(ev) {
+    const file = ev.target.files && ev.target.files[0];
+    const testId = ev.target.dataset.testId;
+    ev.target.value = '';
+    if (!file || !testId) return;
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await authFetch('/api/tests/' + testId + '/import-kk', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || 'Не удалось загрузить казахский Excel');
+      } else {
+        alert('Казахская версия загружена: ' + data.count + ' вопросов. Статус: ready.');
+        loadTestsList();
+      }
+    } catch (e) {
+      alert('Сеть недоступна');
+    }
   }
 
   async function translateTestToKK() {
@@ -701,7 +782,10 @@
       if (!res.ok) {
         statusEl.textContent = 'Ошибка: ' + (data.error || 'не удалось перевести');
       } else {
-        statusEl.textContent = `Готово! Переведено текстов: ${data.translated}. Теперь студенты увидят казахский без задержек — перевод уже в кэше.`;
+        const st = data.status === 'ready' ? 'готов' : (data.status || 'частично');
+        statusEl.textContent = `Перевод ${st}: ${data.translated || 0} из ${data.total || data.translated || 0} строк` +
+          (data.missing ? ` (не переведено: ${data.missing})` : '') +
+          `. Провайдер: ${data.provider || '—'}. Студенты увидят KZ без перевода на лету.`;
       }
     } catch (e) {
       statusEl.textContent = 'Ошибка соединения с сервером';
