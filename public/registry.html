@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Реестр обучаемых</title>
+<style>
+  :root { --bg:#f4f6fa; --card:#fff; --text:#1c2333; --muted:#667085; --line:#dfe3ec; --accent:#F07C00; --navy:#2C3E50; --ok:#12a150; --warn:#d9822b; --bad:#d64545; --hover:rgba(240,124,0,.07); }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151c; --card:#1b2030; --text:#e8ebf3; --muted:#9aa3b8; --line:#2b3248; --accent:#f59a3a; --navy:#9fb4c9; --ok:#3ecf7d; --warn:#f0a050; --bad:#ff7070; --hover:rgba(245,154,58,.1); } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"Liberation Sans",sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:1240px; margin:0 auto; padding:16px; }
+  h1 { font-size:22px; margin:6px 0 4px; color:var(--navy); }
+  h2 { font-size:17px; margin:0 0 10px; color:var(--navy); }
+  .nav a { color:var(--accent); text-decoration:none; margin-right:14px; font-size:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+  input, select, textarea { padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font:inherit; max-width:100%; }
+  input[type=checkbox] { width:17px; height:17px; padding:0; accent-color:var(--accent); }
+  label.f { display:block; font-size:12.5px; color:var(--muted); margin-bottom:3px; }
+  button { padding:8px 14px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--bad); }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; }
+  .grow { flex:1 1 220px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .err { color:var(--bad); margin:8px 0; }
+  .ok { color:var(--ok); }
+  .hidden { display:none !important; }
+  .tablewrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { padding:7px 9px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  th { font-size:12.5px; color:var(--muted); font-weight:600; white-space:nowrap; }
+  tbody tr.item { cursor:pointer; }
+  tbody tr.item:hover { background:var(--hover); }
+  .badge { display:inline-block; padding:1px 9px; border-radius:10px; font-size:12px; border:1px solid var(--line); white-space:nowrap; }
+  .badge.passed { border-color:var(--ok); color:var(--ok); }
+  .badge.failed { border-color:var(--bad); color:var(--bad); }
+  .pager { display:flex; gap:10px; align-items:center; justify-content:flex-end; margin-top:10px; flex-wrap:wrap; }
+  .overlay { position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:100; display:flex; align-items:flex-start; justify-content:center; padding:24px 12px; overflow-y:auto; }
+  .modal { background:var(--card); border-radius:14px; width:100%; max-width:860px; padding:18px; box-shadow:0 10px 40px rgba(0,0,0,.35); border:1px solid var(--line); }
+  .modal.narrow { max-width:520px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px; margin-bottom:10px; }
+  .grid input, .grid select { width:100%; }
+  .toast { position:fixed; left:50%; transform:translateX(-50%); bottom:20px; background:var(--navy); color:#fff; padding:9px 16px; border-radius:10px; z-index:200; font-size:14px; max-width:90vw; }
+  .kpis { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0; }
+  .kpi { flex:1 1 130px; border:1px solid var(--line); border-radius:10px; padding:8px 10px; }
+  .kpi b { display:block; font-size:20px; }
+  .errlist { max-height:220px; overflow:auto; font-size:13px; border:1px solid var(--line); border-radius:8px; padding:6px 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🗂️ Реестр обучаемых</h1>
+  <p class="nav"><a href="/">← Панель преподавателя</a><a href="/groups">Группы</a><a href="/analytics">Аналитика</a></p>
+
+  <div id="loginBox" class="card hidden" style="max-width:520px">
+    <h2>Вход преподавателя</h2>
+    <div class="row">
+      <input id="email" class="grow" type="email" placeholder="Email">
+      <input id="password" class="grow" type="password" placeholder="Пароль">
+      <button class="primary" id="loginBtn">Войти</button>
+    </div>
+    <div id="loginErr" class="err"></div>
+  </div>
+
+  <div id="main" class="hidden">
+    <div class="card">
+      <div class="row">
+        <div class="grow"><label class="f">Поиск (ФИО, номер, профессия, место работы)</label><input id="q" style="width:100%" placeholder="Начните вводить…"></div>
+        <div><label class="f">Профессия</label><select id="fProf"><option value="">Все</option></select></div>
+        <div><label class="f">Место работы</label><select id="fWork"><option value="">Все</option></select></div>
+        <div><label class="f">Программа обучения</label><select id="fCourse"><option value="">Все</option></select></div>
+        <div><label class="f">Итог</label><select id="fOutcome"><option value="">Все</option><option value="passed">Сдал</option><option value="failed">Не сдал</option><option value="none">Без обучения</option></select></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div><label class="f">Обучение с</label><input id="fFrom" type="date"></div>
+        <div><label class="f">по</label><input id="fTo" type="date"></div>
+        <button id="resetBtn">Сбросить</button>
+        <span class="muted" id="totals"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="margin-bottom:10px">
+        <button class="primary" id="addBtn">+ Добавить обучаемого</button>
+        <button id="bulkBtn" disabled>Добавить обучение выбранным (<span id="selCount">0</span>)</button>
+        <span style="flex:1"></span>
+        <button id="exportBtn" title="Выгрузить в Excel всё, что сейчас показано по фильтрам">⬇ Скачать в Excel</button>
+        <button id="templateBtn">Шаблон Excel</button>
+        <button id="importBtn">⬆ Загрузить из Excel</button>
+        <input type="file" id="importFile" accept=".xlsx,.xls" class="hidden">
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th><input type="checkbox" id="selAll" title="Выбрать всех на странице"></th>
+            <th>ФИО</th><th>Инд. номер</th><th>Профессия</th><th>Место работы</th><th>Обучений</th><th>Последнее обучение</th><th>Результат</th>
+          </tr></thead>
+          <tbody id="rows"><tr><td colspan="8" class="muted">Загрузка…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <span class="muted" id="pageInfo"></span>
+        <button id="prevBtn">← Назад</button>
+        <button id="nextBtn">Вперёд →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<!-- Карточка обучаемого -->
+<div id="learnerModal" class="overlay hidden">
+  <div class="modal">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <h2 id="lmTitle" style="margin:0">Обучаемый</h2>
+      <button id="lmClose">✕ Закрыть</button>
+    </div>
+    <div class="grid" style="margin-top:12px">
+      <div style="grid-column:1/-1"><label class="f">ФИО *</label><input id="lFio" maxlength="120"></div>
+      <div><label class="f">Индивидуальный номер</label><input id="lNum" maxlength="40"></div>
+      <div><label class="f">Профессия</label><input id="lProf" maxlength="120" list="dlProf"></div>
+      <div><label class="f">Место работы</label><input id="lWork" maxlength="160" list="dlWork"></div>
+    </div>
+    <div class="row">
+      <button class="primary" id="lSave">Сохранить</button>
+      <button class="danger" id="lDelete">Удалить обучаемого</button>
+      <span id="lMsg" class="muted"></span>
+    </div>
+
+    <div id="recSection" class="hidden" style="margin-top:18px">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h2 style="margin:0">Обучение и результаты</h2>
+        <button id="recAdd">+ Добавить обучение</button>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Программа</th><th>Начало</th><th>Окончание</th><th>Часов</th><th>Результат</th><th>Итог</th><th>Сдача теста</th><th>Примечание</th><th></th></tr></thead>
+          <tbody id="recRows"></tbody>
+        </table>
+      </div>
+      <div id="recNone" class="muted hidden" style="padding:8px 0">Записей об обучении пока нет.</div>
+    </div>
+  </div>
+</div>
+
+<!-- Форма записи об обучении -->
+<div id="recModal" class="overlay hidden" style="z-index:110">
+  <div class="modal narrow">
+    <h2 id="rmTitle">Обучение</h2>
+    <p class="muted" id="rmFor"></p>
+    <div class="grid" style="grid-template-columns:1fr 1fr">
+      <div style="grid-column:1/-1"><label class="f">Программа обучения</label><input id="rCourse" maxlength="200" list="dlCourse"></div>
+      <div><label class="f">Дата начала</label><input id="rStart" type="date"></div>
+      <div><label class="f">Дата окончания</label><input id="rEnd" type="date"></div>
+      <div><label class="f">Часов обучения</label><input id="rHours" type="number" min="0" step="0.5"></div>
+      <div><label class="f">Дата сдачи теста</label><input id="rTestDate" type="date"></div>
+      <div><label class="f">Результат теста, %</label><input id="rScore" type="number" min="0" max="100" step="0.1"></div>
+      <div><label class="f">Итог</label><select id="rOutcome"><option value="">—</option><option value="passed">Сдал</option><option value="failed">Не сдал</option></select></div>
+      <div style="grid-column:1/-1"><label class="f">Примечание</label><input id="rComment" maxlength="500"></div>
+    </div>
+    <div class="row">
+      <button class="primary" id="rSave">Сохранить</button>
+      <button id="rCancel">Отмена</button>
+      <span id="rMsg" class="err"></span>
+    </div>
+  </div>
+</div>
+
+<!-- Просмотр загрузки из Excel -->
+<div id="importModal" class="overlay hidden" style="z-index:120">
+  <div class="modal narrow" style="max-width:640px">
+    <h2>Загрузка из Excel</h2>
+    <p class="muted" id="imFile"></p>
+    <div id="imBody"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="imApply">Применить</button>
+      <button id="imCancel">Отмена</button>
+      <span id="imMsg" class="muted"></span>
+    </div>
+  </div>
+</div>
+
+<datalist id="dlProf"></datalist><datalist id="dlWork"></datalist><datalist id="dlCourse"></datalist>
+
+<script>
+(function () {
+  var TOKEN_KEY = 'groupsPageToken';
+  var token = sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem('b2bToken') || '';
+  var state = { page: 1, pages: 1, total: 0 };
+  var selected = {};
+  var current = null;      // открытая карточка: {learner|null, records}
+  var editingRec = null;   // id редактируемой записи или null
+  var bulkMode = false;
+  var pendingFile = null;
+  var searchTimer = null;
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, props, children) {
+    var e = document.createElement(tag);
+    if (props) Object.keys(props).forEach(function (k) {
+      if (k === 'text') e.textContent = props[k];
+      else if (k === 'class') e.className = props[k];
+      else if (k.indexOf('on') === 0) e.addEventListener(k.slice(2), props[k]);
+      else e.setAttribute(k, props[k]);
+    });
+    (children || []).forEach(function (c) { if (c) e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+    return e;
+  }
+  function toast(msg) { var t = $('toast'); t.textContent = msg; t.classList.remove('hidden'); clearTimeout(toast._t); toast._t = setTimeout(function () { t.classList.add('hidden'); }, 3500); }
+  function fmtDate(iso) { if (!iso) return ''; var p = iso.split('-'); return p[2] + '.' + p[1] + '.' + p[0]; }
+  function fmtScore(s) { return s === '' || s == null ? '' : (Math.round(s * 10) / 10) + ' %'; }
+  function outcomeBadge(o) {
+    if (o === 'passed') return el('span', { class: 'badge passed', text: 'Сдал' });
+    if (o === 'failed') return el('span', { class: 'badge failed', text: 'Не сдал' });
+    return document.createTextNode('');
+  }
+
+  function api(method, url, body) {
+    return fetch(url, { method: method, headers: { 'Content-Type': 'application/json', 'x-company-id': token }, body: body ? JSON.stringify(body) : undefined }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (r.status === 401) { showLogin(); throw new Error('Нужен вход'); }
+        if (r.status === 503) throw new Error(d.error || 'Сервер подключается к базе, повторите через несколько секунд');
+        if (!r.ok) throw new Error(d.error || d.message || ('Ошибка ' + r.status));
+        return d;
+      });
+    });
+  }
+  function download(url, fileName) {
+    return fetch(url, { headers: { 'x-company-id': token } }).then(function (r) {
+      if (r.status === 401) { showLogin(); throw new Error('Нужен вход'); }
+      if (!r.ok) throw new Error('Не удалось скачать файл');
+      return r.blob();
+    }).then(function (b) {
+      var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = fileName; document.body.appendChild(a); a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+    });
+  }
+
+  function showLogin() { token = ''; sessionStorage.removeItem(TOKEN_KEY); $('loginBox').classList.remove('hidden'); $('main').classList.add('hidden'); }
+  function showMain() { $('loginBox').classList.add('hidden'); $('main').classList.remove('hidden'); load(); }
+  $('loginBtn').addEventListener('click', function () {
+    $('loginErr').textContent = '';
+    fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email').value, password: $('password').value }) })
+      .then(function (r) { return r.json().then(function (d) { return { r: r, d: d }; }); })
+      .then(function (x) {
+        if (!x.r.ok || !x.d.token) { $('loginErr').textContent = x.d.error || x.d.message || 'Не удалось войти'; return; }
+        token = x.d.token; sessionStorage.setItem(TOKEN_KEY, token); showMain();
+      }).catch(function () { $('loginErr').textContent = 'Нет связи с сервером'; });
+  });
+
+  // ---------- список ----------
+  function filtersQuery() {
+    var p = [];
+    function add(k, v) { if (v) p.push(k + '=' + encodeURIComponent(v)); }
+    add('q', $('q').value.trim()); add('profession', $('fProf').value); add('workplace', $('fWork').value); add('course', $('fCourse').value);
+    add('outcome', $('fOutcome').value); add('dateFrom', $('fFrom').value); add('dateTo', $('fTo').value);
+    return p.join('&');
+  }
+  function fillSelect(sel, values, keep) {
+    var cur = keep;
+    sel.textContent = '';
+    sel.appendChild(el('option', { value: '', text: 'Все' }));
+    values.forEach(function (v) { sel.appendChild(el('option', { value: v, text: v })); });
+    sel.value = values.indexOf(cur) >= 0 ? cur : '';
+  }
+  function fillDatalist(id, values) { var dl = $(id); dl.textContent = ''; values.forEach(function (v) { dl.appendChild(el('option', { value: v })); }); }
+
+  function load() {
+    var qs = filtersQuery();
+    api('GET', '/api/registry/learners?page=' + state.page + '&pageSize=50' + (qs ? '&' + qs : '')).then(function (d) {
+      state.page = d.page; state.pages = d.pages; state.total = d.total;
+      fillSelect($('fProf'), d.facets.professions, $('fProf').value);
+      fillSelect($('fWork'), d.facets.workplaces, $('fWork').value);
+      fillSelect($('fCourse'), d.facets.courses, $('fCourse').value);
+      fillDatalist('dlProf', d.facets.professions); fillDatalist('dlWork', d.facets.workplaces); fillDatalist('dlCourse', d.facets.courses);
+      $('totals').textContent = 'Показано: ' + d.total + ' из ' + d.totals.learners + ' обучаемых · записей об обучении всего: ' + d.totals.records;
+      renderRows(d.items);
+      $('pageInfo').textContent = 'Страница ' + d.page + ' из ' + d.pages;
+      $('prevBtn').disabled = d.page <= 1; $('nextBtn').disabled = d.page >= d.pages;
+    }).catch(function (e) { $('rows').textContent = ''; $('rows').appendChild(el('tr', {}, [el('td', { colspan: '8', class: 'err', text: e.message })])); });
+  }
+  function renderRows(items) {
+    var tb = $('rows'); tb.textContent = '';
+    if (!items.length) { tb.appendChild(el('tr', {}, [el('td', { colspan: '8', class: 'muted', text: 'Никого не найдено. Добавьте обучаемого или загрузите список из Excel.' })])); }
+    items.forEach(function (it) {
+      var cb = el('input', { type: 'checkbox', 'data-id': it.id });
+      cb.checked = !!selected[it.id];
+      cb.addEventListener('click', function (ev) { ev.stopPropagation(); if (cb.checked) selected[it.id] = true; else delete selected[it.id]; updateSel(); });
+      var last = it.last;
+      var lastText = last ? (last.course || '—') + (last.startDate || last.endDate ? ' · ' + fmtDate(last.startDate) + (last.endDate && last.endDate !== last.startDate ? ' – ' + fmtDate(last.endDate) : '') : '') : '';
+      var res = el('td', {}, last ? [document.createTextNode(fmtScore(last.score) + ' '), outcomeBadge(last.outcome)] : []);
+      var tr = el('tr', { class: 'item' }, [
+        el('td', {}, [cb]), el('td', { text: it.fullName }), el('td', { text: it.personnelNumber }), el('td', { text: it.profession }), el('td', { text: it.workplace }),
+        el('td', { text: String(it.recordsCount) }), el('td', { text: lastText }), res
+      ]);
+      tr.addEventListener('click', function () { openLearner(it.id); });
+      tb.appendChild(tr);
+    });
+    $('selAll').checked = false;
+  }
+  function updateSel() {
+    var n = Object.keys(selected).length;
+    $('selCount').textContent = String(n); $('bulkBtn').disabled = n === 0;
+  }
+  $('selAll').addEventListener('change', function () {
+    var on = $('selAll').checked;
+    document.querySelectorAll('#rows input[type=checkbox]').forEach(function (cb) { cb.checked = on; var id = cb.getAttribute('data-id'); if (on) selected[id] = true; else delete selected[id]; });
+    updateSel();
+  });
+  function reloadFirst() { state.page = 1; load(); }
+  ['fProf', 'fWork', 'fCourse', 'fOutcome', 'fFrom', 'fTo'].forEach(function (id) { $(id).addEventListener('change', reloadFirst); });
+  $('q').addEventListener('input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(reloadFirst, 300); });
+  $('resetBtn').addEventListener('click', function () { $('q').value = ''; ['fProf', 'fWork', 'fCourse', 'fOutcome'].forEach(function (id) { $(id).value = ''; }); $('fFrom').value = ''; $('fTo').value = ''; reloadFirst(); });
+  $('prevBtn').addEventListener('click', function () { if (state.page > 1) { state.page--; load(); } });
+  $('nextBtn').addEventListener('click', function () { if (state.page < state.pages) { state.page++; load(); } });
+
+  // ---------- карточка обучаемого ----------
+  function openModal(id) { $(id).classList.remove('hidden'); }
+  function closeModal(id) { $(id).classList.add('hidden'); }
+  function openLearner(id) {
+    $('lMsg').textContent = '';
+    if (!id) {
+      current = { learner: null, records: [] };
+      $('lmTitle').textContent = 'Новый обучаемый';
+      ['lFio', 'lNum', 'lProf', 'lWork'].forEach(function (k) { $(k).value = ''; });
+      $('lDelete').classList.add('hidden'); $('recSection').classList.add('hidden');
+      openModal('learnerModal'); $('lFio').focus(); return;
+    }
+    api('GET', '/api/registry/learners/' + encodeURIComponent(id)).then(function (d) {
+      current = d; fillLearnerForm(); renderRecords(); openModal('learnerModal');
+    }).catch(function (e) { toast(e.message); });
+  }
+  function fillLearnerForm() {
+    var l = current.learner;
+    $('lmTitle').textContent = l.fullName;
+    $('lFio').value = l.fullName; $('lNum').value = l.personnelNumber; $('lProf').value = l.profession; $('lWork').value = l.workplace;
+    $('lDelete').classList.remove('hidden'); $('recSection').classList.remove('hidden');
+  }
+  function renderRecords() {
+    var tb = $('recRows'); tb.textContent = '';
+    $('recNone').classList.toggle('hidden', current.records.length > 0);
+    current.records.forEach(function (r) {
+      var tr = el('tr', {}, [
+        el('td', { text: r.course }), el('td', { text: fmtDate(r.startDate) }), el('td', { text: fmtDate(r.endDate) }), el('td', { text: r.hours === '' ? '' : String(r.hours) }),
+        el('td', { text: fmtScore(r.score) }), el('td', {}, [outcomeBadge(r.outcome)]), el('td', { text: fmtDate(r.testDate) }), el('td', { text: r.comment }),
+        el('td', { style: 'white-space:nowrap' }, [
+          el('button', { text: '✎', title: 'Изменить', onclick: function () { openRecord(r); } }),
+          document.createTextNode(' '),
+          el('button', { class: 'danger', text: '🗑', title: 'Удалить', onclick: function () { delRecord(r); } })
+        ])
+      ]);
+      tb.appendChild(tr);
+    });
+  }
+  function readLearnerForm() { return { fullName: $('lFio').value, personnelNumber: $('lNum').value, profession: $('lProf').value, workplace: $('lWork').value }; }
+  $('lSave').addEventListener('click', function () {
+    $('lMsg').textContent = 'Сохраняю…';
+    var l = current && current.learner;
+    var req = l ? api('PUT', '/api/registry/learners/' + encodeURIComponent(l.id), readLearnerForm()) : api('POST', '/api/registry/learners', readLearnerForm());
+    req.then(function (d) {
+      $('lMsg').textContent = '';
+      if (!l) { current = { learner: d.learner, records: [] }; fillLearnerForm(); renderRecords(); toast('Обучаемый добавлен. Теперь можно добавить обучение.'); }
+      else { current.learner = d.learner; fillLearnerForm(); toast('Сохранено'); }
+      load();
+    }).catch(function (e) { $('lMsg').textContent = ''; toast(e.message); });
+  });
+  $('lDelete').addEventListener('click', function () {
+    var l = current.learner;
+    if (!confirm('Удалить «' + l.fullName + '» вместе со всеми записями об обучении (' + current.records.length + ')? Это нельзя отменить.')) return;
+    api('DELETE', '/api/registry/learners/' + encodeURIComponent(l.id)).then(function () { delete selected[l.id]; updateSel(); closeModal('learnerModal'); toast('Удалено'); load(); }).catch(function (e) { toast(e.message); });
+  });
+  $('lmClose').addEventListener('click', function () { closeModal('learnerModal'); });
+  $('addBtn').addEventListener('click', function () { openLearner(null); });
+
+  // ---------- запись об обучении ----------
+  function openRecord(rec) {
+    bulkMode = false; editingRec = rec ? rec.id : null; $('rMsg').textContent = '';
+    $('rmTitle').textContent = rec ? 'Изменить обучение' : 'Добавить обучение';
+    $('rmFor').textContent = current.learner ? current.learner.fullName : '';
+    var r = rec || {};
+    $('rCourse').value = r.course || ''; $('rStart').value = r.startDate || ''; $('rEnd').value = r.endDate || ''; $('rHours').value = r.hours === undefined ? '' : r.hours;
+    $('rTestDate').value = r.testDate || ''; $('rScore').value = r.score === undefined ? '' : r.score; $('rOutcome').value = r.outcome || ''; $('rComment').value = r.comment || '';
+    openModal('recModal'); $('rCourse').focus();
+  }
+  function readRecordForm() {
+    return { course: $('rCourse').value, startDate: $('rStart').value, endDate: $('rEnd').value, hours: $('rHours').value, testDate: $('rTestDate').value, score: $('rScore').value, outcome: $('rOutcome').value, comment: $('rComment').value };
+  }
+  $('recAdd').addEventListener('click', function () { openRecord(null); });
+  $('rCancel').addEventListener('click', function () { closeModal('recModal'); });
+  // Подсказка: итог по умолчанию из результата — не подставляем автоматически (зачётный порог у каждого свой).
+  $('rSave').addEventListener('click', function () {
+    $('rMsg').textContent = '';
+    var body = readRecordForm();
+    var req;
+    if (bulkMode) {
+      req = api('POST', '/api/registry/bulk-records', { learnerIds: Object.keys(selected), record: body }).then(function (d) {
+        closeModal('recModal');
+        toast('Добавлено обучение: ' + d.created + (d.skippedExisting ? ' (уже было у ' + d.skippedExisting + ')' : ''));
+        selected = {}; updateSel(); load();
+      });
+    } else if (editingRec) {
+      req = api('PUT', '/api/registry/records/' + encodeURIComponent(editingRec), body).then(function () { return afterRecordChange('Сохранено'); });
+    } else {
+      req = api('POST', '/api/registry/learners/' + encodeURIComponent(current.learner.id) + '/records', body).then(function () { return afterRecordChange('Обучение добавлено'); });
+    }
+    req.catch(function (e) { $('rMsg').textContent = e.message; });
+  });
+  function afterRecordChange(msg) {
+    closeModal('recModal'); toast(msg);
+    return api('GET', '/api/registry/learners/' + encodeURIComponent(current.learner.id)).then(function (d) { current = d; renderRecords(); load(); });
+  }
+  function delRecord(r) {
+    if (!confirm('Удалить запись «' + (r.course || 'без названия') + '»?')) return;
+    api('DELETE', '/api/registry/records/' + encodeURIComponent(r.id)).then(function () { return afterRecordChange('Запись удалена'); }).catch(function (e) { toast(e.message); });
+  }
+  $('bulkBtn').addEventListener('click', function () {
+    bulkMode = true; editingRec = null; $('rMsg').textContent = '';
+    $('rmTitle').textContent = 'Добавить обучение выбранным';
+    $('rmFor').textContent = 'Выбрано обучаемых: ' + Object.keys(selected).length + '. Результаты можно внести позже в карточке каждого.';
+    ['rCourse', 'rStart', 'rEnd', 'rHours', 'rTestDate', 'rScore', 'rComment'].forEach(function (k) { $(k).value = ''; }); $('rOutcome').value = '';
+    openModal('recModal'); $('rCourse').focus();
+  });
+
+  // ---------- Excel ----------
+  $('exportBtn').addEventListener('click', function () {
+    var qs = filtersQuery();
+    download('/api/registry/export' + (qs ? '?' + qs : ''), 'reestr_obuchaemyh.xlsx').then(function () { toast('Файл скачан'); }).catch(function (e) { toast(e.message); });
+  });
+  $('templateBtn').addEventListener('click', function () {
+    download('/api/registry/template', 'shablon_reestra.xlsx').catch(function (e) { toast(e.message); });
+  });
+  $('importBtn').addEventListener('click', function () { $('importFile').value = ''; $('importFile').click(); });
+  $('importFile').addEventListener('change', function () {
+    var f = $('importFile').files[0]; if (!f) return;
+    pendingFile = f; $('imFile').textContent = 'Файл: ' + f.name; $('imBody').textContent = 'Проверяю файл…'; $('imMsg').textContent = '';
+    $('imApply').disabled = true; openModal('importModal');
+    sendImport(true).then(renderImportPreview).catch(function (e) { $('imBody').textContent = ''; $('imBody').appendChild(el('div', { class: 'err', text: e.message })); });
+  });
+  function sendImport(dry) {
+    var fd = new FormData(); fd.append('file', pendingFile);
+    return fetch('/api/registry/import?dryRun=' + (dry ? '1' : '0'), { method: 'POST', headers: { 'x-company-id': token }, body: fd }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (r.status === 401) { showLogin(); throw new Error('Нужен вход'); }
+        if (!r.ok) throw new Error(d.error || 'Ошибка ' + r.status);
+        return d;
+      });
+    });
+  }
+  function kpi(value, label) { return el('div', { class: 'kpi' }, [el('b', { text: String(value) }), document.createTextNode(label)]); }
+  function renderImportPreview(d) {
+    var s = d.summary, body = $('imBody'); body.textContent = '';
+    body.appendChild(el('p', { class: 'muted', text: 'Строк с данными: ' + s.rows + '. Ничего не сохранено — это предварительный просмотр.' }));
+    body.appendChild(el('div', { class: 'kpis' }, [kpi(s.newLearners, 'новых обучаемых'), kpi(s.updatedLearners, 'обучаемых обновится'), kpi(s.newRecords, 'новых записей об обучении'),
+      kpi(s.updatedRecords, 'записей обновится'), kpi(s.unchanged, 'без изменений'), kpi(s.skipped, 'строк пропущено')]));
+    if (d.errorsTotal) {
+      body.appendChild(el('div', { class: 'err', text: 'Строки с ошибками не будут загружены (' + d.errorsTotal + '):' }));
+      var box = el('div', { class: 'errlist' });
+      d.errors.forEach(function (e) { box.appendChild(el('div', { text: 'Строка ' + e.row + ': ' + e.message })); });
+      body.appendChild(box);
+    }
+    var changes = s.newLearners + s.updatedLearners + s.newRecords + s.updatedRecords;
+    $('imApply').disabled = changes === 0;
+    if (changes === 0) body.appendChild(el('p', { class: 'muted', text: 'Применять нечего: все данные из файла уже есть в реестре.' }));
+  }
+  $('imApply').addEventListener('click', function () {
+    $('imApply').disabled = true; $('imMsg').textContent = 'Загружаю…';
+    sendImport(false).then(function (d) {
+      closeModal('importModal'); var s = d.summary;
+      toast('Загружено: новых обучаемых ' + s.newLearners + ', записей об обучении ' + s.newRecords + (s.updatedRecords ? ', обновлено ' + s.updatedRecords : '') + (s.skipped ? ', пропущено строк ' + s.skipped : ''));
+      state.page = 1; load();
+    }).catch(function (e) { $('imMsg').textContent = e.message; $('imApply').disabled = false; });
+  });
+  $('imCancel').addEventListener('click', function () { closeModal('importModal'); });
+
+  // закрытие окон по Esc
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') ['importModal', 'recModal', 'learnerModal'].some(function (id) { if (!$(id).classList.contains('hidden')) { closeModal(id); return true; } return false; }); });
+
+  if (token) showMain(); else showLogin();
+})();
+</script>
+</body>
+</html>

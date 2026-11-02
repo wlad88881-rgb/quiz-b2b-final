@@ -2049,6 +2049,530 @@ app.get('/network', (req, res) => {
   res.send(NETWORK_PAGE_HTML);
 });
 
+// ==================== РЕЕСТР ОБУЧАЕМЫХ (база данных обучения) ====================
+// Параллельно с тестированием приложение ведёт реестр: у каждого обучаемого — ФИО, индивидуальный
+// (табельный) номер, профессия, место работы, а также записи об обучении (программа, даты, часы,
+// результат тестирования — вносится вручную, так как тесты проходят в другом приложении).
+// Данные лежат внутри учётной записи преподавателя (company.registry) и попадают в бэкап базы.
+// Страница: /registry. Выгрузка/загрузка Excel: /api/registry/export, /template, /import.
+const REG_MAX_LEARNERS = 5000;
+const REG_MAX_RECORDS = 20000;
+const REG_MAX_IMPORT_ROWS = 6000;
+const REG_OUTCOME_LABEL = { passed: 'Сдал', failed: 'Не сдал' };
+
+function rgRead(company) {
+  const r = (company && company.registry) || {};
+  return { learners: r.learners || {}, records: r.records || {} };
+}
+function rgWrite(d, companyId) {
+  const c = safeGet(d.companies, companyId);
+  if (!c.registry || typeof c.registry !== 'object') c.registry = {};
+  if (!c.registry.learners) c.registry.learners = {};
+  if (!c.registry.records) c.registry.records = {};
+  return c.registry;
+}
+
+function rgClean(v, max) { return String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, max); }
+function rgNumKey(v) { return String(v == null ? '' : v).toLowerCase().replace(/[\s\-_.]/g, ''); }
+function rgTextKey(v) { return normName(v); }
+
+function rgIsoFromParts(y, m, d) {
+  if (y < 1990 || y > 2100) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return dt.toISOString().slice(0, 10);
+}
+// Принимает 'ГГГГ-ММ-ДД', 'ДД.ММ.ГГГГ', 'ДД.ММ.ГГ', дату Excel (число) или Date. '' — «не задано».
+function rgParseDate(v) {
+  if (v === '' || v == null) return { ok: true, value: '' };
+  if (v instanceof Date) return { ok: !isNaN(v), value: isNaN(v) ? '' : v.toISOString().slice(0, 10) };
+  if (typeof v === 'number') {
+    if (v > 20000 && v < 80000) {
+      const iso = new Date(Date.UTC(1899, 11, 30) + Math.floor(v) * 86400000).toISOString().slice(0, 10);
+      return { ok: true, value: iso };
+    }
+    return { ok: false };
+  }
+  const s = String(v).trim();
+  if (!s) return { ok: true, value: '' };
+  let m, iso = null;
+  if ((m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s))) iso = rgIsoFromParts(+m[1], +m[2], +m[3]);
+  else if ((m = /^(\d{1,2})[./\-](\d{1,2})[./\-](\d{2,4})$/.exec(s))) {
+    let y = +m[3]; if (y < 100) y += y < 70 ? 2000 : 1900;
+    iso = rgIsoFromParts(y, +m[2], +m[1]);
+  }
+  return iso ? { ok: true, value: iso } : { ok: false };
+}
+function rgParseScore(v) {
+  if (v === '' || v == null) return { ok: true, value: '' };
+  let n;
+  if (typeof v === 'number') n = v;
+  else {
+    const s = String(v).replace(',', '.').replace('%', '').replace(/\s+/g, '');
+    if (!s) return { ok: true, value: '' };
+    if (!/^\d+(\.\d+)?$/.test(s)) return { ok: false };
+    n = parseFloat(s);
+  }
+  if (typeof v === 'number' && n > 0 && n < 1) n = n * 100; // ячейка в процентном формате Excel: 0,85 = 85 %
+  if (!isFinite(n) || n < 0 || n > 100) return { ok: false };
+  return { ok: true, value: Math.round(n * 10) / 10 };
+}
+function rgParseHours(v) {
+  if (v === '' || v == null) return { ok: true, value: '' };
+  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(',', '.'));
+  if (!isFinite(n) || n < 0 || n > 5000) return { ok: false };
+  return { ok: true, value: Math.round(n * 10) / 10 };
+}
+function rgParseOutcome(v) {
+  const s = rgTextKey(v);
+  if (!s) return { ok: true, value: '' };
+  if (['passed', 'failed'].includes(String(v))) return { ok: true, value: String(v) };
+  if (/^(не|нет|незач|недопущ|неудовл)/.test(s) || s === '0' || s === 'failed') return { ok: true, value: 'failed' };
+  if (/^(сдал|зач|прошел|прошла|допущ|да|удовл|хорош|отлич|passed)/.test(s) || s === '1') return { ok: true, value: 'passed' };
+  return { ok: false };
+}
+
+// Проверка и нормализация записи об обучении (из JSON формы или из строки Excel).
+function rgBuildRecord(input) {
+  const errs = [];
+  const rec = { course: rgClean(input.course, 200), comment: rgClean(input.comment, 500) };
+  const fields = [['startDate', 'Дата начала', rgParseDate], ['endDate', 'Дата окончания', rgParseDate], ['testDate', 'Дата сдачи теста', rgParseDate],
+    ['hours', 'Часы', rgParseHours], ['score', 'Результат, %', rgParseScore], ['outcome', 'Итог', rgParseOutcome]];
+  fields.forEach(([key, label, fn]) => {
+    const r = fn(input[key]);
+    if (!r.ok) errs.push(`«${label}»: неверное значение «${rgClean(input[key], 40)}»`); else rec[key] = r.value;
+  });
+  if (!errs.length && rec.startDate && rec.endDate && rec.endDate < rec.startDate) errs.push('Дата окончания раньше даты начала');
+  const hasAny = rec.course || rec.startDate || rec.endDate || rec.testDate || rec.hours !== '' || rec.score !== '' || rec.outcome || rec.comment;
+  if (!errs.length && !hasAny) errs.push('Запись пустая');
+  return errs.length ? { error: errs.join('; ') } : { rec };
+}
+function rgRecordKey(r) { return [rgTextKey(r.course), r.startDate || '', r.endDate || ''].join('|'); }
+function rgRecordDate(r) { return r.endDate || r.testDate || r.startDate || ''; }
+
+function rgBuildLearner(input) {
+  const fullName = rgClean(input.fullName, 120);
+  if (!fullName) return { error: 'Введите ФИО' };
+  return { learner: { fullName, personnelNumber: rgClean(input.personnelNumber, 40), profession: rgClean(input.profession, 120), workplace: rgClean(input.workplace, 160) } };
+}
+function rgNumberOwner(reg, number, exceptId) {
+  const k = rgNumKey(number);
+  if (!k) return null;
+  return Object.values(reg.learners).find(l => l.id !== exceptId && rgNumKey(l.personnelNumber) === k) || null;
+}
+
+function rgRecordsByLearner(reg) {
+  const map = new Map();
+  Object.values(reg.records).forEach(r => { if (!map.has(r.learnerId)) map.set(r.learnerId, []); map.get(r.learnerId).push(r); });
+  map.forEach(list => list.sort((a, b) => (rgRecordDate(b) || '').localeCompare(rgRecordDate(a) || '') || (b.createdAt || 0) - (a.createdAt || 0)));
+  return map;
+}
+
+// Отбор обучаемых (и их записей) по фильтрам: q, profession, workplace, course, outcome, dateFrom, dateTo.
+function rgSelect(reg, f) {
+  const byLearner = rgRecordsByLearner(reg);
+  const tokens = rgTextKey(f.q || '').split(' ').filter(Boolean);
+  const prof = f.profession ? rgTextKey(f.profession) : '';
+  const work = f.workplace ? rgTextKey(f.workplace) : '';
+  const course = f.course ? rgTextKey(f.course) : '';
+  const outcome = f.outcome || '';
+  const from = rgParseDate(f.dateFrom || '').value || '';
+  const to = rgParseDate(f.dateTo || '').value || '';
+  const recFilter = !!(course || from || to || outcome === 'passed' || outcome === 'failed');
+  const out = [];
+  Object.values(reg.learners).forEach(l => {
+    if (tokens.length) {
+      const hay = rgTextKey([l.fullName, l.personnelNumber, l.profession, l.workplace].join(' '));
+      if (!tokens.every(t => hay.includes(t))) return;
+    }
+    if (prof && rgTextKey(l.profession) !== prof) return;
+    if (work && rgTextKey(l.workplace) !== work) return;
+    const all = byLearner.get(l.id) || [];
+    if (outcome === 'none') { if (all.length) return; out.push({ learner: l, all, records: [] }); return; }
+    let recs = all;
+    if (recFilter) {
+      recs = all.filter(r => {
+        if (course && rgTextKey(r.course) !== course) return false;
+        if (outcome === 'passed' || outcome === 'failed') { if (r.outcome !== outcome) return false; }
+        if (from || to) {
+          const s = r.startDate || r.testDate || r.endDate || '', e = r.endDate || r.testDate || r.startDate || '';
+          if (!s && !e) return false;
+          if (from && e < from) return false;
+          if (to && s > to) return false;
+        }
+        return true;
+      });
+      if (!recs.length) return;
+    }
+    out.push({ learner: l, all, records: recs });
+  });
+  out.sort((a, b) => a.learner.fullName.localeCompare(b.learner.fullName, 'ru'));
+  return out;
+}
+
+function rgFilters(q) {
+  return { q: q.q, profession: q.profession, workplace: q.workplace, course: q.course, outcome: q.outcome, dateFrom: q.dateFrom, dateTo: q.dateTo };
+}
+
+app.get('/api/registry/learners', checkAuth, (req, res) => {
+  const reg = rgRead(req.company);
+  const rows = rgSelect(reg, rgFilters(req.query));
+  const pageSize = Math.min(Math.max(parseInt(req.query.pageSize, 10) || 50, 1), 200);
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const page = Math.min(Math.max(parseInt(req.query.page, 10) || 1, 1), pages);
+  const items = rows.slice((page - 1) * pageSize, page * pageSize).map(({ learner, all }) => {
+    const last = all[0] || null;
+    return {
+      id: learner.id, fullName: learner.fullName, personnelNumber: learner.personnelNumber, profession: learner.profession, workplace: learner.workplace,
+      recordsCount: all.length,
+      last: last ? { course: last.course, startDate: last.startDate, endDate: last.endDate, testDate: last.testDate, score: last.score, outcome: last.outcome } : null
+    };
+  });
+  const uniq = (arr) => [...new Set(arr.filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'));
+  res.json({
+    total: rows.length, page, pages, pageSize, items,
+    facets: {
+      professions: uniq(Object.values(reg.learners).map(l => l.profession)),
+      workplaces: uniq(Object.values(reg.learners).map(l => l.workplace)),
+      courses: uniq(Object.values(reg.records).map(r => r.course))
+    },
+    totals: { learners: Object.keys(reg.learners).length, records: Object.keys(reg.records).length }
+  });
+});
+
+app.get('/api/registry/learners/:id', checkAuth, (req, res) => {
+  const reg = rgRead(req.company);
+  const learner = safeGet(reg.learners, req.params.id);
+  if (!learner) return res.status(404).json({ error: 'Обучаемый не найден' });
+  const records = (rgRecordsByLearner(reg).get(learner.id) || []);
+  res.json({ learner, records });
+});
+
+app.post('/api/registry/learners', checkAuth, async (req, res) => {
+  const b = rgBuildLearner(req.body || {});
+  if (b.error) return res.status(400).json({ error: b.error });
+  const reg0 = rgRead(req.company);
+  if (Object.keys(reg0.learners).length >= REG_MAX_LEARNERS) return res.status(400).json({ error: `В реестре не более ${REG_MAX_LEARNERS} обучаемых` });
+  const dup = rgNumberOwner(reg0, b.learner.personnelNumber, null);
+  if (dup) return res.status(409).json({ error: `Номер «${b.learner.personnelNumber}» уже закреплён за: ${dup.fullName}` });
+  const id = companyIdGen();
+  const learner = { id, ...b.learner, createdAt: Date.now(), updatedAt: Date.now() };
+  await db.update((d) => { rgWrite(d, req.companyId).learners[id] = learner; });
+  res.json({ ok: true, learner });
+});
+
+app.put('/api/registry/learners/:id', checkAuth, async (req, res) => {
+  const reg0 = rgRead(req.company);
+  const cur = safeGet(reg0.learners, req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Обучаемый не найден' });
+  const b = rgBuildLearner(req.body || {});
+  if (b.error) return res.status(400).json({ error: b.error });
+  const dup = rgNumberOwner(reg0, b.learner.personnelNumber, cur.id);
+  if (dup) return res.status(409).json({ error: `Номер «${b.learner.personnelNumber}» уже закреплён за: ${dup.fullName}` });
+  let learner;
+  await db.update((d) => { const r = rgWrite(d, req.companyId); learner = r.learners[cur.id] = { ...r.learners[cur.id], ...b.learner, updatedAt: Date.now() }; });
+  res.json({ ok: true, learner });
+});
+
+app.delete('/api/registry/learners/:id', checkAuth, async (req, res) => {
+  if (!safeGet(rgRead(req.company).learners, req.params.id)) return res.status(404).json({ error: 'Обучаемый не найден' });
+  let removed = 0;
+  await db.update((d) => {
+    const r = rgWrite(d, req.companyId);
+    delete r.learners[req.params.id];
+    Object.keys(r.records).forEach(rid => { if (r.records[rid].learnerId === req.params.id) { delete r.records[rid]; removed++; } });
+  });
+  res.json({ ok: true, removedRecords: removed });
+});
+
+app.post('/api/registry/learners/:id/records', checkAuth, async (req, res) => {
+  const reg0 = rgRead(req.company);
+  if (!safeGet(reg0.learners, req.params.id)) return res.status(404).json({ error: 'Обучаемый не найден' });
+  if (Object.keys(reg0.records).length >= REG_MAX_RECORDS) return res.status(400).json({ error: `В реестре не более ${REG_MAX_RECORDS} записей об обучении` });
+  const b = rgBuildRecord(req.body || {});
+  if (b.error) return res.status(400).json({ error: b.error });
+  const id = companyIdGen();
+  const rec = { id, learnerId: req.params.id, ...b.rec, createdAt: Date.now(), updatedAt: Date.now() };
+  await db.update((d) => { rgWrite(d, req.companyId).records[id] = rec; });
+  res.json({ ok: true, record: rec });
+});
+
+app.put('/api/registry/records/:rid', checkAuth, async (req, res) => {
+  const cur = safeGet(rgRead(req.company).records, req.params.rid);
+  if (!cur) return res.status(404).json({ error: 'Запись не найдена' });
+  const b = rgBuildRecord(req.body || {});
+  if (b.error) return res.status(400).json({ error: b.error });
+  let rec;
+  await db.update((d) => { const r = rgWrite(d, req.companyId); rec = r.records[cur.id] = { ...r.records[cur.id], ...b.rec, updatedAt: Date.now() }; });
+  res.json({ ok: true, record: rec });
+});
+
+app.delete('/api/registry/records/:rid', checkAuth, async (req, res) => {
+  if (!safeGet(rgRead(req.company).records, req.params.rid)) return res.status(404).json({ error: 'Запись не найдена' });
+  await db.update((d) => { delete rgWrite(d, req.companyId).records[req.params.rid]; });
+  res.json({ ok: true });
+});
+
+// Одно и то же обучение сразу нескольким обучаемым (например, всей группе).
+app.post('/api/registry/bulk-records', checkAuth, async (req, res) => {
+  const ids = Array.isArray(req.body && req.body.learnerIds) ? [...new Set(req.body.learnerIds.map(String))].slice(0, 500) : [];
+  if (!ids.length) return res.status(400).json({ error: 'Не выбраны обучаемые' });
+  const b = rgBuildRecord((req.body && req.body.record) || {});
+  if (b.error) return res.status(400).json({ error: b.error });
+  const reg0 = rgRead(req.company);
+  const valid = ids.filter(id => safeGet(reg0.learners, id));
+  if (Object.keys(reg0.records).length + valid.length > REG_MAX_RECORDS) return res.status(400).json({ error: `В реестре не более ${REG_MAX_RECORDS} записей об обучении` });
+  const byLearner = rgRecordsByLearner(reg0);
+  let created = 0, skipped = 0;
+  await db.update((d) => {
+    const r = rgWrite(d, req.companyId);
+    valid.forEach(lid => {
+      const key = rgRecordKey(b.rec);
+      if ((byLearner.get(lid) || []).some(x => rgRecordKey(x) === key)) { skipped++; return; }
+      const id = companyIdGen();
+      r.records[id] = { id, learnerId: lid, ...b.rec, createdAt: Date.now(), updatedAt: Date.now() };
+      created++;
+    });
+  });
+  res.json({ ok: true, created, skippedExisting: skipped, notFound: ids.length - valid.length });
+});
+
+// ---------- Excel ----------
+const REG_HEADERS = ['№ п/п', 'ФИО', 'Индивидуальный номер', 'Профессия', 'Место работы', 'Программа обучения', 'Дата начала обучения',
+  'Дата окончания обучения', 'Часов обучения', 'Результат теста, %', 'Итог (Сдал / Не сдал)', 'Дата сдачи теста', 'Примечание'];
+
+function rgExcelDate(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  return { t: 'n', v: Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000), z: 'dd.mm.yyyy' };
+}
+function rgSheetFromRows(rows, widths) {
+  const ws = XLSX.utils.aoa_to_sheet([REG_HEADERS]);
+  let rowIdx = 1;
+  rows.forEach((r) => {
+    r.forEach((val, c) => {
+      const addr = XLSX.utils.encode_cell({ r: rowIdx, c });
+      if (val && typeof val === 'object' && val.t) ws[addr] = val;
+      else if (val === '' || val == null) { /* пусто */ }
+      else if (typeof val === 'number') ws[addr] = { t: 'n', v: val };
+      else ws[addr] = { t: 's', v: String(val) };
+    });
+    rowIdx++;
+  });
+  ws['!ref'] = XLSX.utils.encode_range({ r: 0, c: 0 }, { r: Math.max(rowIdx - 1, 0), c: REG_HEADERS.length - 1 });
+  ws['!cols'] = (widths || [6, 32, 20, 26, 30, 36, 14, 14, 10, 12, 16, 14, 36]).map(w => ({ wch: w }));
+  ws['!autofilter'] = { ref: ws['!ref'] };
+  return ws;
+}
+function rgXlsExcel(res, wb, fileName) {
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', cellDates: false });
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
+}
+
+// Плоская таблица «одна строка = одно обучение» (у обучаемого без обучений — одна строка без данных об обучении).
+// Эта же форма читается обратно при загрузке из Excel.
+app.get('/api/registry/export', checkAuth, (req, res) => {
+  const reg = rgRead(req.company);
+  const selected = rgSelect(reg, rgFilters(req.query));
+  const rows = [];
+  let n = 0;
+  selected.forEach(({ learner, records }) => {
+    n++;
+    const base = [n, learner.fullName, learner.personnelNumber, learner.profession, learner.workplace];
+    if (!records.length) rows.push([...base, '', '', '', '', '', '', '', '']);
+    else records.slice().sort((a, b) => (rgRecordDate(a) || '').localeCompare(rgRecordDate(b) || '')).forEach(r => {
+      rows.push([...base, r.course, rgExcelDate(r.startDate), rgExcelDate(r.endDate), r.hours === '' ? '' : r.hours, r.score === '' ? '' : r.score,
+        REG_OUTCOME_LABEL[r.outcome] || '', rgExcelDate(r.testDate), r.comment]);
+    });
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, rgSheetFromRows(rows), 'Реестр');
+  // Сводка: одна строка на обучаемого
+  const sumHead = ['№ п/п', 'ФИО', 'Индивидуальный номер', 'Профессия', 'Место работы', 'Обучений', 'Последнее обучение', 'Дата окончания', 'Последний результат, %', 'Последний итог'];
+  const sum = [sumHead];
+  selected.forEach(({ learner, all }, i) => {
+    const last = all[0];
+    sum.push([i + 1, learner.fullName, learner.personnelNumber, learner.profession, learner.workplace, all.length,
+      last ? last.course : '', last ? rgExcelDate(last.endDate || last.testDate || last.startDate) : '', last && last.score !== '' ? last.score : '', last ? (REG_OUTCOME_LABEL[last.outcome] || '') : '']);
+  });
+  const ws2 = XLSX.utils.aoa_to_sheet(sum.map((r, ri) => ri === 0 ? r : r.map(v => (v && typeof v === 'object' && v.t ? v.v : v))));
+  if (sum.length > 1) sum.slice(1).forEach((r, ri) => { const c = r[7]; if (c && typeof c === 'object') ws2[XLSX.utils.encode_cell({ r: ri + 1, c: 7 })] = c; });
+  ws2['!cols'] = [6, 32, 20, 26, 30, 10, 36, 14, 14, 14].map(w => ({ wch: w }));
+  ws2['!autofilter'] = { ref: ws2['!ref'] };
+  XLSX.utils.book_append_sheet(wb, ws2, 'Сводка по обучаемым');
+  rgXlsExcel(res, wb, 'reestr_obuchaemyh.xlsx');
+});
+
+app.get('/api/registry/template', checkAuth, (req, res) => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, rgSheetFromRows([]), 'Реестр');
+  const help = [
+    ['Как заполнять лист «Реестр»'],
+    ['Одна строка = одно обучение. Если у человека несколько обучений — повторите его ФИО в нескольких строках.'],
+    ['Обязателен только столбец «ФИО». Остальное — по мере необходимости.'],
+    ['Человек находится по «Индивидуальному номеру», если номера нет — по ФИО. Однофамильцам обязательно указывайте номер.'],
+    ['Даты — в формате ДД.ММ.ГГГГ (или дата Excel). «Результат теста» — число от 0 до 100. «Итог» — Сдал или Не сдал.'],
+    ['Повторная загрузка того же файла ничего не задвоит: запись об обучении определяется сочетанием «программа + дата начала + дата окончания».'],
+    ['Пустая ячейка не стирает уже внесённые данные.'],
+    [''],
+    ['Пример строки:'],
+    REG_HEADERS,
+    [1, 'Иванов Иван Иванович', '12345', 'Слесарь-ремонтник 4 разряда', 'Цех № 3, участок ремонта', 'Подшипники качения: диагностика', '14.10.2026', '16.10.2026', 24, 87.5, 'Сдал', '16.10.2026', '']
+  ];
+  const wsH = XLSX.utils.aoa_to_sheet(help);
+  wsH['!cols'] = [{ wch: 20 }, { wch: 32 }, { wch: 20 }, { wch: 28 }, { wch: 28 }, { wch: 34 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 20 }];
+  XLSX.utils.book_append_sheet(wb, wsH, 'Инструкция');
+  rgXlsExcel(res, wb, 'shablon_reestra.xlsx');
+});
+
+// Определение столбцов по заголовкам (регистр, ё/е и порядок столбцов не важны).
+function rgDetectColumns(headerRow) {
+  const cols = {};
+  const rules = [
+    ['startDate', h => /нача/.test(h)],
+    ['endDate', h => /(оконч|конец|завершен|окончан)/.test(h)],
+    ['testDate', h => /дата/.test(h) && /(сдач|тест|экзамен|проверк)/.test(h)],
+    ['hours', h => /час/.test(h)],
+    ['score', h => /(результат|балл|процент|%)/.test(h)],
+    ['outcome', h => /(итог|зачет|оценк|сдал)/.test(h)],
+    ['comment', h => /(примеч|коммент|заметк)/.test(h)],
+    ['course', h => /(программ|курс|обучени|наименован|тема)/.test(h)],
+    ['number', h => /(номер|табел|индивидуальн|идентификат)/.test(h) && !/п\s*п/.test(h)],
+    ['profession', h => /(професс|должност|специальн)/.test(h)],
+    ['workplace', h => /(место|подраздел|цех|участок|отдел|организац|предприят)/.test(h)],
+    ['fio', h => /(фио|ф\s*и\s*о|фамил|сотрудн|слушател|обучаем|работник)/.test(h)]
+  ];
+  headerRow.forEach((cell, idx) => {
+    const h = String(cell == null ? '' : cell).toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9%\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!h) return;
+    for (const [key, test] of rules) { if (cols[key] === undefined && test(h)) { cols[key] = idx; break; } }
+  });
+  return cols;
+}
+
+// Применяет строки Excel к реестру reg (изменяет его). Возвращает сводку и список ошибок.
+function rgApplyImport(reg, rows) {
+  const sum = { rows: rows.length, newLearners: 0, updatedLearners: 0, newRecords: 0, updatedRecords: 0, unchanged: 0, skipped: 0 };
+  const errors = [];
+  const byNum = new Map(), byFio = new Map();
+  const addIdx = (l) => {
+    const nk = rgNumKey(l.personnelNumber); if (nk) byNum.set(nk, l);
+    const fk = sortedNameKey(l.fullName);
+    if (!byFio.has(fk)) byFio.set(fk, []);
+    if (!byFio.get(fk).includes(l)) byFio.get(fk).push(l);
+  };
+  Object.values(reg.learners).forEach(addIdx);
+  const recByLearner = rgRecordsByLearner(reg);
+  const newIds = new Set(), updIds = new Set();
+  let learnerCount = Object.keys(reg.learners).length, recordCount = Object.keys(reg.records).length;
+  rows.forEach(({ line, data }) => {
+    const fio = rgClean(data.fio, 120);
+    if (!fio) { sum.skipped++; errors.push({ row: line, message: 'Не указано ФИО' }); return; }
+    const numRaw = rgClean(data.number, 40);
+    const nk = rgNumKey(numRaw), fk = sortedNameKey(fio);
+    let learner = nk ? byNum.get(nk) : null;
+    if (!learner) {
+      const cands = byFio.get(fk) || [];
+      if (nk) {
+        const free = cands.filter(c => !rgNumKey(c.personnelNumber)); // тот же человек, у которого номер ещё не внесён
+        if (free.length === 1) learner = free[0];
+      } else if (cands.length === 1) learner = cands[0];
+      else if (cands.length > 1) { sum.skipped++; errors.push({ row: line, message: `«${fio}»: найдено несколько однофамильцев — укажите индивидуальный номер` }); return; }
+    }
+    const recIn = { course: data.course, startDate: data.startDate, endDate: data.endDate, testDate: data.testDate, hours: data.hours, score: data.score, outcome: data.outcome, comment: data.comment };
+    const hasRecData = Object.values(recIn).some(v => v !== '' && v != null && String(v).trim() !== '');
+    let rec = null;
+    if (hasRecData) {
+      const b = rgBuildRecord(recIn);
+      if (b.error) { sum.skipped++; errors.push({ row: line, message: b.error }); return; }
+      rec = b.rec;
+    }
+    let changed = false;
+    if (!learner) {
+      if (learnerCount >= REG_MAX_LEARNERS) { sum.skipped++; errors.push({ row: line, message: `Достигнут предел ${REG_MAX_LEARNERS} обучаемых` }); return; }
+      learner = { id: companyIdGen(), fullName: fio, personnelNumber: numRaw, profession: rgClean(data.profession, 120), workplace: rgClean(data.workplace, 160), createdAt: Date.now(), updatedAt: Date.now() };
+      reg.learners[learner.id] = learner; learnerCount++; addIdx(learner);
+      newIds.add(learner.id); sum.newLearners++; changed = true;
+    } else {
+      const upd = {};
+      const prof = rgClean(data.profession, 120), work = rgClean(data.workplace, 160);
+      if (numRaw && rgNumKey(numRaw) !== rgNumKey(learner.personnelNumber)) {
+        const owner = byNum.get(rgNumKey(numRaw));
+        if (owner && owner.id !== learner.id) { sum.skipped++; errors.push({ row: line, message: `Номер «${numRaw}» уже закреплён за: ${owner.fullName}` }); return; }
+        upd.personnelNumber = numRaw;
+      }
+      if (prof && prof !== learner.profession) upd.profession = prof;
+      if (work && work !== learner.workplace) upd.workplace = work;
+      if (Object.keys(upd).length) {
+        const oldKey = rgNumKey(learner.personnelNumber);
+        Object.assign(learner, upd, { updatedAt: Date.now() });
+        if (upd.personnelNumber) { if (oldKey) byNum.delete(oldKey); addIdx(learner); }
+        if (!newIds.has(learner.id) && !updIds.has(learner.id)) { updIds.add(learner.id); sum.updatedLearners++; }
+        changed = true;
+      }
+    }
+    if (rec) {
+      const list = recByLearner.get(learner.id) || [];
+      const key = rgRecordKey(rec);
+      const exist = list.find(x => rgRecordKey(x) === key);
+      if (exist) {
+        const patch = {};
+        ['hours', 'score', 'outcome', 'testDate', 'comment'].forEach(k => { if (rec[k] !== '' && rec[k] !== exist[k]) patch[k] = rec[k]; });
+        if (Object.keys(patch).length) { Object.assign(exist, patch, { updatedAt: Date.now() }); sum.updatedRecords++; changed = true; }
+      } else {
+        if (recordCount >= REG_MAX_RECORDS) { sum.skipped++; errors.push({ row: line, message: `Достигнут предел ${REG_MAX_RECORDS} записей` }); return; }
+        const id = companyIdGen();
+        const nr = { id, learnerId: learner.id, ...rec, createdAt: Date.now(), updatedAt: Date.now() };
+        reg.records[id] = nr; recordCount++; list.push(nr); recByLearner.set(learner.id, list);
+        sum.newRecords++; changed = true;
+      }
+    }
+    if (!changed) sum.unchanged++;
+  });
+  return { summary: sum, errors };
+}
+
+app.post('/api/registry/import', checkAuth, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
+  let grid;
+  try {
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    grid = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
+  } catch (e) {
+    return res.status(400).json({ error: 'Не удалось прочитать файл. Убедитесь, что это .xlsx или .xls' });
+  }
+  if (grid.length < 2) return res.status(400).json({ error: 'В файле нет данных. Заполните строки под заголовком.' });
+  // заголовок — первая строка, где найден столбец ФИО
+  let headerIdx = grid.findIndex((row, i) => i < 10 && rgDetectColumns(row).fio !== undefined);
+  if (headerIdx < 0) return res.status(400).json({ error: 'Не найден столбец «ФИО». Скачайте шаблон и используйте его заголовки.' });
+  const cols = rgDetectColumns(grid[headerIdx]);
+  const rows = [];
+  for (let i = headerIdx + 1; i < grid.length; i++) {
+    const g = grid[i];
+    if (!g.some(c => String(c == null ? '' : c).trim() !== '')) continue;
+    const pick = (k) => (cols[k] === undefined ? '' : g[cols[k]]);
+    rows.push({ line: i + 1, data: { fio: pick('fio'), number: pick('number'), profession: pick('profession'), workplace: pick('workplace'), course: pick('course'),
+      startDate: pick('startDate'), endDate: pick('endDate'), testDate: pick('testDate'), hours: pick('hours'), score: pick('score'), outcome: pick('outcome'), comment: pick('comment') } });
+  }
+  if (!rows.length) return res.status(400).json({ error: 'В файле нет строк с данными.' });
+  if (rows.length > REG_MAX_IMPORT_ROWS) return res.status(400).json({ error: `За один раз можно загрузить не более ${REG_MAX_IMPORT_ROWS} строк` });
+  const recognized = Object.keys(cols);
+  const dryRun = req.query.dryRun !== '0';
+  if (dryRun) {
+    const copy = JSON.parse(JSON.stringify(rgRead(req.company)));
+    const result = rgApplyImport(copy, rows);
+    return res.json({ dryRun: true, recognized, ...result, errors: result.errors.slice(0, 100), errorsTotal: result.errors.length });
+  }
+  let result;
+  await db.update((d) => { result = rgApplyImport(rgWrite(d, req.companyId), rows); });
+  res.json({ dryRun: false, recognized, ...result, errors: result.errors.slice(0, 100), errorsTotal: result.errors.length });
+});
+
+app.get('/registry', (req, res) => { res.sendFile(publicFile('registry.html')); });
+
 // ==================== СЕССИИ ====================
 
 // Режим показа разбора студенту после сдачи теста:
