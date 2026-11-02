@@ -89,6 +89,30 @@
   }
   .timer.warn { color: #d64545; }
 
+  /* Античит: запрет выделения текста во время теста */
+  body.quiz-active {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+  }
+  body.quiz-active input,
+  body.quiz-active textarea {
+    -webkit-user-select: text;
+    -moz-user-select: text;
+    -ms-user-select: text;
+    user-select: text;
+  }
+  #submit-btn.confirm-pending {
+    background: #d64545 !important;
+    animation: pulse-confirm 1s ease-in-out infinite;
+  }
+  @keyframes pulse-confirm {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(214,69,69,0.4); }
+    50% { transform: scale(1.02); box-shadow: 0 0 0 8px rgba(214,69,69,0); }
+  }
+
+
   .q-index { font-size: 13px; color: var(--orange); font-weight: 700; margin-bottom: 6px; letter-spacing: 0.5px; }
   .q-text { font-size: 18px; color: var(--navy); font-weight: 600; margin-bottom: 16px; line-height: 1.4; }
   .q-hint { font-size: 12px; color: #999; margin-bottom: 10px; }
@@ -203,7 +227,7 @@
     </div>
     <div class="info-box hidden" id="submit-status" style="margin-top:10px;"></div>
     <button class="btn hidden" id="submit-retry-btn" onclick="retrySubmitNow()" style="margin-top:6px; background:var(--orange);"></button>
-    <button class="btn" id="submit-btn" onclick="submitTest(false)" style="margin-top:10px; background:var(--navy);" data-i18n="submitBtn"></button>
+    <button class="btn" id="submit-btn" onclick="requestSubmit()" style="margin-top:10px; background:var(--navy);" data-i18n="submitBtn"></button>
   </div>
 
   <div id="screen-sending" class="hidden">
@@ -248,6 +272,16 @@
     <button onclick="dismissTabWarning()" data-i18n="tabWarnBtn"></button>
   </div>
 </div>
+
+<div id="fs-warn-overlay" class="warn-overlay hidden">
+  <div class="warn-card">
+    <div class="warn-icon">🖥️</div>
+    <h3 data-i18n="fsWarnTitle"></h3>
+    <p data-i18n="fsWarnText"></p>
+    <button onclick="dismissFsWarning()" data-i18n="fsWarnBtn"></button>
+  </div>
+</div>
+
 
 <script>
   // Подстраховка против жеста «потянуть вниз, чтобы обновить» на телефоне — иначе
@@ -318,7 +352,13 @@
       scheduledBanner: '⏰ Тестирование начнётся {dt}. Страница обновится автоматически.',
       tabWarnTitle: 'Не покидайте страницу теста',
       tabWarnText: 'Вы уже несколько раз уходили со страницы во время тестирования. Не переключайтесь на другие вкладки и не используйте интернет для поиска ответов — это фиксируется и видно преподавателю.',
-      tabWarnBtn: 'Понятно, продолжаю'
+      tabWarnBtn: 'Понятно, продолжаю',
+      submitConfirm: 'Нажмите ещё раз, чтобы отправить',
+      submitConfirmHint: 'Отправка через 3 сек отменится',
+      fsWarnTitle: 'Вы вышли из полноэкранного режима',
+      fsWarnText: 'Во время теста рекомендуется оставаться в полноэкранном режиме. Выход фиксируется. Нажмите кнопку, чтобы вернуться.',
+      fsWarnBtn: 'Вернуться в полный экран',
+      copyBlocked: 'Копирование во время теста запрещено',
     },
     kk: {
       oops: 'Сәтсіз аяқталды',
@@ -368,7 +408,13 @@
       scheduledBanner: '⏰ Тестілеу {dt} басталады. Бет автоматты түрде жаңарады.',
       tabWarnTitle: 'Тест бетінен кетпеңіз',
       tabWarnText: 'Сіз тестілеу кезінде бірнеше рет беттен кеттіңіз. Басқа қойындыларға ауыспаңыз және жауап іздеу үшін интернетті қолданбаңыз — бұл тіркеледі және оқытушыға көрінеді.',
-      tabWarnBtn: 'Түсінікті, жалғастырамын'
+      tabWarnBtn: 'Түсінікті, жалғастырамын',
+      submitConfirm: 'Жіберу үшін тағы бір рет басыңыз',
+      submitConfirmHint: '3 сек ішінде баспасаңыз, батырма қалпына келеді',
+      fsWarnTitle: 'Сіз толық экран режимінен шықтыңыз',
+      fsWarnText: 'Тест кезінде толық экран режимінде қалу ұсынылады. Шығу тіркеледі. Оралу үшін батырманы басыңыз.',
+      fsWarnBtn: 'Толық экранға оралу',
+      copyBlocked: 'Тест кезінде көшіруге тыйым салынады',
     }
   };
 
@@ -453,6 +499,7 @@
       state.currentIndex = Math.min(Math.max(isNaN(ci) ? 0 : ci, 0), state.questions.length - 1);
       localStorage.setItem(LS_KEY, data.participantId);
       showScreen('screen-quiz');
+      enableAntiCheat();
       if (state.timeLimit && data.deadline) {
         state.deadline = data.deadline - (data.serverNow - Date.now());
         document.getElementById('timer-box').classList.remove('hidden');
@@ -670,6 +717,7 @@
       state.answers = {};
       localStorage.setItem(LS_KEY, data.participantId);
       showScreen('screen-quiz');
+      enableAntiCheat();
       if (state.timeLimit) {
         state.deadline = data.deadline ? data.deadline - (data.serverNow - Date.now()) : Date.now() + state.timeLimit * 60 * 1000;
         document.getElementById('timer-box').classList.remove('hidden');
@@ -795,6 +843,143 @@
   }
 
   let lastResult = null;
+
+
+  // ==================== АНТИЧИТ: КОПИРОВАНИЕ, ПОЛНЫЙ ЭКРАН, ЗАЩИТА ОТПРАВКИ ====================
+  let quizActive = false;
+  let submitConfirmTimer = null;
+  let submitConfirmArmed = false;
+  let fsExitCount = 0;
+  let wantFullscreen = true; // после старта просим полный экран
+
+  function isQuizScreen() {
+    const el = document.getElementById('screen-quiz');
+    return el && !el.classList.contains('hidden');
+  }
+
+  function enableAntiCheat() {
+    quizActive = true;
+    document.body.classList.add('quiz-active');
+    // Попытка перейти в полный экран (на мобильных часто блокируется — это нормально)
+    requestQuizFullscreen();
+  }
+
+  function disableAntiCheat() {
+    quizActive = false;
+    document.body.classList.remove('quiz-active');
+    resetSubmitConfirm();
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      try {
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        if (exit) exit.call(document);
+      } catch (e) {}
+    }
+  }
+
+  function requestQuizFullscreen() {
+    if (!wantFullscreen) return;
+    const root = document.documentElement;
+    const req = root.requestFullscreen || root.webkitRequestFullscreen || root.msRequestFullscreen;
+    if (!req) return;
+    try {
+      const p = req.call(root);
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch (e) {}
+  }
+
+  function dismissFsWarning() {
+    document.getElementById('fs-warn-overlay').classList.add('hidden');
+    requestQuizFullscreen();
+  }
+
+  // Выход из полного экрана во время теста
+  function onFullscreenChange() {
+    const inFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    if (!quizActive || !isQuizScreen()) return;
+    if (!inFs) {
+      fsExitCount++;
+      // Фиксируем для преподавателя (как переключение вкладки)
+      if (state.participantId) {
+        const s = (typeof ensureLiveSocket === 'function') ? ensureLiveSocket() : null;
+        if (s) s.emit('student:tabswitch', {
+          code: CODE,
+          participantId: state.participantId,
+          awayMs: 0,
+          isLong: true,
+          reason: 'fullscreen_exit'
+        });
+      }
+      // Показываем предупреждение после первого выхода
+      if (fsExitCount >= 1) {
+        document.getElementById('fs-warn-overlay').classList.remove('hidden');
+        // Обновляем тексты i18n на случай смены языка
+        const title = document.querySelector('#fs-warn-overlay [data-i18n="fsWarnTitle"]');
+        const text = document.querySelector('#fs-warn-overlay [data-i18n="fsWarnText"]');
+        const btn = document.querySelector('#fs-warn-overlay [data-i18n="fsWarnBtn"]');
+        if (title) title.textContent = t('fsWarnTitle');
+        if (text) text.textContent = t('fsWarnText');
+        if (btn) btn.textContent = t('fsWarnBtn');
+      }
+    }
+  }
+  document.addEventListener('fullscreenchange', onFullscreenChange);
+  document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+
+  // Блокировка копирования / выделения / контекстного меню во время теста
+  function blockIfQuiz(e) {
+    if (!quizActive || !isQuizScreen()) return;
+    e.preventDefault();
+    return false;
+  }
+  document.addEventListener('copy', blockIfQuiz);
+  document.addEventListener('cut', blockIfQuiz);
+  document.addEventListener('contextmenu', blockIfQuiz);
+  document.addEventListener('selectstart', function(e) {
+    if (!quizActive || !isQuizScreen()) return;
+    // Разрешаем в полях ввода (если появятся)
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    e.preventDefault();
+  });
+  // Горячие клавиши Ctrl+C / Ctrl+A / Ctrl+U / Ctrl+S / F12 (частично)
+  document.addEventListener('keydown', function(e) {
+    if (!quizActive || !isQuizScreen()) return;
+    const key = (e.key || '').toLowerCase();
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (ctrl && (key === 'c' || key === 'x' || key === 'a' || key === 'u' || key === 's' || key === 'p')) {
+      e.preventDefault();
+      return false;
+    }
+    // F12 / Ctrl+Shift+I — мягкая блокировка (полностью запретить DevTools нельзя)
+    if (key === 'f12' || (ctrl && e.shiftKey && (key === 'i' || key === 'j' || key === 'c'))) {
+      e.preventDefault();
+      return false;
+    }
+  });
+
+  // Защита от случайного нажатия «Отправить»: двойное подтверждение
+  function resetSubmitConfirm() {
+    submitConfirmArmed = false;
+    clearTimeout(submitConfirmTimer);
+    submitConfirmTimer = null;
+    const btn = document.getElementById('submit-btn');
+    if (btn) {
+      btn.classList.remove('confirm-pending');
+      btn.textContent = t('submitBtn');
+      btn.disabled = false;
+    }
+  }
+
+  function armSubmitConfirm() {
+    const btn = document.getElementById('submit-btn');
+    if (!btn) return;
+    submitConfirmArmed = true;
+    btn.classList.add('confirm-pending');
+    btn.textContent = t('submitConfirm');
+    clearTimeout(submitConfirmTimer);
+    submitConfirmTimer = setTimeout(resetSubmitConfirm, 3000);
+  }
+
 
   // ==================== ОТСЛЕЖИВАНИЕ ПЕРЕКЛЮЧЕНИЯ ВКЛАДКИ ====================
   // Используем стандартный Page Visibility API — единственный надёжный способ узнать,
@@ -937,8 +1122,21 @@
   }
   window.addEventListener('online', () => { if (readPending() && !submitting) retrySubmitNow(); });
 
+  function requestSubmit() {
+    // Защита от случайного нажатия: первое нажатие — предупреждение, второе (в течение 3 сек) — отправка
+    if (submitting || readPending()) return;
+    if (!submitConfirmArmed) {
+      armSubmitConfirm();
+      return;
+    }
+    resetSubmitConfirm();
+    submitTest(false);
+  }
+
   async function submitTest(auto) {
     if (submitting || readPending()) return; // уже отправляем
+    resetSubmitConfirm();
+    disableAntiCheat();
     if (state.timerInterval) clearInterval(state.timerInterval);
     document.getElementById('submit-btn').disabled = true;
     const payload = { participantId: state.participantId, answers: state.answers, tabSwitchLog, auto: !!auto };
