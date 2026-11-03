@@ -77,6 +77,16 @@
     <div class="timer" id="timer-box">00:00</div>
     <h1 id="form-title"></h1>
     <div class="sub" id="form-intro"></div>
+    <div id="drawing-panel" class="hidden" style="margin:12px 0 16px; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; background:#f8fafc;">
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#eef2ff;">
+        <strong id="drawing-title" style="font-size:14px; color:#1e3a5f;">Чертёж</strong>
+        <a id="drawing-open" href="#" target="_blank" rel="noopener" style="font-size:13px;">Открыть в полном размере ↗</a>
+      </div>
+      <div style="padding:8px; text-align:center; max-height:420px; overflow:auto;">
+        <img id="drawing-img" alt="Чертёж" style="max-width:100%; height:auto; border-radius:6px;">
+        <iframe id="drawing-pdf" class="hidden" style="width:100%; height:420px; border:0; border-radius:6px;"></iframe>
+      </div>
+    </div>
     <div id="questions-container"></div>
     <div class="info-box hidden" id="form-outro" style="white-space:pre-wrap;"></div>
     <div id="fill-progress" class="muted" style="margin:6px 0 10px; font-weight:700;"></div>
@@ -151,6 +161,29 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden) sendProgress(); });
   window.addEventListener('pagehide', sendProgress);
 
+  function showDrawing(url, title) {
+    const panel = document.getElementById('drawing-panel');
+    const img = document.getElementById('drawing-img');
+    const pdf = document.getElementById('drawing-pdf');
+    const open = document.getElementById('drawing-open');
+    const titleEl = document.getElementById('drawing-title');
+    if (!url) { panel.classList.add('hidden'); return; }
+    panel.classList.remove('hidden');
+    titleEl.textContent = title ? ('Чертёж: ' + title) : 'Чертёж';
+    open.href = url;
+    const isPdf = /\.pdf($|\?)/i.test(url);
+    if (isPdf) {
+      img.classList.add('hidden');
+      pdf.classList.remove('hidden');
+      pdf.src = url;
+    } else {
+      pdf.classList.add('hidden');
+      pdf.removeAttribute('src');
+      img.classList.remove('hidden');
+      img.src = url;
+    }
+  }
+
   function enterForm(data, draft) {
     state.participantId = data.participantId;
     state.questions = data.questions;
@@ -161,6 +194,7 @@
     state.startLocal = data.joinedAt ? Date.now() - (data.serverNow - data.joinedAt) : Date.now();
     document.getElementById('form-title').textContent = data.testTitle;
     document.getElementById('form-intro').textContent = data.intro || '';
+    showDrawing(data.drawingImage, data.drawingTitle || data.matchedPart);
     renderForm();
     if (draft && Array.isArray(draft.answers)) {
       draft.answers.forEach((v, i) => {
@@ -254,30 +288,6 @@
     }, 5000);
   }
 
-  // Выбор при совпадении имени. Встроен в страницу (а не confirm()): во встроенных браузерах
-  // мессенджеров системные окна часто блокируются, и ученика просто «не пускало».
-  let forceNewJoin = false;
-  function showNameConflict(message, canContinue, onContinue, onNew) {
-    const old = document.getElementById('name-conflict');
-    if (old) old.remove();
-    const box = document.createElement('div');
-    box.id = 'name-conflict';
-    box.style.cssText = 'background:#fff8ec; border-left:3px solid #F07C00; border-radius:10px; padding:12px 14px; margin-bottom:12px; font-size:14px; line-height:1.5; color:#2C3E50;';
-    const msg = document.createElement('div'); msg.textContent = message; msg.style.marginBottom = '10px'; box.appendChild(msg);
-    const mk = (text, primary, fn) => {
-      const b = document.createElement('button');
-      b.type = 'button'; b.textContent = text;
-      b.style.cssText = 'display:block; width:100%; padding:12px; margin-top:8px; border-radius:10px; font-size:15px; font-weight:600; cursor:pointer; ' +
-        (primary ? 'background:#F07C00; color:#fff; border:none;' : 'background:#fff; color:#2C3E50; border:1px solid #ddd;');
-      b.onclick = () => { box.remove(); fn(); };
-      box.appendChild(b);
-    };
-    if (canContinue) mk('Это я — продолжить с того же места', true, onContinue);
-    mk('Я другой человек — войти как новый участник', !canContinue, onNew);
-    document.getElementById('join-btn').insertAdjacentElement('beforebegin', box);
-    box.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-
   async function joinTask() {
     const name = document.getElementById('student-name').value.trim();
     const partInfo = document.getElementById('student-part').value.trim();
@@ -294,22 +304,21 @@
       const res = await fetch(`/api/drawing-sessions/${CODE}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, partInfo, forceNew: forceNewJoin })
+        body: JSON.stringify({ name, partInfo })
       });
       const data = await res.json();
-      if (!res.ok && (data.error === 'NAME_IN_PROGRESS' || data.error === 'ALREADY_SUBMITTED')) {
+      if (!res.ok && data.error === 'NAME_IN_PROGRESS') {
         btn.disabled = false;
-        showNameConflict(data.message, data.error === 'NAME_IN_PROGRESS',
-          async () => {
-            btn.disabled = true;
-            const r = await resumeDrawing({ name });
-            if (!r) {
-              btn.disabled = false;
-              errEl.textContent = 'Не удалось продолжить. Обновите страницу и попробуйте ещё раз.';
-              errEl.classList.remove('hidden');
-            }
-          },
-          () => { forceNewJoin = true; joinTask(); });
+        if (confirm(data.message + '\n\nПродолжить с того же места как «' + name + '»?')) {
+          btn.disabled = true;
+          const r = await resumeDrawing({ name });
+          if (r) return;
+          btn.disabled = false;
+          errEl.textContent = 'Не удалось продолжить. Обновите страницу и попробуйте ещё раз.';
+        } else {
+          errEl.textContent = data.message;
+        }
+        errEl.classList.remove('hidden');
         return;
       }
       if (!res.ok) {
@@ -533,5 +542,6 @@
 
   init();
 </script>
+<script src="/kk-i18n.js"></script>
 </body>
 </html>

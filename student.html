@@ -804,11 +804,20 @@
 
   function currentQuestionView(idx) {
     const q = state.questions[idx];
+    const base = {
+      id: q.id,
+      type: q.type || 'choice',
+      multi: q.multi,
+      image: q.image,
+      unit: q.unit || '',
+      leftItems: q.leftItems,
+      rightItems: q.rightItems
+    };
     if (state.lang === 'kk' && state.translated) {
       const tq = state.translated.questions[idx];
-      return { id: q.id, text: tq.text, options: tq.options, multi: q.multi, image: q.image };
+      return Object.assign(base, { text: tq.text, options: tq.options || q.options });
     }
-    return { id: q.id, text: q.text, options: q.options, multi: q.multi, image: q.image };
+    return Object.assign(base, { text: q.text, options: q.options });
   }
 
   function renderQuestion() {
@@ -820,39 +829,89 @@
     document.getElementById('q-text').textContent = q.text;
     const qImg = document.getElementById('q-image');
     if (q.image) { qImg.src = q.image; qImg.classList.remove('hidden'); } else { qImg.classList.add('hidden'); qImg.removeAttribute('src'); }
-    document.getElementById('q-hint').textContent = q.multi ? t('selectMulti') : t('selectOne');
 
     const container = document.getElementById('options-container');
     container.innerHTML = '';
     const given = state.answers[q.id];
-    q.options.forEach((optText, i) => {
-      const isSelected = q.multi ? (Array.isArray(given) && given.includes(i)) : (given === i);
-      const div = document.createElement('div');
-      div.className = 'option' + (isSelected ? ' selected' : '');
-      div.onclick = () => selectOption(q, i);
-      div.innerHTML = `
-        <input type="${q.multi ? 'checkbox' : 'radio'}" ${isSelected ? 'checked' : ''} readonly>
-        <div class="opt-text"></div>
-      `;
-      div.querySelector('.opt-text').textContent = optText;
-      container.appendChild(div);
-    });
+    const qType = q.type || 'choice';
+
+    if (qType === 'numeric') {
+      document.getElementById('q-hint').textContent = 'Введите число' + (q.unit ? ' (' + q.unit + ')' : '');
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'display:flex; align-items:center; gap:10px; margin-top:8px;';
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.inputMode = 'decimal';
+      inp.placeholder = 'Число';
+      inp.value = given != null ? given : '';
+      inp.style.cssText = 'flex:1; padding:14px 16px; font-size:18px; border:2px solid var(--border); border-radius:12px;';
+      inp.oninput = () => { state.answers[q.id] = inp.value; scheduleProgress(); updateDots(); };
+      wrap.appendChild(inp);
+      if (q.unit) {
+        const u = document.createElement('span');
+        u.textContent = q.unit;
+        u.style.cssText = 'font-weight:600; color:var(--muted);';
+        wrap.appendChild(u);
+      }
+      container.appendChild(wrap);
+    } else if (qType === 'matching') {
+      document.getElementById('q-hint').textContent = 'Сопоставьте элементы';
+      const left = q.leftItems || [];
+      const right = q.rightItems || [];
+      const givenObj = (given && typeof given === 'object') ? given : {};
+      left.forEach(li => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; align-items:center; gap:12px; margin-bottom:10px; flex-wrap:wrap;';
+        const lab = document.createElement('div');
+        lab.textContent = li.text;
+        lab.style.cssText = 'flex:1; min-width:120px; font-weight:500;';
+        const sel = document.createElement('select');
+        sel.style.cssText = 'flex:1; min-width:140px; padding:10px; border-radius:10px; border:2px solid var(--border); font-size:15px;';
+        const empty = document.createElement('option');
+        empty.value = ''; empty.textContent = '— выберите —';
+        sel.appendChild(empty);
+        right.forEach(ri => {
+          const o = document.createElement('option');
+          o.value = ri.id;
+          o.textContent = ri.text;
+          if (String(givenObj[li.id]) === String(ri.id)) o.selected = true;
+          sel.appendChild(o);
+        });
+        sel.onchange = () => {
+          const cur = Object.assign({}, state.answers[q.id] || {});
+          if (sel.value) cur[li.id] = sel.value; else delete cur[li.id];
+          state.answers[q.id] = cur;
+          scheduleProgress();
+          updateDots();
+        };
+        row.appendChild(lab);
+        row.appendChild(sel);
+        container.appendChild(row);
+      });
+    } else {
+      document.getElementById('q-hint').textContent = q.multi ? t('selectMulti') : t('selectOne');
+      (q.options || []).forEach((optText, i) => {
+        const isSelected = q.multi ? (Array.isArray(given) && given.includes(i)) : (given === i);
+        const div = document.createElement('div');
+        div.className = 'option' + (isSelected ? ' selected' : '');
+        div.onclick = () => selectOption(q, i);
+        div.innerHTML = `
+          <input type="${q.multi ? 'checkbox' : 'radio'}" ${isSelected ? 'checked' : ''} readonly>
+          <div class="opt-text"></div>
+        `;
+        div.querySelector('.opt-text').textContent = optText;
+        container.appendChild(div);
+      });
+    }
 
     // точки-навигация
-    const dots = document.getElementById('dots');
-    dots.innerHTML = '';
-    state.questions.forEach((qq, i) => {
-      const answered = state.answers[qq.id] !== undefined &&
-        (Array.isArray(state.answers[qq.id]) ? state.answers[qq.id].length > 0 : true);
-      const d = document.createElement('div');
-      d.className = 'dot' + (answered ? ' answered' : '') + (i === idx ? ' current' : '');
-      d.textContent = i + 1;
-      d.onclick = () => { state.currentIndex = i; renderQuestion(); scheduleProgress(); };
-      dots.appendChild(d);
-    });
+    updateDots();
 
-    const answeredCount = state.questions.filter(qq => {
+        const answeredCount = state.questions.filter(qq => {
       const a = state.answers[qq.id];
+      const t = qq.type || 'choice';
+      if (t === 'numeric') return a !== undefined && a !== null && String(a).trim() !== '';
+      if (t === 'matching') return a && typeof a === 'object' && Object.keys(a).length > 0;
       return a !== undefined && (Array.isArray(a) ? a.length > 0 : true);
     }).length;
     document.getElementById('progress-fill').style.width = Math.round((answeredCount / total) * 100) + '%';
@@ -874,6 +933,26 @@
     }
     renderQuestion();
     scheduleProgress();
+  }
+
+  function updateDots() {
+    const dots = document.getElementById('dots');
+    if (!dots) return;
+    const idx = state.currentIndex;
+    dots.innerHTML = '';
+    state.questions.forEach((qq, i) => {
+      const a = state.answers[qq.id];
+      let answered = false;
+      const t = qq.type || 'choice';
+      if (t === 'numeric') answered = a !== undefined && a !== null && String(a).trim() !== '';
+      else if (t === 'matching') answered = a && typeof a === 'object' && Object.keys(a).length > 0;
+      else answered = a !== undefined && (Array.isArray(a) ? a.length > 0 : true);
+      const d = document.createElement('div');
+      d.className = 'dot' + (answered ? ' answered' : '') + (i === idx ? ' current' : '');
+      d.textContent = i + 1;
+      d.onclick = () => { state.currentIndex = i; renderQuestion(); scheduleProgress(); };
+      dots.appendChild(d);
+    });
   }
 
   function goNext() {

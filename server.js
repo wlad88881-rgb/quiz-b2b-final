@@ -91,6 +91,74 @@ const MAX_IMAGE_LEN = 1500000; // ~1.1 МБ бинарных данных в в�
 // Проверяет изображение вопроса: допускается только data URL (картинка, отправленная
 // с клиента уже сжатой через canvas), с ограничением на размер, чтобы не раздувать
 // единый JSON-блок базы данных, который целиком перезаписывается при каждом сохранении.
+
+function normalizeQuestion(q, i) {
+  const id = q.id || ('q' + i);
+  const type = (q.type === 'numeric' || q.type === 'matching') ? q.type : 'choice';
+  const base = {
+    id,
+    type,
+    text: (q.text || '').toString().trim(),
+    tags: Array.isArray(q.tags) ? [...new Set(q.tags.map(t => String(t).trim()).filter(Boolean))] : [],
+    explain: (q.explain || '').toString().trim(),
+    image: sanitizeQuestionImage(q.image)
+  };
+  if (type === 'numeric') {
+    const correctValue = parseFloat(String(q.correctValue != null ? q.correctValue : q.correct).toString().replace(',', '.'));
+    const tolerance = parseFloat(String(q.tolerance != null ? q.tolerance : 0).toString().replace(',', '.'));
+    return Object.assign(base, {
+      correctValue: Number.isFinite(correctValue) ? correctValue : 0,
+      tolerance: Number.isFinite(tolerance) ? Math.abs(tolerance) : 0,
+      toleranceType: q.toleranceType === 'percent' ? 'percent' : 'absolute',
+      unit: (q.unit || '').toString().trim().slice(0, 20),
+      // legacy fields for compatibility
+      options: [],
+      correct: correctValue,
+      multi: false
+    });
+  }
+  if (type === 'matching') {
+    const leftItems = Array.isArray(q.leftItems) ? q.leftItems.map((it, j) => ({
+      id: (it && it.id) ? String(it.id) : ('l' + j),
+      text: (it && it.text != null) ? String(it.text).trim() : '',
+      image: it && it.image ? sanitizeQuestionImage(it.image) : null
+    })).filter(it => it.text) : [];
+    const rightItems = Array.isArray(q.rightItems) ? q.rightItems.map((it, j) => ({
+      id: (it && it.id) ? String(it.id) : ('r' + j),
+      text: (it && it.text != null) ? String(it.text).trim() : '',
+      image: it && it.image ? sanitizeQuestionImage(it.image) : null
+    })).filter(it => it.text) : [];
+    const pairs = {};
+    if (q.correctPairs && typeof q.correctPairs === 'object') {
+      Object.keys(q.correctPairs).forEach(k => { pairs[String(k)] = String(q.correctPairs[k]); });
+    }
+    return Object.assign(base, {
+      leftItems,
+      rightItems,
+      correctPairs: pairs,
+      partialScore: !!q.partialScore,
+      options: [],
+      correct: pairs,
+      multi: false
+    });
+  }
+  // choice
+  const options = Array.isArray(q.options) ? q.options.map(o => String(o == null ? '' : o).trim()).filter(Boolean) : [];
+  let correct = q.correct;
+  const multi = !!q.multi || (Array.isArray(correct) && correct.length > 1);
+  if (multi) {
+    correct = Array.isArray(correct) ? correct.map(n => parseInt(n, 10)).filter(n => !isNaN(n) && n >= 0 && n < options.length) : [];
+  } else {
+    correct = parseInt(correct, 10);
+    if (isNaN(correct) || correct < 0 || correct >= options.length) correct = 0;
+  }
+  return Object.assign(base, {
+    options,
+    correct,
+    multi
+  });
+}
+
 function sanitizeQuestionImage(img) {
   if (!img || typeof img !== 'string') return null;
   if (!img.startsWith('data:image/')) return null;
@@ -978,16 +1046,7 @@ app.post('/api/tests', checkAuth, async (req, res) => {
     companyId: req.companyId,
     title,
     title_kk: '',
-    questions: questions.map((q, i) => ({
-      id: 'q' + i,
-      text: q.text,
-      options: q.options,
-      correct: q.correct,
-      multi: !!q.multi,
-      tags: Array.isArray(q.tags) ? [...new Set(q.tags.map(t => String(t).trim()).filter(Boolean))] : [],
-      explain: (q.explain || '').toString().trim(),
-      image: sanitizeQuestionImage(q.image)
-    })),
+    questions: questions.map((q, i) => normalizeQuestion(q, i)),
     questions_kk: [],
     translation: emptyTranslationMeta(),
     createdAt: Date.now()
@@ -1009,16 +1068,7 @@ app.put('/api/tests/:id', checkAuth, async (req, res) => {
     const test = safeGet(data.tests, req.params.id);
     if (!test || test.companyId !== req.companyId) return null;
     test.title = title;
-    test.questions = questions.map((q, i) => ({
-      id: q.id || 'q' + i,
-      text: q.text,
-      options: q.options,
-      correct: q.correct,
-      multi: !!q.multi,
-      tags: Array.isArray(q.tags) ? [...new Set(q.tags.map(t => String(t).trim()).filter(Boolean))] : [],
-      explain: (q.explain || '').toString().trim(),
-      image: sanitizeQuestionImage(q.image)
-    }));
+    test.questions = questions.map((q, i) => normalizeQuestion(q, i));
     markTranslationStale(test);
     return test;
   });
@@ -3116,6 +3166,8 @@ app.post('/api/sessions', checkAuth, async (req, res) => {
   let code;
   do { code = nanoid(); } while (safeGet(data.sessions, code));
   const tl = Number(req.body.timeLimit);
+  const shuffleQuestions = req.body.shuffleQuestions !== false && req.body.shuffleQuestions !== 'false';
+  const shuffleOptions = req.body.shuffleOptions !== false && req.body.shuffleOptions !== 'false';
   const session = {
     code,
     companyId: req.companyId,
@@ -3123,6 +3175,8 @@ app.post('/api/sessions', checkAuth, async (req, res) => {
     testTitle: test.title,
     timeLimit: Number.isFinite(tl) && tl > 0 && tl <= 600 ? tl : null,
     showAnswers: normalizeShowAnswers(req.body.showAnswers),
+    shuffleQuestions: !!shuffleQuestions,
+    shuffleOptions: !!shuffleOptions,
     startedAt: Date.now(),
     scheduledAt,
     ended: false,
@@ -3235,32 +3289,61 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
 
   const pid = participantId();
 
-  // Перемешиваем порядок вопросов и порядок вариантов ответа индивидуально для
-  // каждого участника (защита от списывания у соседа на очном тестировании).
-  // Карта optionShuffle[qId][новая_позиция] = исходный_индекс — сохраняется у
-  // участника, чтобы при проверке ответов перевести их обратно в исходную систему координат.
+  // Перемешивание вопросов и вариантов — по настройкам сессии (по умолчанию включено).
+  // Карта optionShuffle[qId][новая_позиция] = исходный_индекс — для обратного перевода ответов.
+  const doShuffleQ = session.shuffleQuestions !== false;
+  const doShuffleO = session.shuffleOptions !== false;
   const optionShuffle = {};
   const kkById = {};
   if (test.translation && test.translation.status === 'ready' && Array.isArray(test.questions_kk)) {
     test.questions_kk.forEach(q => { kkById[q.id] = q; });
   }
   const shuffledQuestions = test.questions.map(q => {
-    const order = shuffleArr(q.options.map((_, i) => i));
-    optionShuffle[q.id] = order;
+    const qType = q.type || 'choice';
+    const opts = Array.isArray(q.options) ? q.options : [];
+    let order = opts.map((_, i) => i);
+    // Перемешиваем варианты только для choice/multi; numeric и matching — отдельно
+    if (doShuffleO && qType === 'choice' && opts.length > 1) {
+      order = shuffleArr(order.slice());
+    }
+    if (qType === 'matching' && doShuffleO && Array.isArray(q.rightItems) && q.rightItems.length > 1) {
+      // для matching перемешиваем правую колонку — карта rightShuffle
+      const rOrder = shuffleArr(q.rightItems.map((_, i) => i));
+      optionShuffle[q.id] = rOrder; // переиспользуем поле: [newPos] = origIdx правой колонки
+    } else if (qType === 'choice') {
+      optionShuffle[q.id] = order;
+    }
     const kk = kkById[q.id];
-    return {
+    const base = {
       id: q.id,
+      type: qType,
       text: q.text,
-      options: order.map(origIdx => q.options[origIdx]),
       multi: !!q.multi,
       image: q.image || null,
-      // Готовая казахская версия (тот же порядок вариантов после shuffle)
       text_kk: kk ? kk.text : null,
-      options_kk: kk ? order.map(origIdx => (kk.options && kk.options[origIdx] != null) ? kk.options[origIdx] : null) : null,
       explain_kk: kk ? (kk.explain || '') : null
     };
+    if (qType === 'numeric') {
+      return Object.assign(base, {
+        unit: q.unit || '',
+        // студенту не отдаём correctValue / tolerance
+      });
+    }
+    if (qType === 'matching') {
+      const left = (q.leftItems || []).map(it => ({ id: it.id, text: it.text, image: it.image || null }));
+      let right = (q.rightItems || []).map(it => ({ id: it.id, text: it.text, image: it.image || null }));
+      if (doShuffleO && optionShuffle[q.id]) {
+        right = optionShuffle[q.id].map(origIdx => right[origIdx]);
+      }
+      return Object.assign(base, { leftItems: left, rightItems: right });
+    }
+    // choice (по умолчанию)
+    return Object.assign(base, {
+      options: order.map(origIdx => opts[origIdx]),
+      options_kk: kk ? order.map(origIdx => (kk.options && kk.options[origIdx] != null) ? kk.options[origIdx] : null) : null
+    });
   });
-  const orderedQuestions = shuffleArr(shuffledQuestions);
+  const orderedQuestions = doShuffleQ ? shuffleArr(shuffledQuestions) : shuffledQuestions;
 
   const participant = {
     id: pid,
@@ -3305,27 +3388,74 @@ app.post('/api/sessions/:code/submit', async (req, res) => {
   const detail = {};
   const optionShuffle = participant.optionShuffle || {};
   for (const q of test.questions) {
+    const qType = q.type || 'choice';
     const rawGiven = safeAnswers[q.id];
     const mapping = optionShuffle[q.id]; // [новая_позиция] = исходный_индекс
     let given = rawGiven;
-    if (mapping) {
+    let isCorrect = false;
+    let correctDisplay = q.correct;
+
+    if (qType === 'numeric') {
+      // Ответ — число (строка или number). Допуск absolute или percent.
+      const num = parseFloat(String(rawGiven == null ? '' : rawGiven).replace(',', '.').trim());
+      const correctVal = Number(q.correctValue);
+      const tol = Number(q.tolerance);
+      const tolType = q.toleranceType === 'percent' ? 'percent' : 'absolute';
+      given = Number.isFinite(num) ? num : rawGiven;
+      correctDisplay = { value: correctVal, tolerance: tol, toleranceType: tolType, unit: q.unit || '' };
+      if (Number.isFinite(num) && Number.isFinite(correctVal) && Number.isFinite(tol)) {
+        if (tolType === 'percent') {
+          const lo = correctVal * (1 - Math.abs(tol) / 100);
+          const hi = correctVal * (1 + Math.abs(tol) / 100);
+          isCorrect = num >= Math.min(lo, hi) && num <= Math.max(lo, hi);
+        } else {
+          isCorrect = Math.abs(num - correctVal) <= Math.abs(tol);
+        }
+      }
+    } else if (qType === 'matching') {
+      // given: { leftId: rightId, ... }
+      const pairs = q.correctPairs || {};
+      const givenObj = (rawGiven && typeof rawGiven === 'object' && !Array.isArray(rawGiven)) ? rawGiven : {};
+      // Если правая колонка была перемешана — mapping[newPos]=origIdx, но студент шлёт rightId (стабильный id)
+      given = givenObj;
+      correctDisplay = pairs;
+      const leftIds = Object.keys(pairs);
+      if (leftIds.length === 0) {
+        isCorrect = false;
+      } else if (q.partialScore) {
+        let ok = 0;
+        leftIds.forEach(lid => { if (String(givenObj[lid]) === String(pairs[lid])) ok++; });
+        // частичный балл: доля правильных
+        const frac = ok / leftIds.length;
+        if (frac >= 1) { isCorrect = true; score += 1; }
+        else if (frac > 0) { score += frac; }
+        detail[q.id] = { given, correct: correctDisplay, isCorrect: frac >= 1, partial: frac };
+        continue;
+      } else {
+        isCorrect = leftIds.every(lid => String(givenObj[lid]) === String(pairs[lid]));
+      }
+    } else {
+      // choice / multi
+      if (mapping) {
+        if (q.multi) {
+          given = Array.isArray(rawGiven) ? rawGiven.map(i => mapping[i]).filter(v => v !== undefined) : [];
+        } else if (rawGiven !== undefined && rawGiven !== null) {
+          given = mapping[rawGiven] !== undefined ? mapping[rawGiven] : rawGiven;
+        }
+      }
       if (q.multi) {
-        given = Array.isArray(rawGiven) ? rawGiven.map(i => mapping[i]).filter(v => v !== undefined) : [];
-      } else if (rawGiven !== undefined && rawGiven !== null) {
-        given = mapping[rawGiven] !== undefined ? mapping[rawGiven] : rawGiven;
+        const correctSet = JSON.stringify([...(Array.isArray(q.correct) ? q.correct : [])].sort());
+        const givenSet = JSON.stringify([...(Array.isArray(given) ? given : [])].sort());
+        isCorrect = correctSet === givenSet;
+      } else {
+        isCorrect = given === q.correct;
       }
     }
-    let isCorrect = false;
-    if (q.multi) {
-      const correctSet = JSON.stringify([...q.correct].sort());
-      const givenSet = JSON.stringify([...(Array.isArray(given) ? given : [])].sort());
-      isCorrect = correctSet === givenSet;
-    } else {
-      isCorrect = given === q.correct;
-    }
     if (isCorrect) score++;
-    detail[q.id] = { given, correct: q.correct, isCorrect };
+    detail[q.id] = { given, correct: correctDisplay, isCorrect };
   }
+  // округляем score если были partial matching
+  score = Math.round(score * 1000) / 1000;
   const submittedAt = Date.now();
   const testDeadline = session.timeLimit ? participant.joinedAt + session.timeLimit * 60 * 1000 : null;
   const lateMs = testDeadline ? Math.max(0, submittedAt - testDeadline) : 0;
@@ -3905,6 +4035,161 @@ app.get('/k/:code', (req, res) => {
 // автопроверки по вариантам ответа — свободный текст, который заполняет ученик,
 // а преподаватель проверяет и выставляет зачёт/незачёт по каждому пункту вручную.
 
+
+// ==================== ЧЕРТЕЖИ (файлы) ====================
+// Папка public/img/drawings/ — PDF/PNG/JPG чертежей. Связыва с answerKey через drawingImage.
+const DRAWINGS_DIR = path.join(BUNDLED_PUBLIC, 'img', 'drawings');
+try { fs.mkdirSync(DRAWINGS_DIR, { recursive: true }); } catch (e) {}
+
+app.get('/api/drawings', checkAuth, (req, res) => {
+  try {
+    const files = fs.readdirSync(DRAWINGS_DIR)
+      .filter(f => /\.(png|jpe?g|webp|gif|pdf)$/i.test(f))
+      .map(f => {
+        const st = fs.statSync(path.join(DRAWINGS_DIR, f));
+        return { name: f, url: '/img/drawings/' + f, size: st.size, mtime: st.mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    res.json({ files });
+  } catch (e) {
+    res.json({ files: [] });
+  }
+});
+
+app.post('/api/drawings/upload', checkAuth, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Выберите файл (PNG, JPG, WebP, PDF до 5 МБ)' });
+  const orig = (req.file.originalname || 'drawing').replace(/[^\w.\-а-яА-ЯёЁ]+/g, '_');
+  const ext = path.extname(orig).toLowerCase() || (
+    req.file.mimetype === 'application/pdf' ? '.pdf' :
+    req.file.mimetype === 'image/png' ? '.png' :
+    req.file.mimetype === 'image/webp' ? '.webp' : '.jpg'
+  );
+  if (!/\.(png|jpe?g|webp|gif|pdf)$/i.test(ext)) {
+    return res.status(400).json({ error: 'Допустимы PNG, JPG, WebP, GIF, PDF' });
+  }
+  const base = path.basename(orig, path.extname(orig)).slice(0, 60) || 'drawing';
+  const stamp = Date.now().toString(36);
+  const name = base + '-' + stamp + ext;
+  try {
+    fs.mkdirSync(DRAWINGS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(DRAWINGS_DIR, name), req.file.buffer);
+  } catch (e) {
+    return res.status(500).json({ error: 'Не удалось сохранить файл' });
+  }
+  res.json({ ok: true, name, url: '/img/drawings/' + name });
+});
+
+app.delete('/api/drawings/:name', checkAuth, (req, res) => {
+  const name = path.basename(req.params.name || '');
+  if (!name || name.includes('..')) return res.status(400).json({ error: 'Некорректное имя' });
+  const fp = path.join(DRAWINGS_DIR, name);
+  try {
+    if (fs.existsSync(fp)) fs.unlinkSync(fp);
+  } catch (e) {}
+  res.json({ ok: true });
+});
+
+// Привязка чертежа к ключу ответов (детали)
+app.get('/api/answer-keys', checkAuth, (req, res) => {
+  const data = db.load();
+  const list = Object.values(data.answerKeys)
+    .filter(k => k.shared || k.companyId === req.companyId)
+    .sort((a, b) => (a.number || 0) - (b.number || 0))
+    .map(k => ({
+      id: k.id,
+      number: k.number,
+      name: k.name,
+      title: k.title,
+      shared: !!k.shared,
+      drawingImage: k.drawingImage || '',
+      questionCount: (k.questions || []).length
+    }));
+  res.json(list);
+});
+
+app.get('/api/answer-keys/:id', checkAuth, (req, res) => {
+  const data = db.load();
+  const key = safeGet(data.answerKeys, req.params.id);
+  if (!key || (!key.shared && key.companyId !== req.companyId)) {
+    return res.status(404).json({ error: 'Ключ не найден' });
+  }
+  res.json({
+    id: key.id,
+    number: key.number,
+    name: key.name,
+    title: key.title,
+    shared: !!key.shared,
+    drawingImage: key.drawingImage || '',
+    questions: (key.questions || []).map(q => ({
+      text: q.text || '',
+      answer: q.answer || '',
+      type: q.type || (q.value != null ? 'numeric' : 'text'),
+      value: q.value != null ? q.value : null,
+      tolerance: q.tolerance != null ? q.tolerance : null,
+      unit: q.unit || ''
+    }))
+  });
+});
+
+app.put('/api/answer-keys/:id/drawing', checkAuth, async (req, res) => {
+  const url = (req.body.drawingImage || '').toString().trim();
+  const safe = !url || (/^\/img\/drawings\/[\w.\-]+$/i.test(url) && !url.includes('..'));
+  if (url && !safe) return res.status(400).json({ error: 'Некорректный путь к файлу' });
+  const result = await db.update((d) => {
+    const key = safeGet(d.answerKeys, req.params.id);
+    if (!key || (!key.shared && key.companyId !== req.companyId)) return null;
+    // shared seed-ключи копируем в company-specific при правке
+    if (key.shared) {
+      const copyId = 'key-c-' + req.companyId.slice(0, 6) + '-' + key.number;
+      const copy = { ...key, id: copyId, shared: false, companyId: req.companyId, drawingImage: url || '' };
+      d.answerKeys[copyId] = copy;
+      return copy;
+    }
+    key.drawingImage = url || '';
+    return key;
+  });
+  if (!result) return res.status(404).json({ error: 'Ключ не найден' });
+  res.json(result);
+});
+
+// Обновление числовых эталонов пункта ключа (value + tolerance)
+app.put('/api/answer-keys/:id/questions', checkAuth, async (req, res) => {
+  const questions = req.body.questions;
+  if (!Array.isArray(questions)) return res.status(400).json({ error: 'Нужен массив questions' });
+  const result = await db.update((d) => {
+    let key = safeGet(d.answerKeys, req.params.id);
+    if (!key || (!key.shared && key.companyId !== req.companyId)) return null;
+    if (key.shared) {
+      const copyId = 'key-c-' + req.companyId.slice(0, 6) + '-' + key.number;
+      key = { ...key, id: copyId, shared: false, companyId: req.companyId, questions: key.questions.map(q => ({ ...q })) };
+      d.answerKeys[copyId] = key;
+    }
+    key.questions = questions.map((q, i) => {
+      const prev = key.questions[i] || {};
+      const item = {
+        text: (q.text || prev.text || '').toString().trim(),
+        answer: (q.answer != null ? q.answer : (prev.answer || '')).toString().trim()
+      };
+      const isNumeric = q.type === 'numeric' || (q.type !== 'text' && q.value != null && q.value !== '');
+      if (isNumeric) {
+        item.type = 'numeric';
+        const v = Number(String(q.value != null ? q.value : item.answer).toString().replace(',', '.'));
+        const t = Number(String(q.tolerance != null && q.tolerance !== '' ? q.tolerance : 0.03).toString().replace(',', '.'));
+        if (Number.isFinite(v)) item.value = v;
+        item.tolerance = Number.isFinite(t) ? Math.abs(t) : 0.03;
+        item.unit = (q.unit || '').toString().trim().slice(0, 20);
+        if (item.value != null && !item.answer) item.answer = String(item.value);
+      } else {
+        item.type = 'text';
+      }
+      return item;
+    });
+    return key;
+  });
+  if (!result) return res.status(404).json({ error: 'Ключ не найден' });
+  res.json(result);
+});
+
 app.get('/api/drawing-tasks', checkAuth, (req, res) => {
   const data = db.load();
   const list = Object.values(data.drawingTasks)
@@ -3944,6 +4229,88 @@ function textSimilarity(a, b) {
   const union = new Set([...wa, ...wb]).size;
   return union ? inter / union : 0;
 }
+
+// Извлекает все числа из строки (и точку, и запятую).
+function extractNumbers(s) {
+  if (s == null) return [];
+  const m = String(s).replace(/,/g, '.').match(/-?\d+(?:\.\d+)?/g);
+  return m ? m.map(Number).filter(n => Number.isFinite(n)) : [];
+}
+
+// Сравнение ответа ученика с эталоном ключа.
+// Поддержка:
+//  - type:'numeric' + value + tolerance (абсолютный)
+//  - type:'text' / без type — текстовое сходство + числа с допуском по умолчанию ±0.03 (или 2% если |value|>=1)
+//  - несколько чисел в эталоне: все должны найтись у ученика в пределах допуска
+function compareDrawingAnswer(given, keyItem) {
+  if (!keyItem) return false;
+  const expectedText = (keyItem.answer != null ? keyItem.answer : '').toString().trim();
+  const givenText = (given != null ? given : '').toString().trim();
+  if (!givenText) return false;
+
+  // Явно числовой пункт ключа
+  if (keyItem.type === 'numeric' || (keyItem.value != null && Number.isFinite(Number(keyItem.value)))) {
+    const correctVal = Number(keyItem.value != null ? keyItem.value : expectedText.replace(',', '.'));
+    let tol = keyItem.tolerance != null ? Number(keyItem.tolerance) : null;
+    if (!Number.isFinite(tol)) {
+      // эвристика: для малых размеров (до 1) допуск 0.03, иначе 2%
+      tol = Math.abs(correctVal) < 1 ? 0.03 : Math.abs(correctVal) * 0.02;
+    }
+    const nums = extractNumbers(givenText);
+    if (!Number.isFinite(correctVal) || nums.length === 0) return false;
+    return nums.some(n => Math.abs(n - correctVal) <= Math.abs(tol) + 1e-9);
+  }
+
+  // Текстовый эталон: сначала точное/похожее совпадение
+  const sim = textSimilarity(givenText, expectedText);
+  if (sim >= 0.75) return true;
+
+  // Если в эталоне есть числа — требуем, чтобы все они (с допуском) встретились у ученика
+  const expNums = extractNumbers(expectedText);
+  if (expNums.length > 0) {
+    const givenNums = extractNumbers(givenText);
+    if (givenNums.length === 0) return false;
+    const allFound = expNums.every(ev => {
+      const tol = Math.abs(ev) < 1 ? 0.03 : Math.max(0.05, Math.abs(ev) * 0.02);
+      return givenNums.some(gv => Math.abs(gv - ev) <= tol + 1e-9);
+    });
+    // для пунктов только с числами (мало текста) достаточно чисел
+    const expWords = normalizeForMatch(expectedText).split(' ').filter(w => w && !/^-?\d/.test(w));
+    if (expWords.length <= 2) return allFound;
+    // иначе числа + хотя бы слабое текстовое сходство
+    return allFound && sim >= 0.35;
+  }
+  return sim >= 0.72;
+}
+
+function autoGradeDrawingAnswers(taskQuestions, key, givenAnswers) {
+  if (!key || !Array.isArray(taskQuestions)) return null;
+  const resolved = resolveKeyAnswers(taskQuestions, key);
+  return taskQuestions.map((q, i) => {
+    // приоритет: correctAnswer прямо в задании, иначе из ключа
+    const keyItem = key.questions.find(kq => normalizeForMatch(kq.text) === normalizeForMatch(q.text))
+      || key.questions.find(kq => textSimilarity(kq.text, q.text) >= 0.7)
+      || (q.correctAnswer ? { answer: q.correctAnswer, type: q.answerType, value: q.correctValue, tolerance: q.tolerance } : null);
+    if (resolved && resolved[i] && !keyItem) {
+      return compareDrawingAnswer(givenAnswers[i], { answer: resolved[i] });
+    }
+    if (!keyItem && q.correctAnswer) {
+      return compareDrawingAnswer(givenAnswers[i], {
+        answer: q.correctAnswer,
+        type: q.answerType || null,
+        value: q.correctValue,
+        tolerance: q.tolerance
+      });
+    }
+    return compareDrawingAnswer(givenAnswers[i], keyItem ? {
+      answer: keyItem.answer,
+      type: keyItem.type,
+      value: keyItem.value,
+      tolerance: keyItem.tolerance
+    } : null);
+  });
+}
+
 
 // Сопоставляет то, что ученик вписал в поле «Деталь / задание №» при входе, с одним из
 // готовых ключей ответов (сначала по номеру детали, затем по похожести названия).
@@ -4212,7 +4579,7 @@ app.get('/api/drawing-sessions/:code', checkAuth, (req, res) => {
   const answerKeys = Object.values(data.answerKeys)
     .filter(k => k.shared || k.companyId === req.companyId)
     .sort((a, b) => (a.number || 0) - (b.number || 0))
-    .map(k => ({ id: k.id, title: k.title, number: k.number, name: k.name, questions: k.questions }));
+    .map(k => ({ id: k.id, title: k.title, number: k.number, name: k.name, questions: k.questions, drawingImage: k.drawingImage || '' }));
 
   const matches = {};
   if (task) {
@@ -4287,6 +4654,10 @@ app.post('/api/drawing-sessions/:code/join', joinLimiter, async (req, res) => {
   };
   await db.update((d) => { d.sessions[req.params.code].participants[pid] = participant; });
   io.to('session:' + req.params.code).emit('participant:joined', participant);
+  // Электронный чертёж: если по «Деталь №» нашли ключ с drawingImage — отдаём студенту
+  const matched = matchAnswerKey(data, session.companyId, participant.partInfo);
+  const drawingImage = matched && matched.key && matched.key.drawingImage ? matched.key.drawingImage : (task.drawingImage || null);
+  const drawingTitle = matched && matched.key ? (matched.key.title || matched.key.name) : null;
   res.json({
     participantId: pid,
     testTitle: task.title,
@@ -4295,7 +4666,10 @@ app.post('/api/drawing-sessions/:code/join', joinLimiter, async (req, res) => {
     timeLimit: session.timeLimit || null,
     deadline: participant.deadline,
     serverNow: Date.now(),
-    questions: task.questions.map(studentQuestionView)
+    questions: task.questions.map(studentQuestionView),
+    drawingImage,
+    drawingTitle,
+    matchedPart: drawingTitle
   });
 });
 
@@ -4325,6 +4699,17 @@ app.post('/api/drawing-sessions/:code/submit', async (req, res) => {
       missing
     });
   }
+  // Автопроверка по ключу ответов (если деталь распознана) + допуски по числам
+  const match = matchAnswerKey(data, session.companyId, participant.partInfo);
+  let autoGrades = null;
+  if (match && match.key) {
+    autoGrades = autoGradeDrawingAnswers(task.questions, match.key, safeAnswers);
+  } else {
+    // без ключа — пробуем correctAnswer прямо в пунктах задания
+    autoGrades = autoGradeDrawingAnswers(task.questions, { questions: [] }, safeAnswers);
+    if (autoGrades && autoGrades.every(g => g === false)) autoGrades = null;
+  }
+
   const result = await db.update((d) => {
     const p = safeGet(d.sessions[req.params.code].participants, pid);
     p.finished = true;
@@ -4332,11 +4717,24 @@ app.post('/api/drawing-sessions/:code/submit', async (req, res) => {
     p.durationSec = Math.round((p.finishedAt - p.joinedAt) / 1000);
     p.timedOut = timeIsUp;
     p.answers = safeAnswers;
+    if (autoGrades) {
+      p.grades = autoGrades;
+      p.graded = true;
+      p.gradeComment = match && match.key
+        ? ('Автопроверка по ключу: ' + (match.key.title || match.key.name || match.key.id))
+        : 'Автопроверка по эталонам в задании';
+      p.autoGraded = true;
+    }
     return p;
   });
   await incrementSubmissions(session.companyId);
   io.to('session:' + req.params.code).emit('participant:finished', result);
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    autoGraded: !!autoGrades,
+    score: autoGrades ? autoGrades.filter(Boolean).length : null,
+    total: task.questions.length
+  });
 });
 
 // Публичный маршрут — ученик проверяет свой результат по той же ссылке после проверки
@@ -4511,18 +4909,33 @@ app.post('/api/resume/:code', joinLimiter, (req, res) => {
     }
     const questions = order.map(id => {
       const q = byId[id];
-      const m = mapping[id] || q.options.map((_, i) => i);
+      const qType = q.type || 'choice';
       const kk = kkById[id];
-      return {
+      const base = {
         id: q.id,
+        type: qType,
         text: q.text,
-        options: m.map(i => q.options[i]),
         multi: !!q.multi,
         image: q.image || null,
         text_kk: kk ? kk.text : null,
-        options_kk: kk ? m.map(i => (kk.options && kk.options[i] != null) ? kk.options[i] : null) : null,
         explain_kk: kk ? (kk.explain || '') : null
       };
+      if (qType === 'numeric') {
+        return Object.assign(base, { unit: q.unit || '' });
+      }
+      if (qType === 'matching') {
+        const left = (q.leftItems || []).map(it => ({ id: it.id, text: it.text, image: it.image || null }));
+        let right = (q.rightItems || []).map(it => ({ id: it.id, text: it.text, image: it.image || null }));
+        const m = mapping[id];
+        if (m && Array.isArray(m)) right = m.map(i => right[i]).filter(Boolean);
+        return Object.assign(base, { leftItems: left, rightItems: right });
+      }
+      const opts = Array.isArray(q.options) ? q.options : [];
+      const m = mapping[id] || opts.map((_, i) => i);
+      return Object.assign(base, {
+        options: m.map(i => opts[i]),
+        options_kk: kk ? m.map(i => (kk.options && kk.options[i] != null) ? kk.options[i] : null) : null
+      });
     });
     return res.json({ ...base, testTitle: test.title, timeLimit: session.timeLimit || null,
       deadline: session.timeLimit ? p.joinedAt + session.timeLimit * 60 * 1000 : null, questions });
