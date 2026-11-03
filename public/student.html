@@ -432,7 +432,8 @@
     timerInterval: null,
     translated: null,       // { title, questions: [{text, options[]}] } на kk
     translatedExplains: {}, // { "исходный текст пояснения": "перевод на kk" }
-    translating: false
+    translating: false,
+    titleKk: null
   };
 
   function t(key) { return UI[state.lang][key] || UI.ru[key] || key; }
@@ -491,6 +492,7 @@
       if (data.finished) { localStorage.removeItem(LS_KEY); return 'finished'; }
       state.participantId = data.participantId;
       state.testTitle = data.testTitle;
+      state.titleKk = data.title_kk || null;
       state.timeLimit = data.timeLimit;
       state.questions = data.questions;
       const d = data.draft || {};
@@ -530,6 +532,7 @@
         return;
       }
       state.testTitle = data.testTitle;
+      state.titleKk = data.title_kk || null;
       state.timeLimit = data.timeLimit;
       document.getElementById('join-title').textContent = data.testTitle;
       document.getElementById('join-qcount').textContent = `${data.questionCount} ${t('questionsWord')}`;
@@ -577,7 +580,42 @@
     return state.testTitle;
   }
 
+  // Готовый казахский перевод (загружен админом из Excel / переведён заранее) приходит
+  // вместе с вопросами: text_kk / options_kk. Если он есть для ВСЕХ вопросов — используем его
+  // и не ходим во внешний сервис перевода.
+  function buildPrebuiltKk() {
+    if (!state.questions.length) return null;
+    const ok = state.questions.every(q => q.text_kk && Array.isArray(q.options_kk) &&
+      q.options_kk.length === q.options.length && q.options_kk.every(o => o));
+    if (!ok) return null;
+    return {
+      title: state.titleKk || state.testTitle,
+      questions: state.questions.map(q => ({ text: q.text_kk, options: q.options_kk.slice() }))
+    };
+  }
+
+  function showTranslateFail() {
+    let el = document.getElementById('translate-fail-note');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'translate-fail-note';
+      el.style.cssText = 'position:fixed; left:12px; right:12px; bottom:16px; z-index:9999; background:#fff8ec; border-left:3px solid #F07C00; border-radius:10px; padding:12px 14px; font-size:14px; color:#2C3E50; box-shadow:0 4px 16px rgba(0,0,0,.15);';
+      document.body.appendChild(el);
+    }
+    el.textContent = t('translateFail');
+    setTimeout(() => { if (el.parentNode) el.remove(); }, 6000);
+  }
+
   async function translateAll() {
+    const pre = buildPrebuiltKk();
+    if (pre) {
+      state.translated = pre;
+      if (!document.getElementById('screen-quiz').classList.contains('hidden')) renderQuestion();
+      if (!document.getElementById('screen-join').classList.contains('hidden')) {
+        document.getElementById('join-title').textContent = displayTitle();
+      }
+      return;
+    }
     state.translating = true;
     const texts = [state.testTitle];
     state.questions.forEach(q => {
@@ -585,24 +623,34 @@
       q.options.forEach(o => texts.push(o));
     });
     try {
-      const res = await fetch('/api/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ texts, target: 'kk' })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'translate error');
+      // режем на пачки, чтобы не упереться в лимит строк на один запрос
+      const CHUNK = 150;
+      const all = [];
+      for (let i = 0; i < texts.length; i += CHUNK) {
+        const res = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ texts: texts.slice(i, i + CHUNK), target: 'kk' })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !Array.isArray(data.translations)) throw new Error(data.error || ('http ' + res.status));
+        all.push(...data.translations);
+      }
       let ptr = 0;
-      const title = data.translations[ptr++];
+      const title = all[ptr++];
       const questions = state.questions.map(q => {
-        const text = data.translations[ptr++];
-        const options = q.options.map(() => data.translations[ptr++]);
+        const text = all[ptr++];
+        const options = q.options.map(() => all[ptr++]);
         return { text, options };
       });
+      // если сервис вернул оригинал без перевода — считаем сбоем
+      const changed = questions.some((q, i) => q.text !== state.questions[i].text);
       state.translated = { title, questions };
+      if (!changed) showTranslateFail();
     } catch (e) {
       console.warn('[translate] fail', e);
       state.translated = null;
+      showTranslateFail();
     } finally {
       state.translating = false;
       if (!document.getElementById('screen-quiz').classList.contains('hidden')) renderQuestion();
@@ -711,6 +759,7 @@
       }
       state.participantId = data.participantId;
       state.testTitle = data.testTitle;
+      state.titleKk = data.title_kk || null;
       state.timeLimit = data.timeLimit;
       state.questions = data.questions;
       state.currentIndex = 0;

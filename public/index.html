@@ -743,9 +743,19 @@
 
   // Быстрая загрузка KZ из списка тестов (без входа в редактор)
   function importKkForTest(testId) {
-    const input = document.getElementById('import-kk-file-list');
-    if (!input) return;
+    if (!testId) { alert('Не указан тест'); return; }
+    let input = document.getElementById('import-kk-file-list');
+    if (!input) {
+      input = document.createElement('input');
+      input.type = 'file';
+      input.id = 'import-kk-file-list';
+      input.accept = '.xlsx,.xls';
+      input.style.display = 'none';
+      input.addEventListener('change', importKkFromExcelList);
+      document.body.appendChild(input);
+    }
     input.dataset.testId = testId;
+    input.value = '';
     input.click();
   }
 
