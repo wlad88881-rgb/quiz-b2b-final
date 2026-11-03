@@ -277,7 +277,6 @@
           <button class="btn outline small hidden" id="translate-kk-btn" onclick="translateTestToKK()">🌐 Перевести на казахский</button>
           <button class="btn outline small hidden" id="import-kk-btn" onclick="document.getElementById('import-kk-file').click()">📥 Загрузить KZ из Excel</button>
           <input type="file" id="import-kk-file" accept=".xlsx,.xls" style="display:none;" onchange="importKkFromExcel(event)">
-          <input type="file" id="import-kk-file-list" accept=".xlsx,.xls" style="display:none;" onchange="importKkFromExcelList(event)">
           <button class="btn outline small" onclick="showList()">Отмена</button>
         </div>
       </div>
@@ -744,10 +743,7 @@
 
   // Быстрая загрузка KZ из списка тестов (без входа в редактор)
   function importKkForTest(testId) {
-    if (!testId) {
-      alert('Не указан тест');
-      return;
-    }
+    if (!testId) { alert('Не указан тест'); return; }
     let input = document.getElementById('import-kk-file-list');
     if (!input) {
       input = document.createElement('input');
@@ -774,15 +770,13 @@
       const res = await authFetch('/api/tests/' + testId + '/import-kk', { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const msg = data.error || ('Ошибка ' + res.status + (res.status === 404 ? ' — на сервере нет маршрута import-kk, задеплойте обновлённый server.js' : ''));
-        alert(msg);
+        alert(data.error || 'Не удалось загрузить казахский Excel');
       } else {
         alert('Казахская версия загружена: ' + data.count + ' вопросов. Статус: ready.');
         loadTestsList();
       }
     } catch (e) {
-      console.error(e);
-      alert('Сеть недоступна или ошибка: ' + (e.message || e));
+      alert('Сеть недоступна');
     }
   }
 
