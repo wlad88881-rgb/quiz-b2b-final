@@ -508,7 +508,7 @@ app.post('/api/translate', translateLimiter, async (req, res) => {
   const targetLang = target === 'kk' ? 'kk' : null;
   if (!targetLang) return res.status(400).json({ error: 'Поддерживается только target=kk' });
   if (texts.length === 0) return res.json({ translations: [] });
-  if (texts.length > 300) return res.status(400).json({ error: 'Слишком много строк за один запрос' });
+  if (texts.length > 600) return res.status(400).json({ error: 'Слишком много строк за один запрос' });
   try {
     const translations = await translateBatch(texts, targetLang);
     res.json({ translations });
@@ -3023,6 +3023,7 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
   res.json({
     participantId: pid,
     testTitle: test.title,
+    title_kk: (test.translation && test.translation.status === 'ready' && test.title_kk) ? test.title_kk : null,
     timeLimit: session.timeLimit || null,
     deadline: session.timeLimit ? participant.joinedAt + session.timeLimit * 60 * 1000 : null,
     serverNow: Date.now(),
@@ -4255,7 +4256,8 @@ app.post('/api/resume/:code', joinLimiter, (req, res) => {
         explain_kk: kk ? (kk.explain || '') : null
       };
     });
-    return res.json({ ...base, testTitle: test.title, timeLimit: session.timeLimit || null,
+    return res.json({ ...base, testTitle: test.title,
+      title_kk: (test.translation && test.translation.status === 'ready' && test.title_kk) ? test.title_kk : null, timeLimit: session.timeLimit || null,
       deadline: session.timeLimit ? p.joinedAt + session.timeLimit * 60 * 1000 : null, questions });
   }
   if (type === 'lab') {

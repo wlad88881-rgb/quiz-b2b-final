@@ -89,6 +89,30 @@
   }
   .timer.warn { color: #d64545; }
 
+  /* Античит: запрет выделения текста во время теста */
+  body.quiz-active {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+  }
+  body.quiz-active input,
+  body.quiz-active textarea {
+    -webkit-user-select: text;
+    -moz-user-select: text;
+    -ms-user-select: text;
+    user-select: text;
+  }
+  #submit-btn.confirm-pending {
+    background: #d64545 !important;
+    animation: pulse-confirm 1s ease-in-out infinite;
+  }
+  @keyframes pulse-confirm {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(214,69,69,0.4); }
+    50% { transform: scale(1.02); box-shadow: 0 0 0 8px rgba(214,69,69,0); }
+  }
+
+
   .q-index { font-size: 13px; color: var(--orange); font-weight: 700; margin-bottom: 6px; letter-spacing: 0.5px; }
   .q-text { font-size: 18px; color: var(--navy); font-weight: 600; margin-bottom: 16px; line-height: 1.4; }
   .q-hint { font-size: 12px; color: #999; margin-bottom: 10px; }
@@ -201,7 +225,14 @@
       <button class="btn outline" id="prev-btn" onclick="goPrev()" data-i18n="prevBtn"></button>
       <button class="btn" id="next-btn" onclick="goNext()" data-i18n="nextBtn"></button>
     </div>
-    <button class="btn" id="submit-btn" onclick="submitTest(false)" style="margin-top:10px; background:var(--navy);" data-i18n="submitBtn"></button>
+    <div class="info-box hidden" id="submit-status" style="margin-top:10px;"></div>
+    <button class="btn hidden" id="submit-retry-btn" onclick="retrySubmitNow()" style="margin-top:6px; background:var(--orange);"></button>
+    <button class="btn" id="submit-btn" onclick="requestSubmit()" style="margin-top:10px; background:var(--navy);" data-i18n="submitBtn"></button>
+  </div>
+
+  <div id="screen-sending" class="hidden">
+    <div class="info-box" id="sending-text" style="margin-top:40px; text-align:center;"></div>
+    <button class="btn hidden" id="sending-retry-btn" onclick="retrySubmitNow()" style="margin-top:6px; background:var(--orange);"></button>
   </div>
 
   <div id="screen-result" class="hidden">
@@ -242,6 +273,16 @@
   </div>
 </div>
 
+<div id="fs-warn-overlay" class="warn-overlay hidden">
+  <div class="warn-card">
+    <div class="warn-icon">🖥️</div>
+    <h3 data-i18n="fsWarnTitle"></h3>
+    <p data-i18n="fsWarnText"></p>
+    <button onclick="dismissFsWarning()" data-i18n="fsWarnBtn"></button>
+  </div>
+</div>
+
+
 <script>
   // Подстраховка против жеста «потянуть вниз, чтобы обновить» на телефоне — иначе
   // случайное движение пальцем во время теста перезагружает страницу и сбрасывает прогресс.
@@ -271,6 +312,14 @@
       prevBtn: '← Назад',
       nextBtn: 'Далее →',
       submitBtn: 'Завершить тест',
+      submitRetrying: '⚠️ Нет связи с сервером. Ваши ответы сохранены на этом устройстве и будут отправлены автоматически. Не закрывайте страницу и не отправляйте тест заново.',
+      submitSending: 'Отправляю ответы…',
+      submitRetryNow: 'Отправить сейчас',
+      sendingScreen: 'Отправляем ваши ответы…',
+      reviewAfterEnd: 'Разбор ответов откроется после того, как преподаватель завершит тестирование. Эта страница обновится сама.',
+      reviewScoreOnly: 'Преподаватель не показывает разбор ответов — только результат.',
+      reviewCheckBtn: 'Проверить, открылся ли разбор',
+      reviewStillClosed: 'Пока закрыт.',
       resultTitle: 'Результат',
       reviewTitle: 'Разбор ответов',
       autoSubmitNote: 'Тест был автоматически отправлен по истечении времени.',
@@ -303,7 +352,13 @@
       scheduledBanner: '⏰ Тестирование начнётся {dt}. Страница обновится автоматически.',
       tabWarnTitle: 'Не покидайте страницу теста',
       tabWarnText: 'Вы уже несколько раз уходили со страницы во время тестирования. Не переключайтесь на другие вкладки и не используйте интернет для поиска ответов — это фиксируется и видно преподавателю.',
-      tabWarnBtn: 'Понятно, продолжаю'
+      tabWarnBtn: 'Понятно, продолжаю',
+      submitConfirm: 'Нажмите ещё раз, чтобы отправить',
+      submitConfirmHint: 'Отправка через 3 сек отменится',
+      fsWarnTitle: 'Вы вышли из полноэкранного режима',
+      fsWarnText: 'Во время теста рекомендуется оставаться в полноэкранном режиме. Выход фиксируется. Нажмите кнопку, чтобы вернуться.',
+      fsWarnBtn: 'Вернуться в полный экран',
+      copyBlocked: 'Копирование во время теста запрещено',
     },
     kk: {
       oops: 'Сәтсіз аяқталды',
@@ -313,6 +368,14 @@
       prevBtn: '← Артқа',
       nextBtn: 'Келесі →',
       submitBtn: 'Тестті аяқтау',
+      submitRetrying: '⚠️ Серверамен байланыс жоқ. Жауаптарыңыз осы құрылғыда сақталды және автоматты түрде жіберіледі. Бетті жаппаңыз және тестті қайта жібермеңіз.',
+      submitSending: 'Жауаптар жіберілуде…',
+      submitRetryNow: 'Қазір жіберу',
+      sendingScreen: 'Жауаптарыңыз жіберілуде…',
+      reviewAfterEnd: 'Жауаптар талдауы оқытушы тестілеуді аяқтаған соң ашылады. Бет өздігінен жаңарады.',
+      reviewScoreOnly: 'Оқытушы жауаптар талдауын көрсетпейді — тек нәтиже.',
+      reviewCheckBtn: 'Талдау ашылғанын тексеру',
+      reviewStillClosed: 'Әзірге жабық.',
       resultTitle: 'Нәтиже',
       reviewTitle: 'Жауаптарды талдау',
       autoSubmitNote: 'Уақыт аяқталғандықтан тест автоматты түрде жіберілді.',
@@ -345,7 +408,13 @@
       scheduledBanner: '⏰ Тестілеу {dt} басталады. Бет автоматты түрде жаңарады.',
       tabWarnTitle: 'Тест бетінен кетпеңіз',
       tabWarnText: 'Сіз тестілеу кезінде бірнеше рет беттен кеттіңіз. Басқа қойындыларға ауыспаңыз және жауап іздеу үшін интернетті қолданбаңыз — бұл тіркеледі және оқытушыға көрінеді.',
-      tabWarnBtn: 'Түсінікті, жалғастырамын'
+      tabWarnBtn: 'Түсінікті, жалғастырамын',
+      submitConfirm: 'Жіберу үшін тағы бір рет басыңыз',
+      submitConfirmHint: '3 сек ішінде баспасаңыз, батырма қалпына келеді',
+      fsWarnTitle: 'Сіз толық экран режимінен шықтыңыз',
+      fsWarnText: 'Тест кезінде толық экран режимінде қалу ұсынылады. Шығу тіркеледі. Оралу үшін батырманы басыңыз.',
+      fsWarnBtn: 'Толық экранға оралу',
+      copyBlocked: 'Тест кезінде көшіруге тыйым салынады',
     }
   };
 
@@ -363,7 +432,8 @@
     timerInterval: null,
     translated: null,       // { title, questions: [{text, options[]}] } на kk
     translatedExplains: {}, // { "исходный текст пояснения": "перевод на kk" }
-    translating: false
+    translating: false,
+    titleKk: null
   };
 
   function t(key) { return UI[state.lang][key] || UI.ru[key] || key; }
@@ -379,7 +449,7 @@
   }
 
   function showScreen(id) {
-    ['screen-loading','screen-error','screen-join','screen-quiz','screen-result','screen-retry'].forEach(s => {
+    ['screen-loading','screen-error','screen-join','screen-quiz','screen-result','screen-retry','screen-sending'].forEach(s => {
       document.getElementById(s).classList.toggle('hidden', s !== id);
     });
   }
@@ -422,6 +492,7 @@
       if (data.finished) { localStorage.removeItem(LS_KEY); return 'finished'; }
       state.participantId = data.participantId;
       state.testTitle = data.testTitle;
+      state.titleKk = data.title_kk || null;
       state.timeLimit = data.timeLimit;
       state.questions = data.questions;
       const d = data.draft || {};
@@ -430,6 +501,7 @@
       state.currentIndex = Math.min(Math.max(isNaN(ci) ? 0 : ci, 0), state.questions.length - 1);
       localStorage.setItem(LS_KEY, data.participantId);
       showScreen('screen-quiz');
+      enableAntiCheat();
       if (state.timeLimit && data.deadline) {
         state.deadline = data.deadline - (data.serverNow - Date.now());
         document.getElementById('timer-box').classList.remove('hidden');
@@ -455,10 +527,12 @@
         return;
       }
       if (data.ended) {
+        if (await resumePendingSubmit()) return;
         showError(t('testEnded'));
         return;
       }
       state.testTitle = data.testTitle;
+      state.titleKk = data.title_kk || null;
       state.timeLimit = data.timeLimit;
       document.getElementById('join-title').textContent = data.testTitle;
       document.getElementById('join-qcount').textContent = `${data.questionCount} ${t('questionsWord')}`;
@@ -470,6 +544,7 @@
       if (data.scheduledAt && data.scheduledAt > Date.now()) {
         showScheduledBanner(data.scheduledAt);
       }
+      if (await resumePendingSubmit()) return;
       const savedId = localStorage.getItem(LS_KEY);
       if (savedId && (await resumeTest({ participantId: savedId })) === true) return;
       showScreen('screen-join');
@@ -505,7 +580,42 @@
     return state.testTitle;
   }
 
+  // Готовый казахский перевод (загружен админом из Excel / переведён заранее) приходит
+  // вместе с вопросами: text_kk / options_kk. Если он есть для ВСЕХ вопросов — используем его
+  // и не ходим во внешний сервис перевода.
+  function buildPrebuiltKk() {
+    if (!state.questions.length) return null;
+    const ok = state.questions.every(q => q.text_kk && Array.isArray(q.options_kk) &&
+      q.options_kk.length === q.options.length && q.options_kk.every(o => o));
+    if (!ok) return null;
+    return {
+      title: state.titleKk || state.testTitle,
+      questions: state.questions.map(q => ({ text: q.text_kk, options: q.options_kk.slice() }))
+    };
+  }
+
+  function showTranslateFail() {
+    let el = document.getElementById('translate-fail-note');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'translate-fail-note';
+      el.style.cssText = 'position:fixed; left:12px; right:12px; bottom:16px; z-index:9999; background:#fff8ec; border-left:3px solid #F07C00; border-radius:10px; padding:12px 14px; font-size:14px; color:#2C3E50; box-shadow:0 4px 16px rgba(0,0,0,.15);';
+      document.body.appendChild(el);
+    }
+    el.textContent = t('translateFail');
+    setTimeout(() => { if (el.parentNode) el.remove(); }, 6000);
+  }
+
   async function translateAll() {
+    const pre = buildPrebuiltKk();
+    if (pre) {
+      state.translated = pre;
+      if (!document.getElementById('screen-quiz').classList.contains('hidden')) renderQuestion();
+      if (!document.getElementById('screen-join').classList.contains('hidden')) {
+        document.getElementById('join-title').textContent = displayTitle();
+      }
+      return;
+    }
     state.translating = true;
     const texts = [state.testTitle];
     state.questions.forEach(q => {
@@ -513,24 +623,34 @@
       q.options.forEach(o => texts.push(o));
     });
     try {
-      const res = await fetch('/api/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ texts, target: 'kk' })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'translate error');
+      // режем на пачки, чтобы не упереться в лимит строк на один запрос
+      const CHUNK = 150;
+      const all = [];
+      for (let i = 0; i < texts.length; i += CHUNK) {
+        const res = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ texts: texts.slice(i, i + CHUNK), target: 'kk' })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !Array.isArray(data.translations)) throw new Error(data.error || ('http ' + res.status));
+        all.push(...data.translations);
+      }
       let ptr = 0;
-      const title = data.translations[ptr++];
+      const title = all[ptr++];
       const questions = state.questions.map(q => {
-        const text = data.translations[ptr++];
-        const options = q.options.map(() => data.translations[ptr++]);
+        const text = all[ptr++];
+        const options = q.options.map(() => all[ptr++]);
         return { text, options };
       });
+      // если сервис вернул оригинал без перевода — считаем сбоем
+      const changed = questions.some((q, i) => q.text !== state.questions[i].text);
       state.translated = { title, questions };
+      if (!changed) showTranslateFail();
     } catch (e) {
       console.warn('[translate] fail', e);
       state.translated = null;
+      showTranslateFail();
     } finally {
       state.translating = false;
       if (!document.getElementById('screen-quiz').classList.contains('hidden')) renderQuestion();
@@ -575,7 +695,7 @@
   // Выбор при совпадении имени. Встроен в страницу (а не confirm()): во встроенных браузерах
   // мессенджеров системные окна часто блокируются, и ученика просто «не пускало».
   let forceNewJoin = false;
-  function showNameConflict(message, canContinue, onContinue, onNew) {
+  function showNameConflict(message, canContinue, onContinue, onNew, rosterMode) {
     const old = document.getElementById('name-conflict');
     if (old) old.remove();
     const box = document.createElement('div');
@@ -591,7 +711,7 @@
       box.appendChild(b);
     };
     if (canContinue) mk('Это я — продолжить с того же места', true, onContinue);
-    mk('Я другой человек — войти как новый участник', !canContinue, onNew);
+    if (!rosterMode) mk('Я другой человек — войти как новый участник', !canContinue, onNew);
     document.getElementById('join-btn').insertAdjacentElement('beforebegin', box);
     box.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
@@ -627,7 +747,7 @@
               errEl.classList.remove('hidden');
             }
           },
-          () => { forceNewJoin = true; joinTest(); });
+          () => { forceNewJoin = true; joinTest(); }, !!data.roster);
         return;
       }
       if (!res.ok) {
@@ -639,12 +759,14 @@
       }
       state.participantId = data.participantId;
       state.testTitle = data.testTitle;
+      state.titleKk = data.title_kk || null;
       state.timeLimit = data.timeLimit;
       state.questions = data.questions;
       state.currentIndex = 0;
       state.answers = {};
       localStorage.setItem(LS_KEY, data.participantId);
       showScreen('screen-quiz');
+      enableAntiCheat();
       if (state.timeLimit) {
         state.deadline = data.deadline ? data.deadline - (data.serverNow - Date.now()) : Date.now() + state.timeLimit * 60 * 1000;
         document.getElementById('timer-box').classList.remove('hidden');
@@ -771,6 +893,143 @@
 
   let lastResult = null;
 
+
+  // ==================== АНТИЧИТ: КОПИРОВАНИЕ, ПОЛНЫЙ ЭКРАН, ЗАЩИТА ОТПРАВКИ ====================
+  let quizActive = false;
+  let submitConfirmTimer = null;
+  let submitConfirmArmed = false;
+  let fsExitCount = 0;
+  let wantFullscreen = true; // после старта просим полный экран
+
+  function isQuizScreen() {
+    const el = document.getElementById('screen-quiz');
+    return el && !el.classList.contains('hidden');
+  }
+
+  function enableAntiCheat() {
+    quizActive = true;
+    document.body.classList.add('quiz-active');
+    // Попытка перейти в полный экран (на мобильных часто блокируется — это нормально)
+    requestQuizFullscreen();
+  }
+
+  function disableAntiCheat() {
+    quizActive = false;
+    document.body.classList.remove('quiz-active');
+    resetSubmitConfirm();
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      try {
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        if (exit) exit.call(document);
+      } catch (e) {}
+    }
+  }
+
+  function requestQuizFullscreen() {
+    if (!wantFullscreen) return;
+    const root = document.documentElement;
+    const req = root.requestFullscreen || root.webkitRequestFullscreen || root.msRequestFullscreen;
+    if (!req) return;
+    try {
+      const p = req.call(root);
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch (e) {}
+  }
+
+  function dismissFsWarning() {
+    document.getElementById('fs-warn-overlay').classList.add('hidden');
+    requestQuizFullscreen();
+  }
+
+  // Выход из полного экрана во время теста
+  function onFullscreenChange() {
+    const inFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    if (!quizActive || !isQuizScreen()) return;
+    if (!inFs) {
+      fsExitCount++;
+      // Фиксируем для преподавателя (как переключение вкладки)
+      if (state.participantId) {
+        const s = (typeof ensureLiveSocket === 'function') ? ensureLiveSocket() : null;
+        if (s) s.emit('student:tabswitch', {
+          code: CODE,
+          participantId: state.participantId,
+          awayMs: 0,
+          isLong: true,
+          reason: 'fullscreen_exit'
+        });
+      }
+      // Показываем предупреждение после первого выхода
+      if (fsExitCount >= 1) {
+        document.getElementById('fs-warn-overlay').classList.remove('hidden');
+        // Обновляем тексты i18n на случай смены языка
+        const title = document.querySelector('#fs-warn-overlay [data-i18n="fsWarnTitle"]');
+        const text = document.querySelector('#fs-warn-overlay [data-i18n="fsWarnText"]');
+        const btn = document.querySelector('#fs-warn-overlay [data-i18n="fsWarnBtn"]');
+        if (title) title.textContent = t('fsWarnTitle');
+        if (text) text.textContent = t('fsWarnText');
+        if (btn) btn.textContent = t('fsWarnBtn');
+      }
+    }
+  }
+  document.addEventListener('fullscreenchange', onFullscreenChange);
+  document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+
+  // Блокировка копирования / выделения / контекстного меню во время теста
+  function blockIfQuiz(e) {
+    if (!quizActive || !isQuizScreen()) return;
+    e.preventDefault();
+    return false;
+  }
+  document.addEventListener('copy', blockIfQuiz);
+  document.addEventListener('cut', blockIfQuiz);
+  document.addEventListener('contextmenu', blockIfQuiz);
+  document.addEventListener('selectstart', function(e) {
+    if (!quizActive || !isQuizScreen()) return;
+    // Разрешаем в полях ввода (если появятся)
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    e.preventDefault();
+  });
+  // Горячие клавиши Ctrl+C / Ctrl+A / Ctrl+U / Ctrl+S / F12 (частично)
+  document.addEventListener('keydown', function(e) {
+    if (!quizActive || !isQuizScreen()) return;
+    const key = (e.key || '').toLowerCase();
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (ctrl && (key === 'c' || key === 'x' || key === 'a' || key === 'u' || key === 's' || key === 'p')) {
+      e.preventDefault();
+      return false;
+    }
+    // F12 / Ctrl+Shift+I — мягкая блокировка (полностью запретить DevTools нельзя)
+    if (key === 'f12' || (ctrl && e.shiftKey && (key === 'i' || key === 'j' || key === 'c'))) {
+      e.preventDefault();
+      return false;
+    }
+  });
+
+  // Защита от случайного нажатия «Отправить»: двойное подтверждение
+  function resetSubmitConfirm() {
+    submitConfirmArmed = false;
+    clearTimeout(submitConfirmTimer);
+    submitConfirmTimer = null;
+    const btn = document.getElementById('submit-btn');
+    if (btn) {
+      btn.classList.remove('confirm-pending');
+      btn.textContent = t('submitBtn');
+      btn.disabled = false;
+    }
+  }
+
+  function armSubmitConfirm() {
+    const btn = document.getElementById('submit-btn');
+    if (!btn) return;
+    submitConfirmArmed = true;
+    btn.classList.add('confirm-pending');
+    btn.textContent = t('submitConfirm');
+    clearTimeout(submitConfirmTimer);
+    submitConfirmTimer = setTimeout(resetSubmitConfirm, 3000);
+  }
+
+
   // ==================== ОТСЛЕЖИВАНИЕ ПЕРЕКЛЮЧЕНИЯ ВКЛАДКИ ====================
   // Используем стандартный Page Visibility API — единственный надёжный способ узнать,
   // что студент свернул/переключил вкладку. Заблокировать сам скриншот или переключение
@@ -817,28 +1076,134 @@
     document.getElementById('tab-warn-overlay').classList.add('hidden');
   }
 
+  // ==================== НАДЁЖНАЯ ОТПРАВКА ОТВЕТОВ ====================
+  // Перед отправкой ответы сохраняются на устройстве (localStorage). Если связи нет или сервер
+  // не ответил, отправка повторяется сама (с нарастающей паузой и сразу при появлении сети) —
+  // в том числе после перезагрузки страницы. Студент не теряет ответы из-за плохого Wi-Fi.
+  const LS_PENDING = 'testPending_' + CODE;
+  let submitting = false;
+  let retryTimer = null;
+  let retryDelay = 3000;
+
+  function readPending() {
+    try { const v = JSON.parse(localStorage.getItem(LS_PENDING) || 'null'); return v && v.participantId ? v : null; } catch (e) { return null; }
+  }
+  function clearPending() { try { localStorage.removeItem(LS_PENDING); } catch (e) {} }
+
+  function setSubmitStatus(text, showRetry) {
+    const box = document.getElementById('submit-status');
+    box.textContent = text || '';
+    box.classList.toggle('hidden', !text);
+    document.getElementById('submit-retry-btn').classList.toggle('hidden', !showRetry);
+    document.getElementById('submit-retry-btn').textContent = t('submitRetryNow');
+    const sending = document.getElementById('sending-text');
+    if (sending) sending.textContent = text || t('sendingScreen');
+    const rb = document.getElementById('sending-retry-btn');
+    if (rb) { rb.classList.toggle('hidden', !showRetry); rb.textContent = t('submitRetryNow'); }
+  }
+
+  async function fetchOwnResult(pid) {
+    try {
+      const res = await fetch(`/api/sessions/${CODE}/review?participantId=${encodeURIComponent(pid)}`);
+      if (!res.ok) return null;
+      const d = await res.json();
+      return { score: d.score, total: d.total, review: d.review || [], reviewHidden: d.available ? null : (d.reviewHidden || 'immediately') };
+    } catch (e) { return null; }
+  }
+
+  function finishSubmit(data, auto, pid) {
+    if (pid) state.participantId = pid;
+    clearTimeout(retryTimer); retryTimer = null;
+    clearTimeout(progressTimer);
+    localStorage.removeItem(LS_KEY);
+    clearPending();
+    setSubmitStatus('', false);
+    lastResult = data;
+    lastResult.review = lastResult.review || [];
+    lastResult.auto = auto;
+    showResult();
+  }
+
+  function scheduleRetry(payload) {
+    setSubmitStatus(t('submitRetrying'), true);
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => trySubmit(payload), retryDelay);
+    retryDelay = Math.min(Math.round(retryDelay * 1.6), 20000);
+  }
+
+  async function trySubmit(payload) {
+    if (submitting) return;
+    submitting = true;
+    clearTimeout(retryTimer); retryTimer = null;
+    try {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 20000);
+      let res;
+      try {
+        res = await fetch(`/api/sessions/${CODE}/submit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ participantId: payload.participantId, answers: payload.answers, tabSwitchLog: payload.tabSwitchLog }),
+          signal: ctrl.signal
+        });
+      } finally { clearTimeout(to); }
+      let data = {};
+      try { data = await res.json(); } catch (e) { /* не JSON — сервер/прокси отдал ошибку */ }
+      if (res.ok) { finishSubmit(data, payload.auto, payload.participantId); return; }
+      if (res.status === 400 && /уже сдан/i.test(data.error || '')) {
+        // Предыдущая попытка дошла, а ответ потерялся по дороге — забираем свой результат.
+        const own = await fetchOwnResult(payload.participantId);
+        if (own) { finishSubmit(own, payload.auto, payload.participantId); return; }
+      }
+      if (res.status >= 500 || res.status === 429 || res.status === 408 || (!data.error && res.status !== 404)) { scheduleRetry(payload); return; }
+      clearPending();
+      showError(data.error || t('notFound'));
+    } catch (e) {
+      scheduleRetry(payload); // обрыв сети, таймаут, переключение Wi-Fi
+    } finally {
+      submitting = false;
+    }
+  }
+
+  function retrySubmitNow() {
+    const p = readPending();
+    if (p) { retryDelay = 3000; trySubmit(p); }
+  }
+  window.addEventListener('online', () => { if (readPending() && !submitting) retrySubmitNow(); });
+
+  function requestSubmit() {
+    // Защита от случайного нажатия: первое нажатие — предупреждение, второе (в течение 3 сек) — отправка
+    if (submitting || readPending()) return;
+    if (!submitConfirmArmed) {
+      armSubmitConfirm();
+      return;
+    }
+    resetSubmitConfirm();
+    submitTest(false);
+  }
+
   async function submitTest(auto) {
+    if (submitting || readPending()) return; // уже отправляем
+    resetSubmitConfirm();
+    disableAntiCheat();
     if (state.timerInterval) clearInterval(state.timerInterval);
     document.getElementById('submit-btn').disabled = true;
-    try {
-      const res = await fetch(`/api/sessions/${CODE}/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ participantId: state.participantId, answers: state.answers, tabSwitchLog })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        showError(data.error || t('notFound'));
-        return;
-      }
-      clearTimeout(progressTimer);
-      localStorage.removeItem(LS_KEY);
-      lastResult = data;
-      lastResult.auto = auto;
-      showResult();
-    } catch (e) {
-      showError(t('notFound'));
-    }
+    const payload = { participantId: state.participantId, answers: state.answers, tabSwitchLog, auto: !!auto };
+    try { localStorage.setItem(LS_PENDING, JSON.stringify(payload)); } catch (e) { /* хранилище недоступно — отправим без страховки */ }
+    retryDelay = 3000;
+    setSubmitStatus(t('submitSending'), false);
+    await trySubmit(payload);
+  }
+
+  // Если страницу перезагрузили, пока ответы не дошли — досылаем их, а не начинаем заново.
+  async function resumePendingSubmit() {
+    const p = readPending();
+    if (!p) return false;
+    showScreen('screen-sending');
+    setSubmitStatus(t('sendingScreen'), false);
+    retryDelay = 3000;
+    trySubmit(p);
+    return true;
   }
 
   function showResult() {
@@ -983,6 +1348,10 @@
 
     const container = document.getElementById('review-container');
     container.innerHTML = '';
+    if (lastResult.reviewHidden && !lastResult.review.length) {
+      renderReviewHidden(container);
+      return;
+    }
     lastResult.review.forEach((r, ridx) => {
       const div = document.createElement('div');
       div.className = 'review-item';
@@ -1015,6 +1384,50 @@
       `;
       container.appendChild(div);
     });
+  }
+
+  // ---- разбор скрыт режимом преподавателя («после завершения» / «только баллы») ----
+  let reviewPollTimer = null;
+
+  function renderReviewHidden(container) {
+    const box = document.createElement('div');
+    box.className = 'info-box';
+    box.textContent = lastResult.reviewHidden === 'after_end' ? t('reviewAfterEnd') : t('reviewScoreOnly');
+    container.appendChild(box);
+    if (lastResult.reviewHidden === 'after_end') {
+      const btn = document.createElement('button');
+      btn.className = 'btn outline'; btn.type = 'button';
+      btn.textContent = t('reviewCheckBtn');
+      const note = document.createElement('div');
+      note.className = 'muted'; note.style.cssText = 'font-size:13px; margin-top:6px; text-align:center;';
+      btn.onclick = async () => { const ok = await checkReviewOpened(); note.textContent = ok ? '' : t('reviewStillClosed'); };
+      container.appendChild(btn);
+      container.appendChild(note);
+      if (!reviewPollTimer) reviewPollTimer = setInterval(checkReviewOpened, 30000);
+    }
+  }
+
+  async function checkReviewOpened() {
+    if (!lastResult || !state.participantId) return false;
+    try {
+      const pid = state.participantId;
+      const res = await fetch(`/api/sessions/${CODE}/review?participantId=${encodeURIComponent(pid)}`);
+      if (!res.ok) return false;
+      const d = await res.json();
+      if (!d.available) return false;
+      clearInterval(reviewPollTimer); reviewPollTimer = null;
+      lastResult.review = d.review || [];
+      lastResult.reviewHidden = null;
+      renderResultTexts();
+      const wrongCount = lastResult.review.filter(r => !r.isCorrect).length;
+      const retryBtn = document.getElementById('retry-wrong-btn');
+      if (wrongCount > 0) {
+        retryBtn.textContent = t('retryWrongBtn').replace('{n}', wrongCount);
+        retryBtn.classList.remove('hidden');
+      }
+      translateExplains();
+      return true;
+    } catch (e) { return false; }
   }
 
   function escapeHtml(s) {
