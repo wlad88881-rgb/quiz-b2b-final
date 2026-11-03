@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Анализ вопросов</title>
+<style>
+  :root { --bg:#f4f6fa; --card:#fff; --text:#1c2333; --muted:#667085; --line:#dfe3ec; --accent:#F07C00; --ok:#12a150; --warn:#d9822b; --bad:#d64545; --info:#2f6fed; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151c; --card:#1b2030; --text:#e8ebf3; --muted:#9aa3b8; --line:#2b3248; --accent:#ff9a2e; --ok:#3ecf7d; --warn:#f0a050; --bad:#ff7070; --info:#6a9bff; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:1040px; margin:0 auto; padding:16px; }
+  h1 { font-size:22px; margin:8px 0 4px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+  input, select { padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font:inherit; }
+  button { padding:8px 14px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.chip.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .grow { flex:1 1 200px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .err { color:var(--bad); margin:8px 0; }
+  .hidden { display:none; }
+  .kpis { display:flex; gap:10px; flex-wrap:wrap; }
+  .kpi { flex:1 1 130px; border:1px solid var(--line); border-radius:10px; padding:10px; }
+  .kpi b { display:block; font-size:22px; }
+  .q { border:1px solid var(--line); border-radius:10px; margin-bottom:8px; background:var(--card); }
+  .q > .head { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; cursor:pointer; }
+  .num { min-width:34px; font-weight:700; color:var(--muted); }
+  .qt { flex:1 1 auto; }
+  .stat { min-width:150px; text-align:right; }
+  .bar { height:8px; border-radius:4px; background:var(--line); overflow:hidden; }
+  .bar > i { display:block; height:100%; }
+  .good { background:var(--ok); } .mid { background:var(--warn); } .low { background:var(--bad); }
+  .flag { display:inline-block; font-size:12px; padding:1px 8px; border-radius:10px; margin:3px 4px 0 0; border:1px solid var(--line); }
+  .flag.bad { border-color:var(--bad); color:var(--bad); } .flag.warn { border-color:var(--warn); color:var(--warn); } .flag.info { border-color:var(--info); color:var(--info); }
+  .detail { padding:6px 12px 12px 56px; border-top:1px dashed var(--line); }
+  .opt { display:flex; gap:8px; align-items:center; margin:5px 0; }
+  .opt .ot { flex:1 1 55%; } .opt .ob { flex:0 0 130px; } .opt .op { flex:0 0 90px; text-align:right; font-variant-numeric:tabular-nums; }
+  .opt.right .ot { font-weight:600; }
+  .opt.right .ot::after { content:" ✓"; color:var(--ok); }
+  .tag { display:inline-block; padding:0 7px; margin-right:4px; border-radius:9px; font-size:12px; border:1px solid var(--line); color:var(--muted); }
+  @media (max-width:640px) { .detail { padding-left:12px; } .stat { min-width:100px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📊 Анализ вопросов</h1>
+  <div class="muted">Какие вопросы слишком трудные, слишком лёгкие, не различают сильных и слабых студентов или имеют сомнительный ключ ответа. Считается по всем завершённым сессиям теста.</div>
+
+  <div id="loginBox" class="card hidden" style="margin-top:12px">
+    <b>Вход преподавателя</b>
+    <div class="row" style="margin-top:8px">
+      <input id="email" class="grow" type="email" placeholder="Email">
+      <input id="password" class="grow" type="password" placeholder="Пароль">
+      <button class="primary" id="loginBtn">Войти</button>
+    </div>
+    <div id="loginErr" class="err"></div>
+  </div>
+
+  <div id="main" class="hidden">
+    <div class="card" style="margin-top:12px">
+      <div class="row">
+        <select id="testSel" class="grow"></select>
+        <input id="codeInput" placeholder="Код сессии (необязательно)" maxlength="12" style="width:210px">
+        <button class="primary" id="go">Показать</button>
+        <button id="xlsx">⬇ Excel</button>
+      </div>
+      <div id="msg" class="err"></div>
+    </div>
+    <div id="out"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var token = localStorage.getItem('b2bToken') || sessionStorage.getItem('itemAnalysisToken') || '';
+  var data = null, filter = 'all';
+  function $(id) { return document.getElementById(id); }
+  function el(tag, props, kids) {
+    var e = document.createElement(tag);
+    if (props) Object.keys(props).forEach(function (k) {
+      if (k === 'text') e.textContent = props[k];
+      else if (k === 'class') e.className = props[k];
+      else if (k === 'style') e.style.cssText = props[k];
+      else if (k.indexOf('on') === 0) e.addEventListener(k.slice(2), props[k]);
+      else e.setAttribute(k, props[k]);
+    });
+    (kids || []).forEach(function (c) { if (c) e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+    return e;
+  }
+  function api(url) {
+    return fetch(url, { headers: { 'x-company-id': token } }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (r.status === 401) { showLogin(); throw new Error('Нужен вход'); }
+        if (!r.ok) throw new Error(d.error || d.message || ('Ошибка ' + r.status));
+        return d;
+      });
+    });
+  }
+  function showLogin() { token = ''; $('loginBox').classList.remove('hidden'); $('main').classList.add('hidden'); }
+  function showMain() { $('loginBox').classList.add('hidden'); $('main').classList.remove('hidden'); loadTests(); }
+
+  $('loginBtn').addEventListener('click', function () {
+    $('loginErr').textContent = '';
+    fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email').value, password: $('password').value }) })
+      .then(function (r) { return r.json().then(function (d) { return { r: r, d: d }; }); })
+      .then(function (x) {
+        if (!x.r.ok || !x.d.token) { $('loginErr').textContent = x.d.error || x.d.message || 'Не удалось войти'; return; }
+        token = x.d.token; sessionStorage.setItem('itemAnalysisToken', token); showMain();
+      }).catch(function () { $('loginErr').textContent = 'Нет связи с сервером'; });
+  });
+
+  function loadTests() {
+    api('/api/tests').then(function (tests) {
+      var sel = $('testSel'); sel.textContent = '';
+      tests.forEach(function (t) { sel.appendChild(el('option', { value: t.id, text: t.title + ' (' + t.questions.length + ' вопр.)' })); });
+      var want = new URLSearchParams(location.search).get('test');
+      if (want) sel.value = want;
+      if (want) run();
+    }).catch(function (e) { $('msg').textContent = e.message; });
+  }
+
+  function url(extra) {
+    var u = '/api/tests/' + encodeURIComponent($('testSel').value) + '/item-analysis';
+    var q = [];
+    var code = $('codeInput').value.trim(); if (code) q.push('code=' + encodeURIComponent(code));
+    if (extra) q.push(extra);
+    return u + (q.length ? '?' + q.join('&') : '');
+  }
+  function run() {
+    $('msg').textContent = ''; $('out').textContent = '';
+    if (!$('testSel').value) return;
+    api(url()).then(function (d) { data = d; render(); }).catch(function (e) { $('msg').textContent = e.message; });
+  }
+  $('go').addEventListener('click', run);
+  $('xlsx').addEventListener('click', function () {
+    if (!$('testSel').value) return;
+    fetch(url('format=xlsx'), { headers: { 'x-company-id': token } }).then(function (r) {
+      if (!r.ok) throw new Error('Не удалось скачать');
+      return r.blob();
+    }).then(function (b) {
+      var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'item-analysis.xlsx';
+      document.body.appendChild(a); a.click(); a.remove();
+    }).catch(function (e) { $('msg').textContent = e.message; });
+  });
+
+  var FILTERS = [
+    ['all', 'Все'], ['attn', 'Требуют внимания'], ['key', 'Ключ под сомнением'], ['hard', 'Слишком трудные'],
+    ['easy', 'Слишком лёгкие'], ['disc', 'Плохо различают'], ['skip', 'Часто пропускают']
+  ];
+  function matches(q, f) {
+    var codes = q.flags.map(function (x) { return x.code; });
+    if (f === 'all') return true;
+    if (f === 'attn') return q.flags.some(function (x) { return x.level === 'bad' || x.level === 'warn'; });
+    if (f === 'key') return codes.indexOf('key') >= 0 || codes.indexOf('negd') >= 0;
+    if (f === 'hard') return codes.indexOf('hard') >= 0;
+    if (f === 'easy') return codes.indexOf('easy') >= 0;
+    if (f === 'disc') return codes.indexOf('weakd') >= 0 || codes.indexOf('negd') >= 0;
+    if (f === 'skip') return codes.indexOf('skip') >= 0;
+    return true;
+  }
+  function barCls(p) { return p === null ? 'mid' : p >= 70 ? 'good' : p >= 40 ? 'mid' : 'low'; }
+
+  function render() {
+    var out = $('out'); out.textContent = '';
+    if (!data.participants) {
+      out.appendChild(el('div', { class: 'card', text: 'Пока нет завершённых работ по этому тесту — анализировать нечего.' })); return;
+    }
+    var k = el('div', { class: 'kpis' }, [
+      el('div', { class: 'kpi' }, [el('b', { text: String(data.participants) }), 'завершили (сессий: ' + data.sessions + ')']),
+      el('div', { class: 'kpi' }, [el('b', { text: data.avgPct === null ? '—' : data.avgPct + '%' }), 'средний % верных по вопросам']),
+      el('div', { class: 'kpi' }, [el('b', { text: String(data.attention) }), 'вопросов требуют внимания'])
+    ]);
+    var card = el('div', { class: 'card' }, [k]);
+    if (!data.reliable) card.appendChild(el('div', { class: 'muted', style: 'margin-top:8px', text: '⚠ Завершивших меньше ' + data.minForD + ': индекс различения (D) не считается, а остальные выводы предварительные. Чем больше групп, тем надёжнее анализ.' }));
+    card.appendChild(el('div', { class: 'muted', style: 'margin-top:8px', text: 'D — разница в доле верных ответов между сильнейшими и слабейшими ~27% студентов. Хороший вопрос: D ≥ 0,3; D < 0 — признак ошибки в вопросе или ключе.' }));
+    out.appendChild(card);
+
+    var chips = el('div', { class: 'row', style: 'margin-bottom:10px' });
+    FILTERS.forEach(function (f) {
+      var cnt = data.questions.filter(function (q) { return matches(q, f[0]); }).length;
+      chips.appendChild(el('button', { class: 'chip' + (filter === f[0] ? ' on' : ''), text: f[1] + ' (' + cnt + ')', onclick: function () { filter = f[0]; render(); } }));
+    });
+    out.appendChild(chips);
+
+    var shown = data.questions.filter(function (q) { return matches(q, filter); });
+    if (filter !== 'all') shown.sort(function (a, b) { return (a.pct === null ? 101 : a.pct) - (b.pct === null ? 101 : b.pct); });
+    if (!shown.length) out.appendChild(el('div', { class: 'card muted', text: 'В этой категории вопросов нет.' }));
+    shown.forEach(function (q) { out.appendChild(questionCard(q)); });
+  }
+
+  function questionCard(q) {
+    var box = el('div', { class: 'q' });
+    var flags = el('div', null, q.flags.map(function (f) { return el('span', { class: 'flag ' + f.level, text: f.text }); }));
+    var head = el('div', { class: 'head' }, [
+      el('div', { class: 'num', text: '#' + q.n }),
+      el('div', { class: 'qt' }, [el('div', { text: q.text.length > 220 ? q.text.slice(0, 219) + '…' : q.text }), flags]),
+      el('div', { class: 'stat' }, [
+        el('div', { text: (q.pct === null ? '—' : q.pct + '%') + ' верно · ' + q.total + ' отв.' }),
+        el('div', { class: 'bar' }, [el('i', { class: barCls(q.pct), style: 'width:' + (q.pct || 0) + '%' })]),
+        el('div', { class: 'muted', text: 'D: ' + (q.discrimination === null ? '—' : q.discrimination) })
+      ])
+    ]);
+    var detail = el('div', { class: 'detail hidden' });
+    if (q.tags && q.tags.length) detail.appendChild(el('div', null, q.tags.map(function (t) { return el('span', { class: 'tag', text: t }); })));
+    q.options.forEach(function (o, i) {
+      detail.appendChild(el('div', { class: 'opt' + (o.isCorrect ? ' right' : '') }, [
+        el('div', { class: 'ot', text: (i + 1) + '. ' + o.text }),
+        el('div', { class: 'ob' }, [el('div', { class: 'bar' }, [el('i', { class: o.isCorrect ? 'good' : 'low', style: 'width:' + (o.pct || 0) + '%' })])]),
+        el('div', { class: 'op', text: (o.pct === null ? '—' : o.pct + '%') + ' (' + o.count + ')' })
+      ]));
+    });
+    if (q.noAnswer) detail.appendChild(el('div', { class: 'muted', text: 'Без ответа: ' + q.noAnswer }));
+    if (q.multi) detail.appendChild(el('div', { class: 'muted', text: 'Вопрос с несколькими верными ответами: проценты — доля выбравших вариант, верным считается только точный набор.' }));
+    head.addEventListener('click', function () { detail.classList.toggle('hidden'); });
+    box.appendChild(head); box.appendChild(detail);
+    return box;
+  }
+
+  if (token) showMain(); else showLogin();
+})();
+</script>
+</body>
+</html>

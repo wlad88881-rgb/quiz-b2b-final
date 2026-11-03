@@ -993,77 +993,294 @@ app.post('/api/tests/:id/translate', checkAuth, async (req, res) => {
 });
 
 // Загрузка готового казахского перевода из Excel (порядок вопросов = как в русском тесте).
+// ===================== ДВУЯЗЫЧНЫЙ ШАБЛОН + ПРЕДПРОСМОТР ЗАГРУЗКИ KZ =====================
+const KK_SPECIAL = /[әіңғүұқөһӘІҢҒҮҰҚӨҺ]/;
+function normKey(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase(); }
+
+// Читает Excel с казахской версией. Два формата:
+//  1) «RU+KZ» (скачивается кнопкой «Шаблон RU+KZ»): есть колонка ID — вопросы сопоставляются по ID
+//     (или по русскому тексту), порядок строк больше не важен;
+//  2) старый: только KZ в тех же колонках, что и русский шаблон, — по порядку строк.
+function parseKkFile(buffer, test) {
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  if (!rows.length) throw new Error('Пустой файл');
+  const header = rows[0].map(c => String(c == null ? '' : c).trim());
+  const idCol = header.findIndex(h => h.toLowerCase() === 'id');
+  const kzTextCol = header.findIndex(h => /^сұрақ/i.test(h));
+  const bilingual = idCol >= 0 && kzTextCol >= 0;
+  const cell = (r, c) => (c >= 0 && r[c] !== undefined && r[c] !== null) ? String(r[c]).trim() : '';
+  const out = { mode: bilingual ? 'bilingual' : 'legacy', fileRows: [] };
+
+  if (bilingual) {
+    const ruTextCol = header.findIndex(h => /^вопрос/i.test(h));
+    const optCols = {};
+    header.forEach((h, c) => { const m = h.match(/^нұсқа\s*(\d+)/i); if (m) optCols[parseInt(m[1], 10) - 1] = c; });
+    const explCol = header.findIndex(h => /^түсініктеме/i.test(h));
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      const id = cell(r, idCol);
+      const ruText = cell(r, ruTextCol);
+      const text = cell(r, kzTextCol);
+      const options = [];
+      Object.keys(optCols).map(Number).sort((a, b) => a - b).forEach(j => { options[j] = cell(r, optCols[j]); });
+      const explain = cell(r, explCol);
+      if (!id && !ruText && !text) continue;
+      out.fileRows.push({ line: i + 1, id, ruText, text, options, explain });
+    }
+  } else {
+    let start = 0;
+    const h0 = String(rows[0][0] || '').toLowerCase();
+    if (h0.includes('сұрақ') || h0.includes('вопрос') || h0.includes('question')) start = 1;
+    for (let i = start; i < rows.length; i++) {
+      const r = rows[i];
+      const text = cell(r, 0);
+      if (!text) continue;
+      const options = [];
+      for (let c = 1; c <= 5; c++) { const v = cell(r, c); if (v) options.push(v); }
+      out.fileRows.push({ line: i + 1, id: '', ruText: '', text, options, explain: cell(r, 8) });
+    }
+  }
+  return out;
+}
+
+function buildKkPreview(test, parsed) {
+  const qs = test.questions;
+  const used = new Set();
+  const byId = new Map(); const byRu = new Map();
+  parsed.fileRows.forEach((fr, idx) => {
+    if (fr.id) byId.set(fr.id, idx);
+    if (fr.ruText) { const k = normKey(fr.ruText); if (!byRu.has(k)) byRu.set(k, []); byRu.get(k).push(idx); }
+  });
+  const fatal = [];
+  const rowsOut = [];
+  let matchedBy = { id: 0, text: 0, order: 0 };
+
+  if (parsed.mode === 'legacy' && parsed.fileRows.length !== qs.length) {
+    fatal.push('Число вопросов не совпадает: в тесте ' + qs.length + ', в файле ' + parsed.fileRows.length +
+      '. В старом формате строки сопоставляются по порядку. Скачайте «Шаблон RU+KZ» — там вопросы сопоставляются по ID, порядок не важен.');
+  }
+
+  qs.forEach((q, i) => {
+    let idx = -1; let how = '';
+    let changedNote = '';
+    if (parsed.mode === 'bilingual') {
+      // Главный ключ — русский текст вопроса (id в тесте позиционные и могут сдвинуться при правке теста).
+      const cand = (byRu.get(normKey(q.text)) || []).filter(k => !used.has(k));
+      if (cand.length) {
+        const same = cand.find(k => parsed.fileRows[k].id === String(q.id));
+        idx = same !== undefined ? same : cand[0]; how = same !== undefined ? 'id' : 'text';
+      } else if (byId.has(String(q.id)) && !used.has(byId.get(String(q.id)))) {
+        const k = byId.get(String(q.id));
+        if (parsed.fileRows[k].ruText && normKey(parsed.fileRows[k].ruText) !== normKey(q.text)) changedNote = 'Русский текст вопроса в тесте изменён после выгрузки шаблона — строка не применена, чтобы не перепутать вопросы. Скачайте шаблон заново.';
+        else { idx = k; how = 'id'; }
+      }
+    } else if (i < parsed.fileRows.length) { idx = i; how = 'order'; }
+    if (idx >= 0 && used.has(idx)) { idx = -1; how = ''; }
+    const ru = { text: q.text, options: (q.options || []).slice(), explain: q.explain || '' };
+    const row = { n: i + 1, id: q.id, ru, kk: null, status: 'missing', issues: [], matchedBy: how || null };
+    if (idx < 0) {
+      row.issues.push({ level: 'error', text: changedNote || 'В файле нет строки для этого вопроса' });
+      rowsOut.push(row); return;
+    }
+    used.add(idx); matchedBy[how]++;
+    const fr = parsed.fileRows[idx];
+    const kk = { text: fr.text, options: [], explain: fr.explain || '' };
+    const need = ru.options.length;
+    for (let j = 0; j < need; j++) kk.options.push((fr.options[j] || '').trim());
+    row.kk = kk; row.line = fr.line;
+    if (!kk.text) row.issues.push({ level: 'error', text: 'Нет казахского текста вопроса' });
+    const emptyOpts = kk.options.map((o, j) => o ? null : j + 1).filter(Boolean);
+    if (emptyOpts.length) row.issues.push({ level: 'error', text: 'Нет перевода вариантов: ' + emptyOpts.join(', ') + ' (из ' + need + ')' });
+    if (kk.text) {
+      if (normKey(kk.text) === normKey(ru.text)) row.issues.push({ level: 'warn', text: 'Текст совпадает с русским — возможно, не переведён' });
+      else if (kk.text.length >= 20 && !KK_SPECIAL.test(kk.text)) row.issues.push({ level: 'warn', text: 'В тексте нет казахских букв (ә, і, ң, ғ, ү, ұ, қ, ө, һ) — похоже на русский' });
+    }
+    if (ru.explain && !kk.explain) row.issues.push({ level: 'warn', text: 'Есть русское пояснение, а казахского нет' });
+    row.status = row.issues.some(x => x.level === 'error') ? 'error' : (row.issues.length ? 'warn' : 'ok');
+    rowsOut.push(row);
+  });
+
+  const extra = parsed.fileRows.filter((_, idx) => !used.has(idx)).map(fr => ({ line: fr.line, id: fr.id, text: (fr.ruText || fr.text || '').slice(0, 120) }));
+  const summary = { total: qs.length, ok: 0, warn: 0, error: 0, missing: 0 };
+  rowsOut.forEach(r => { if (r.status === 'missing') { summary.missing++; summary.error++; } else summary[r.status]++; });
+  const applicable = rowsOut.filter(r => r.status === 'ok' || r.status === 'warn').length;
+  return { mode: parsed.mode, matchedBy, fatal, extra, summary, applicable, canApply: fatal.length === 0 && applicable > 0, rows: rowsOut };
+}
+
 app.post('/api/tests/:id/import-kk', checkAuth, upload.single('file'), async (req, res) => {
   const data = db.load();
   const test = safeGet(data.tests, req.params.id);
   if (!test || test.companyId !== req.companyId) return res.status(404).json({ error: 'Тест не найден' });
   if (!req.file) return res.status(400).json({ error: 'Нужен Excel-файл' });
 
-  let workbook;
-  try {
-    workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-  } catch (e) {
-    return res.status(400).json({ error: 'Не удалось прочитать Excel' });
-  }
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-  if (!rows.length) return res.status(400).json({ error: 'Пустой файл' });
+  let parsed;
+  try { parsed = parseKkFile(req.file.buffer, test); }
+  catch (e) { return res.status(400).json({ error: e.message === 'Пустой файл' ? 'Пустой файл' : 'Не удалось прочитать Excel' }); }
+  if (!parsed.fileRows.length) return res.status(400).json({ error: 'В файле нет вопросов' });
 
-  let start = 0;
-  const h0 = String(rows[0][0] || '').toLowerCase();
-  if (h0.includes('сұрақ') || h0.includes('вопрос') || h0.includes('question')) start = 1;
+  const preview = buildKkPreview(test, parsed);
 
-  const kkRows = [];
-  for (let i = start; i < rows.length; i++) {
-    const row = rows[i];
-    const text = String(row[0] || '').trim();
-    if (!text) continue;
-    const options = [];
-    for (let c = 1; c <= 5; c++) {
-      const v = String(row[c] || '').trim();
-      if (v) options.push(v);
-    }
-    const explain = String(row[8] || '').trim();
-    kkRows.push({ text, options, explain });
+  // Предпросмотр: ничего не сохраняем
+  if (req.query.dry === '1') return res.json({ ok: true, dryRun: true, ...preview });
+
+  if (preview.fatal.length) return res.status(400).json({ error: preview.fatal[0] });
+  if (!preview.canApply) return res.status(400).json({ error: 'Нет ни одной строки, которую можно применить. Откройте предпросмотр и исправьте ошибки.' });
+  const hasErrors = preview.summary.error > 0;
+  if (hasErrors && req.query.partial !== '1') {
+    return res.status(409).json({ error: 'В файле есть строки с ошибками (' + preview.summary.error + '). Подтвердите частичную загрузку или исправьте файл.', needsConfirm: true, summary: preview.summary });
   }
 
-  if (kkRows.length === 0) return res.status(400).json({ error: 'В файле нет вопросов' });
-  if (kkRows.length !== test.questions.length) {
-    return res.status(400).json({
-      error: 'Число вопросов не совпадает: в тесте ' + test.questions.length + ', в файле ' + kkRows.length + '. Нужен тот же порядок, что в русском тесте.'
-    });
-  }
-
-  for (let i = 0; i < test.questions.length; i++) {
-    const need = (test.questions[i].options || []).length;
-    const got = kkRows[i].options.length;
-    if (got < need) {
-      return res.status(400).json({
-        error: 'Вопрос ' + (i + 1) + ': в русском ' + need + ' вариантов, в KZ-файле ' + got + '.'
-      });
-    }
-  }
-
+  const byQ = new Map(); preview.rows.forEach(r => byQ.set(String(r.id), r));
   await db.update((d) => {
     const t = safeGet(d.tests, req.params.id);
     if (!t) return;
+    const prev = new Map((t.questions_kk || []).map(x => [String(x.id), x]));
     t.title_kk = t.title_kk || t.title;
-    t.questions_kk = t.questions.map((q, i) => ({
-      id: q.id,
-      text: kkRows[i].text,
-      options: (q.options || []).map((_, j) => kkRows[i].options[j] || q.options[j]),
-      explain: kkRows[i].explain || ''
-    }));
+    let missing = 0;
+    t.questions_kk = t.questions.map((q) => {
+      const r = byQ.get(String(q.id));
+      if (r && (r.status === 'ok' || r.status === 'warn')) {
+        return { id: q.id, text: r.kk.text, options: (q.options || []).map((_, j) => r.kk.options[j] || q.options[j]), explain: r.kk.explain || '' };
+      }
+      missing++;
+      const old = prev.get(String(q.id));
+      return old || { id: q.id, text: q.text, options: (q.options || []).slice(), explain: q.explain || '' };
+    });
     if (!t.translation) t.translation = emptyTranslationMeta();
     t.translation.status = 'ready';
     t.translation.updatedAt = Date.now();
-    t.translation.provider = 'manual-excel';
-    t.translation.progress = { done: t.questions.length, total: t.questions.length };
+    t.translation.provider = missing ? 'manual-excel-partial' : 'manual-excel';
+    t.translation.missing = missing;
+    t.translation.progress = { done: t.questions.length - missing, total: t.questions.length };
     t.translation.error = null;
   });
-
-  res.json({ ok: true, status: 'ready', count: kkRows.length });
+  res.json({ ok: true, status: 'ready', count: preview.applicable, missing: preview.summary.total - preview.applicable, mode: preview.mode });
 });
+
+// Двуязычный шаблон: RU и KZ рядом, строки привязаны к ID вопроса (порядок не важен).
+app.get('/api/tests/:id/export-bilingual', checkAuth, (req, res) => {
+  const data = db.load();
+  const test = safeGet(data.tests, req.params.id);
+  if (!test || test.companyId !== req.companyId) return res.status(404).json({ error: 'Тест не найден' });
+  const maxOpts = Math.min(8, Math.max(5, ...test.questions.map(q => (q.options || []).length)));
+  const header = ['ID', '№', 'Вопрос (RU)', 'Сұрақ (KZ)'];
+  for (let j = 1; j <= maxOpts; j++) { header.push('Вариант ' + j + ' (RU)', 'Нұсқа ' + j + ' (KZ)'); }
+  header.push('Правильные (номера)', 'Теги', 'Пояснение (RU)', 'Түсініктеме (KZ)');
+  const kkById = new Map((test.questions_kk || []).map(x => [String(x.id), x]));
+  const hasKk = !!(test.translation && test.translation.status === 'ready');
+  const aoa = [header];
+  test.questions.forEach((q, i) => {
+    const kk = hasKk ? kkById.get(String(q.id)) : null;
+    const correctIdxs = q.multi ? q.correct : [q.correct];
+    const row = [xl(String(q.id)), i + 1, xl(q.text), kk ? xl(kk.text) : ''];
+    for (let j = 0; j < maxOpts; j++) {
+      row.push(q.options[j] !== undefined ? xl(q.options[j]) : '', kk && kk.options && kk.options[j] !== undefined && q.options[j] !== undefined ? xl(kk.options[j]) : '');
+    }
+    row.push(correctIdxs.map(k => k + 1).join(','), (q.tags || []).join(', '), xl(q.explain || ''), kk ? xl(kk.explain || '') : '');
+    aoa.push(row);
+  });
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = header.map((h, c) => ({ wch: c === 0 ? 12 : c === 1 ? 5 : /Вопрос|Сұрақ|Пояснение|Түсініктеме/.test(h) ? 48 : 28 }));
+  const info = XLSX.utils.aoa_to_sheet([
+    ['Как заполнять'],
+    ['1. Заполните только колонки с (KZ): «Сұрақ», «Нұсқа 1…», «Түсініктеме». Колонки (RU) и ID не меняйте — по ID вопрос находится в тесте.'],
+    ['2. Порядок строк не важен, строки можно сортировать и фильтровать. Не удаляйте колонку ID.'],
+    ['3. Загрузите файл кнопкой «📥 KZ Excel» — перед сохранением вы увидите предпросмотр с ошибками и предупреждениями.'],
+    ['4. Строки без перевода в тесте останутся по-русски (или со старым переводом) — это можно подтвердить в предпросмотре.']
+  ]);
+  info['!cols'] = [{ wch: 120 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'RU-KZ');
+  XLSX.utils.book_append_sheet(wb, info, 'Инструкция');
+  sendXlsx(res, wb, 'test-ru-kz.xlsx');
+});
+
+// ===================== АНАЛИЗ ВОПРОСОВ (item analysis) =====================
+function buildItemAnalysis(test, sessions) {
+  const parts = [];
+  sessions.forEach(s => Object.values(s.participants || {}).forEach(p => {
+    if (p.finished && p.answers) parts.push({ p, ratio: p.total ? p.score / p.total : 0 });
+  }));
+  const N = parts.length;
+  const sorted = [...parts].sort((a, b) => b.ratio - a.ratio);
+  const g = N >= 12 ? Math.max(3, Math.round(N * 0.27)) : 0;
+  const upper = g ? sorted.slice(0, g) : []; const lower = g ? sorted.slice(-g) : [];
+  const rate = (grp, qid) => { let n = 0, c = 0; grp.forEach(({ p }) => { const a = p.answers[qid]; if (a) { n++; if (a.isCorrect) c++; } }); return n ? c / n : null; };
+
+  const questions = test.questions.map((q, i) => {
+    const opts = q.options || [];
+    const counts = opts.map(() => 0); let noAnswer = 0, n = 0, correct = 0;
+    parts.forEach(({ p }) => {
+      const a = p.answers[q.id]; if (!a) return;
+      n++; if (a.isCorrect) correct++;
+      if (q.multi) {
+        const gv = Array.isArray(a.given) ? a.given : [];
+        if (!gv.length) noAnswer++;
+        gv.forEach(k => { if (counts[k] !== undefined) counts[k]++; });
+      } else if (a.given === undefined || a.given === null || a.given === '') noAnswer++;
+      else if (counts[a.given] !== undefined) counts[a.given]++;
+    });
+    const correctSet = q.multi ? (Array.isArray(q.correct) ? q.correct : []) : [q.correct];
+    const options = opts.map((text, k) => ({ text, isCorrect: correctSet.includes(k), count: counts[k], pct: n ? Math.round(counts[k] / n * 1000) / 10 : null }));
+    const pc = n ? Math.round(correct / n * 1000) / 10 : null;
+    let D = null;
+    if (g) { const u = rate(upper, q.id), l = rate(lower, q.id); if (u !== null && l !== null) D = Math.round((u - l) * 100) / 100; }
+
+    const flags = [];
+    if (n >= 8) {
+      if (pc <= 25) flags.push({ code: 'hard', level: 'warn', text: 'Очень трудный: верно отвечают ≤ 25%' });
+      if (pc >= 95) flags.push({ code: 'easy', level: 'info', text: 'Очень лёгкий: верно отвечают ≥ 95% (не различает студентов)' });
+      if (!q.multi) {
+        const wrong = options.filter(o => !o.isCorrect).sort((a, b) => b.count - a.count)[0];
+        const right = options.find(o => o.isCorrect);
+        if (wrong && right && wrong.count > right.count && wrong.pct >= 35) {
+          flags.push({ code: 'key', level: 'bad', text: 'Неверный вариант выбирают чаще верного (' + wrong.pct + '% против ' + right.pct + '%) — проверьте ключ ответа и формулировку' });
+        }
+      }
+      if (noAnswer / n >= 0.25) flags.push({ code: 'skip', level: 'warn', text: 'Часто пропускают: ' + Math.round(noAnswer / n * 100) + '%' });
+    }
+    if (D !== null) {
+      if (D < 0) flags.push({ code: 'negd', level: 'bad', text: 'Сильные студенты ошибаются чаще слабых (D = ' + D + ') — вопрос сбивает с толку или ключ неверен' });
+      else if (D < 0.15 && pc > 25 && pc < 95) flags.push({ code: 'weakd', level: 'warn', text: 'Слабо отделяет сильных от слабых (D = ' + D + ')' });
+    }
+    if (!q.multi && n >= 15 && pc !== null && pc < 95) {
+      const dead = options.map((o, k) => ({ o, k })).filter(x => !x.o.isCorrect && x.o.count === 0).map(x => x.k + 1);
+      if (dead.length) flags.push({ code: 'dead', level: 'info', text: 'Никто не выбрал вариант(ы): ' + dead.join(', ') + ' — неработающие «отвлекатели»' });
+    }
+    return { n: i + 1, id: q.id, text: q.text, tags: q.tags || [], multi: !!q.multi, total: n, correct, pct: pc, discrimination: D, noAnswer, options, flags };
+  });
+  const answered = questions.filter(q => q.total > 0);
+  const avgPct = answered.length ? Math.round(answered.reduce((s, q) => s + (q.pct || 0), 0) / answered.length * 10) / 10 : null;
+  return {
+    participants: N, sessions: sessions.length, groupSize: g, avgPct,
+    reliable: N >= 12, minForD: 12,
+    attention: questions.filter(q => q.flags.some(f => f.level === 'bad' || f.level === 'warn')).length,
+    questions
+  };
+}
+
+app.get('/api/tests/:id/item-analysis', checkAuth, (req, res) => {
+  const data = db.load();
+  const test = safeGet(data.tests, req.params.id);
+  if (!test || test.companyId !== req.companyId) return res.status(404).json({ error: 'Тест не найден' });
+  const sessions = Object.values(data.sessions).filter(s => s.testId === req.params.id && s.companyId === req.companyId && !s.type)
+    .filter(s => !req.query.code || s.code === req.query.code);
+  const a = buildItemAnalysis(test, sessions);
+  if (req.query.format === 'xlsx') {
+    const head = ['№', 'Вопрос', 'Ответов', '% верных', 'Индекс различения D', 'Пропусков', 'Замечания', 'Распределение выбора (вариант: %)'];
+    const rows = a.questions.map(q => [q.n, xl(shortText(q.text, 200)), q.total, q.pct, q.discrimination === null ? '' : q.discrimination, q.noAnswer, xl(q.flags.map(f => f.text).join(' | ')),
+      xl(q.options.map((o, k) => (k + 1) + (o.isCorrect ? '✓' : '') + ': ' + (o.pct === null ? '—' : o.pct + '%')).join('; '))]);
+    const ws = XLSX.utils.aoa_to_sheet([head, ...rows]);
+    ws['!cols'] = [{ wch: 5 }, { wch: 60 }, { wch: 9 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 70 }, { wch: 50 }];
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Анализ вопросов');
+    return sendXlsx(res, wb, 'item-analysis.xlsx');
+  }
+  res.json({ test: { id: test.id, title: test.title }, ...a });
+});
+
+app.get('/item-analysis', (req, res) => { res.sendFile(publicFile('item-analysis.html')); });
 
 
 app.get('/api/tests/:id/stats', checkAuth, (req, res) => {
