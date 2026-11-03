@@ -83,6 +83,9 @@ const DEVELOPER_CONTACTS = process.env.DEVELOPER_CONTACTS ||
 
 const FREE_MAX_TESTS = 3;
 const FREE_MAX_QUESTIONS = 20;
+const AUDIT_LOG_MAX = 5000;
+const GLOBAL_MAX_QUESTIONS = 500;
+const GLOBAL_MAX_EXCEL_BYTES = 3 * 1024 * 1024;
 const MAX_IMAGE_LEN = 1500000; // ~1.1 МБ бинарных данных в виде base64 data URL
 
 // Проверяет изображение вопроса: допускается только data URL (картинка, отправленная
@@ -107,7 +110,26 @@ if (secretInfo && !secretInfo.persisted) {
 }
 
 app.set('trust proxy', 1);
-app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      connectSrc: ["'self'", "ws:", "wss:"],
+      fontSrc: ["'self'", "data:"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'self'"],
+      upgradeInsecureRequests: null
+    }
+  },
+  crossOriginEmbedderPolicy: false,
+  referrerPolicy: { policy: "strict-origin-when-cross-origin" }
+}));
 app.use(express.json({ limit: '3mb' }));
 
 // ---- Облачный режим (Render + Supabase): секреты в самой базе, состояние и «защита от пустой базы» ----
@@ -288,28 +310,159 @@ function wantsRemote(req) {
 // ==================== B2B: АВТОРИЗАЦИЯ И ТАРИФЫ ====================
 
 function hashPassword(password) {
-  // Устаревшая схема — оставлена только для проверки паролей, созданных до обновления безопасности.
+  // Устаревшая схема SHA-256 — только для одноразовой миграции старых аккаунтов.
   return crypto.createHash('sha256').update(password).digest('hex');
 }
 
+// scrypt с усиленными параметрами (N=16384). Формат хранения: "scrypt$N$r$p$salt$hash"
+// Старый формат "salt:hash" (N по умолчанию Node) тоже принимается при проверке.
+const SCRYPT_N = 16384;
+const SCRYPT_R = 8;
+const SCRYPT_P = 1;
+const SCRYPT_KEYLEN = 64;
+
 function hashPasswordSecure(password, existingSalt) {
   const salt = existingSalt || crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return `${salt}:${hash}`;
+  const hash = crypto.scryptSync(password, salt, SCRYPT_KEYLEN, {
+    N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P, maxmem: 64 * 1024 * 1024
+  }).toString('hex');
+  return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt}$${hash}`;
 }
 
 function verifyPasswordSecure(password, stored) {
-  if (typeof stored !== 'string' || !stored.includes(':')) return false;
-  const [salt, hash] = stored.split(':');
+  if (typeof stored !== 'string') return false;
   try {
-    const check = crypto.scryptSync(password, salt, 64).toString('hex');
-    const a = Buffer.from(hash, 'hex');
-    const b = Buffer.from(check, 'hex');
-    if (a.length !== b.length) return false;
-    return crypto.timingSafeEqual(a, b);
+    if (stored.startsWith('scrypt$')) {
+      const parts = stored.split('$');
+      if (parts.length !== 6) return false;
+      const N = parseInt(parts[1], 10);
+      const r = parseInt(parts[2], 10);
+      const p = parseInt(parts[3], 10);
+      const salt = parts[4];
+      const hash = parts[5];
+      const check = crypto.scryptSync(password, salt, SCRYPT_KEYLEN, {
+        N, r, p, maxmem: 64 * 1024 * 1024
+      }).toString('hex');
+      const a = Buffer.from(hash, 'hex');
+      const b = Buffer.from(check, 'hex');
+      if (a.length !== b.length) return false;
+      return crypto.timingSafeEqual(a, b);
+    }
+    // legacy salt:hash (старый scrypt без параметров в строке)
+    if (stored.includes(':')) {
+      const [salt, hash] = stored.split(':');
+      if (!salt || !hash) return false;
+      const check = crypto.scryptSync(password, salt, 64).toString('hex');
+      const a = Buffer.from(hash, 'hex');
+      const b = Buffer.from(check, 'hex');
+      if (a.length !== b.length) return false;
+      return crypto.timingSafeEqual(a, b);
+    }
+    return false;
   } catch (e) {
     return false;
   }
+}
+
+// ==================== АУДИТ ДЕЙСТВИЙ ====================
+function auditActorFromReq(req) {
+  if (req.admin) return { type: 'admin', id: 'admin' };
+  if (req.companyId) return { type: 'company', id: req.companyId, email: (req.company && req.company.email) || null };
+  return { type: 'anonymous', id: null };
+}
+
+async function writeAudit(actor, action, details) {
+  try {
+    await db.update((d) => {
+      if (!d.auditLog) d.auditLog = [];
+      d.auditLog.push({
+        at: Date.now(),
+        actor: actor || { type: 'system' },
+        action: String(action || '').slice(0, 80),
+        details: details && typeof details === 'object' ? details : (details ? { note: String(details).slice(0, 500) } : null),
+        ip: null
+      });
+      if (d.auditLog.length > AUDIT_LOG_MAX) {
+        d.auditLog = d.auditLog.slice(-Math.floor(AUDIT_LOG_MAX * 0.8));
+      }
+    });
+  } catch (e) {
+    console.warn('[audit] не удалось записать:', e.message);
+  }
+}
+
+function audit(req, action, details) {
+  const actor = auditActorFromReq(req);
+  if (req.ip) actor.ip = req.ip;
+  return writeAudit(actor, action, details);
+}
+
+// ==================== TOTP (2FA) ====================
+function base32Encode(buf) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = 0, value = 0, output = '';
+  for (let i = 0; i < buf.length; i++) {
+    value = (value << 8) | buf[i];
+    bits += 8;
+    while (bits >= 5) {
+      output += alphabet[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) output += alphabet[(value << (5 - bits)) & 31];
+  return output;
+}
+
+function base32Decode(str) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = String(str || '').toUpperCase().replace(/=+$/, '').replace(/\s+/g, '');
+  let bits = 0, value = 0;
+  const out = [];
+  for (let i = 0; i < clean.length; i++) {
+    const idx = alphabet.indexOf(clean[i]);
+    if (idx < 0) continue;
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      out.push((value >>> (bits - 8)) & 255);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(out);
+}
+
+function generateTotpSecret() {
+  return base32Encode(crypto.randomBytes(20));
+}
+
+function hotp(secretBuf, counter) {
+  const buf = Buffer.alloc(8);
+  buf.writeUInt32BE(Math.floor(counter / 0x100000000), 0);
+  buf.writeUInt32BE(counter & 0xffffffff, 4);
+  const hmac = crypto.createHmac('sha1', secretBuf).update(buf).digest();
+  const offset = hmac[hmac.length - 1] & 0xf;
+  const code = ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff);
+  return code % 1000000;
+}
+
+function verifyTotp(secretBase32, token, window = 1) {
+  if (!secretBase32 || !token) return false;
+  const clean = String(token).replace(/\s+/g, '');
+  if (!/^\d{6}$/.test(clean)) return false;
+  const secretBuf = base32Decode(secretBase32);
+  const step = Math.floor(Date.now() / 1000 / 30);
+  const expected = parseInt(clean, 10);
+  for (let w = -window; w <= window; w++) {
+    if (hotp(secretBuf, step + w) === expected) return true;
+  }
+  return false;
+}
+
+function totpOtpauthUrl(secret, email) {
+  const label = encodeURIComponent('Quiz B2B:' + (email || 'teacher'));
+  const issuer = encodeURIComponent('Quiz B2B');
+  return `otpauth://totp/${label}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30`;
 }
 
 // ==================== ПЕРЕВОД (RU -> KK) ====================
@@ -508,7 +661,7 @@ app.post('/api/translate', translateLimiter, async (req, res) => {
   const targetLang = target === 'kk' ? 'kk' : null;
   if (!targetLang) return res.status(400).json({ error: 'Поддерживается только target=kk' });
   if (texts.length === 0) return res.json({ translations: [] });
-  if (texts.length > 600) return res.status(400).json({ error: 'Слишком много строк за один запрос' });
+  if (texts.length > 300) return res.status(400).json({ error: 'Слишком много строк за один запрос' });
   try {
     const translations = await translateBatch(texts, targetLang);
     res.json({ translations });
@@ -522,6 +675,9 @@ function checkAuth(req, res, next) {
   const payload = verifyToken(token);
   if (!payload || !payload.companyId) {
     return res.status(401).json({ error: 'Не авторизован' });
+  }
+  if (payload.pending2fa) {
+    return res.status(401).json({ error: 'Требуется подтверждение 2FA' });
   }
   const data = db.load();
   const company = safeGet(data.companies, payload.companyId);
@@ -643,16 +799,48 @@ app.post('/api/login', authLimiter, async (req, res) => {
   if (company.blocked) {
     return res.status(403).json({ error: 'BLOCKED', message: 'Доступ заблокирован администратором. ' + DEVELOPER_CONTACTS });
   }
+  // Миграция хеша на новый формат scrypt$ при успешном входе
+  if (ok && company.passwordHash && !String(company.passwordHash).startsWith('scrypt$')) {
+    await db.update((d) => {
+      const c = safeGet(d.companies, company.id);
+      if (c) c.passwordHash = hashPasswordSecure(password.trim());
+    });
+  }
+  if (company.totpEnabled && company.totpSecret) {
+    const tempToken = signToken({ companyId: company.id, pending2fa: true }, 5 * 60 * 1000);
+    return res.json({ ok: true, needs2fa: true, tempToken, email: company.email });
+  }
   const token = signToken({ companyId: company.id }, 30 * 24 * 60 * 60 * 1000);
-  res.json({ ok: true, companyId: company.id, token, email: company.email, plan: company.plan });
+  await writeAudit({ type: 'company', id: company.id, email: company.email, ip: req.ip }, 'login', null);
+  res.json({ ok: true, companyId: company.id, token, email: company.email, plan: company.plan, totpEnabled: !!company.totpEnabled });
 });
 
-app.post('/api/admin/login', authLimiter, (req, res) => {
+app.post('/api/login/2fa', authLimiter, async (req, res) => {
+  const { tempToken, code } = req.body || {};
+  if (!tempToken || !code) return res.status(400).json({ error: 'Нужен код из приложения-аутентификатора' });
+  const payload = verifyToken(tempToken);
+  if (!payload || !payload.pending2fa || !payload.companyId) {
+    return res.status(401).json({ error: 'Сессия 2FA истекла, войдите снова' });
+  }
+  const data = db.load();
+  const company = safeGet(data.companies, payload.companyId);
+  if (!company || company.blocked) return res.status(401).json({ error: 'Неверный код' });
+  if (!verifyTotp(company.totpSecret, code)) {
+    await writeAudit({ type: 'company', id: company.id, email: company.email, ip: req.ip }, 'login_2fa_fail', null);
+    return res.status(401).json({ error: 'Неверный код' });
+  }
+  const token = signToken({ companyId: company.id }, 30 * 24 * 60 * 60 * 1000);
+  await writeAudit({ type: 'company', id: company.id, email: company.email, ip: req.ip }, 'login_2fa', null);
+  res.json({ ok: true, companyId: company.id, token, email: company.email, plan: company.plan, totpEnabled: true });
+});
+
+app.post('/api/admin/login', authLimiter, async (req, res) => {
   const { password } = req.body;
   if (!password || password !== ADMIN_PASSWORD) {
     return res.status(401).json({ error: 'Неверный пароль' });
   }
   const token = signToken({ role: 'admin' }, 12 * 60 * 60 * 1000);
+  await writeAudit({ type: 'admin', id: 'admin', ip: req.ip }, 'admin_login', null);
   res.json({ ok: true, token });
 });
 
@@ -669,6 +857,65 @@ app.get('/api/me', checkAuth, (req, res) => {
     }
   });
 });
+
+// ----- 2FA (TOTP) для преподавателя -----
+app.get('/api/2fa/status', checkAuth, (req, res) => {
+  res.json({ enabled: !!(req.company.totpEnabled && req.company.totpSecret) });
+});
+
+app.post('/api/2fa/setup', checkAuth, async (req, res) => {
+  const secret = generateTotpSecret();
+  await db.update((d) => {
+    const c = safeGet(d.companies, req.companyId);
+    if (!c) return;
+    c.totpSecretPending = secret;
+  });
+  res.json({
+    secret,
+    otpauthUrl: totpOtpauthUrl(secret, req.company.email)
+  });
+});
+
+app.post('/api/2fa/enable', checkAuth, async (req, res) => {
+  const code = (req.body && req.body.code) || '';
+  const data = db.load();
+  const company = safeGet(data.companies, req.companyId);
+  const secret = company && company.totpSecretPending;
+  if (!secret) return res.status(400).json({ error: 'Сначала вызовите /api/2fa/setup' });
+  if (!verifyTotp(secret, code)) return res.status(400).json({ error: 'Неверный код, попробуйте ещё раз' });
+  await db.update((d) => {
+    const c = safeGet(d.companies, req.companyId);
+    if (!c) return;
+    c.totpSecret = secret;
+    c.totpEnabled = true;
+    delete c.totpSecretPending;
+  });
+  await audit(req, '2fa_enable', null);
+  res.json({ ok: true, enabled: true });
+});
+
+app.post('/api/2fa/disable', checkAuth, async (req, res) => {
+  const { password, code } = req.body || {};
+  const data = db.load();
+  const company = safeGet(data.companies, req.companyId);
+  if (!company) return res.status(401).json({ error: 'Не авторизован' });
+  if (!verifyPasswordSecure(String(password || ''), company.passwordHash)) {
+    return res.status(401).json({ error: 'Неверный пароль' });
+  }
+  if (company.totpEnabled && !verifyTotp(company.totpSecret, code)) {
+    return res.status(401).json({ error: 'Неверный код 2FA' });
+  }
+  await db.update((d) => {
+    const c = safeGet(d.companies, req.companyId);
+    if (!c) return;
+    c.totpEnabled = false;
+    delete c.totpSecret;
+    delete c.totpSecretPending;
+  });
+  await audit(req, '2fa_disable', null);
+  res.json({ ok: true, enabled: false });
+});
+
 
 // ==================== ТЕСТЫ ====================
 
@@ -712,6 +959,9 @@ app.post('/api/tests', checkAuth, async (req, res) => {
   if (!title || !Array.isArray(questions) || questions.length === 0) {
     return res.status(400).json({ error: 'Нужны название и хотя бы один вопрос' });
   }
+  if (questions.length > GLOBAL_MAX_QUESTIONS) {
+    return res.status(400).json({ error: 'Слишком много вопросов в одном тесте (макс. ' + GLOBAL_MAX_QUESTIONS + ')' });
+  }
   if (req.company.plan === 'free') {
     const data = db.load();
     const count = Object.values(data.tests).filter(t => t.companyId === req.companyId).length;
@@ -743,11 +993,15 @@ app.post('/api/tests', checkAuth, async (req, res) => {
     createdAt: Date.now()
   };
   await db.update((data) => { data.tests[id] = test; });
+  await audit(req, 'test_create', { testId: id, title: test.title, questions: test.questions.length });
   res.json(test);
 });
 
 app.put('/api/tests/:id', checkAuth, async (req, res) => {
   const { title, questions } = req.body;
+  if (Array.isArray(questions) && questions.length > GLOBAL_MAX_QUESTIONS) {
+    return res.status(400).json({ error: 'Слишком много вопросов в одном тесте (макс. ' + GLOBAL_MAX_QUESTIONS + ')' });
+  }
   if (req.company.plan === 'free' && Array.isArray(questions) && questions.length > FREE_MAX_QUESTIONS) {
     return res.status(400).json({ error: `Бесплатный тариф — максимум ${FREE_MAX_QUESTIONS} вопросов в тесте.` });
   }
@@ -773,9 +1027,11 @@ app.put('/api/tests/:id', checkAuth, async (req, res) => {
 });
 
 app.delete('/api/tests/:id', checkAuth, async (req, res) => {
+  let deletedTitle = null;
   await db.update((data) => {
     const test = safeGet(data.tests, req.params.id);
     if (test && test.companyId === req.companyId) {
+      deletedTitle = test.title;
       delete data.tests[req.params.id];
       Object.keys(data.sessions).forEach(code => {
         if (data.sessions[code].testId === req.params.id && data.sessions[code].companyId === req.companyId) {
@@ -784,6 +1040,7 @@ app.delete('/api/tests/:id', checkAuth, async (req, res) => {
       });
     }
   });
+  await audit(req, 'test_delete', { testId: req.params.id, title: deletedTitle });
   res.json({ ok: true });
 });
 
@@ -993,294 +1250,77 @@ app.post('/api/tests/:id/translate', checkAuth, async (req, res) => {
 });
 
 // Загрузка готового казахского перевода из Excel (порядок вопросов = как в русском тесте).
-// ===================== ДВУЯЗЫЧНЫЙ ШАБЛОН + ПРЕДПРОСМОТР ЗАГРУЗКИ KZ =====================
-const KK_SPECIAL = /[әіңғүұқөһӘІҢҒҮҰҚӨҺ]/;
-function normKey(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase(); }
-
-// Читает Excel с казахской версией. Два формата:
-//  1) «RU+KZ» (скачивается кнопкой «Шаблон RU+KZ»): есть колонка ID — вопросы сопоставляются по ID
-//     (или по русскому тексту), порядок строк больше не важен;
-//  2) старый: только KZ в тех же колонках, что и русский шаблон, — по порядку строк.
-function parseKkFile(buffer, test) {
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-  if (!rows.length) throw new Error('Пустой файл');
-  const header = rows[0].map(c => String(c == null ? '' : c).trim());
-  const idCol = header.findIndex(h => h.toLowerCase() === 'id');
-  const kzTextCol = header.findIndex(h => /^сұрақ/i.test(h));
-  const bilingual = idCol >= 0 && kzTextCol >= 0;
-  const cell = (r, c) => (c >= 0 && r[c] !== undefined && r[c] !== null) ? String(r[c]).trim() : '';
-  const out = { mode: bilingual ? 'bilingual' : 'legacy', fileRows: [] };
-
-  if (bilingual) {
-    const ruTextCol = header.findIndex(h => /^вопрос/i.test(h));
-    const optCols = {};
-    header.forEach((h, c) => { const m = h.match(/^нұсқа\s*(\d+)/i); if (m) optCols[parseInt(m[1], 10) - 1] = c; });
-    const explCol = header.findIndex(h => /^түсініктеме/i.test(h));
-    for (let i = 1; i < rows.length; i++) {
-      const r = rows[i];
-      const id = cell(r, idCol);
-      const ruText = cell(r, ruTextCol);
-      const text = cell(r, kzTextCol);
-      const options = [];
-      Object.keys(optCols).map(Number).sort((a, b) => a - b).forEach(j => { options[j] = cell(r, optCols[j]); });
-      const explain = cell(r, explCol);
-      if (!id && !ruText && !text) continue;
-      out.fileRows.push({ line: i + 1, id, ruText, text, options, explain });
-    }
-  } else {
-    let start = 0;
-    const h0 = String(rows[0][0] || '').toLowerCase();
-    if (h0.includes('сұрақ') || h0.includes('вопрос') || h0.includes('question')) start = 1;
-    for (let i = start; i < rows.length; i++) {
-      const r = rows[i];
-      const text = cell(r, 0);
-      if (!text) continue;
-      const options = [];
-      for (let c = 1; c <= 5; c++) { const v = cell(r, c); if (v) options.push(v); }
-      out.fileRows.push({ line: i + 1, id: '', ruText: '', text, options, explain: cell(r, 8) });
-    }
-  }
-  return out;
-}
-
-function buildKkPreview(test, parsed) {
-  const qs = test.questions;
-  const used = new Set();
-  const byId = new Map(); const byRu = new Map();
-  parsed.fileRows.forEach((fr, idx) => {
-    if (fr.id) byId.set(fr.id, idx);
-    if (fr.ruText) { const k = normKey(fr.ruText); if (!byRu.has(k)) byRu.set(k, []); byRu.get(k).push(idx); }
-  });
-  const fatal = [];
-  const rowsOut = [];
-  let matchedBy = { id: 0, text: 0, order: 0 };
-
-  if (parsed.mode === 'legacy' && parsed.fileRows.length !== qs.length) {
-    fatal.push('Число вопросов не совпадает: в тесте ' + qs.length + ', в файле ' + parsed.fileRows.length +
-      '. В старом формате строки сопоставляются по порядку. Скачайте «Шаблон RU+KZ» — там вопросы сопоставляются по ID, порядок не важен.');
-  }
-
-  qs.forEach((q, i) => {
-    let idx = -1; let how = '';
-    let changedNote = '';
-    if (parsed.mode === 'bilingual') {
-      // Главный ключ — русский текст вопроса (id в тесте позиционные и могут сдвинуться при правке теста).
-      const cand = (byRu.get(normKey(q.text)) || []).filter(k => !used.has(k));
-      if (cand.length) {
-        const same = cand.find(k => parsed.fileRows[k].id === String(q.id));
-        idx = same !== undefined ? same : cand[0]; how = same !== undefined ? 'id' : 'text';
-      } else if (byId.has(String(q.id)) && !used.has(byId.get(String(q.id)))) {
-        const k = byId.get(String(q.id));
-        if (parsed.fileRows[k].ruText && normKey(parsed.fileRows[k].ruText) !== normKey(q.text)) changedNote = 'Русский текст вопроса в тесте изменён после выгрузки шаблона — строка не применена, чтобы не перепутать вопросы. Скачайте шаблон заново.';
-        else { idx = k; how = 'id'; }
-      }
-    } else if (i < parsed.fileRows.length) { idx = i; how = 'order'; }
-    if (idx >= 0 && used.has(idx)) { idx = -1; how = ''; }
-    const ru = { text: q.text, options: (q.options || []).slice(), explain: q.explain || '' };
-    const row = { n: i + 1, id: q.id, ru, kk: null, status: 'missing', issues: [], matchedBy: how || null };
-    if (idx < 0) {
-      row.issues.push({ level: 'error', text: changedNote || 'В файле нет строки для этого вопроса' });
-      rowsOut.push(row); return;
-    }
-    used.add(idx); matchedBy[how]++;
-    const fr = parsed.fileRows[idx];
-    const kk = { text: fr.text, options: [], explain: fr.explain || '' };
-    const need = ru.options.length;
-    for (let j = 0; j < need; j++) kk.options.push((fr.options[j] || '').trim());
-    row.kk = kk; row.line = fr.line;
-    if (!kk.text) row.issues.push({ level: 'error', text: 'Нет казахского текста вопроса' });
-    const emptyOpts = kk.options.map((o, j) => o ? null : j + 1).filter(Boolean);
-    if (emptyOpts.length) row.issues.push({ level: 'error', text: 'Нет перевода вариантов: ' + emptyOpts.join(', ') + ' (из ' + need + ')' });
-    if (kk.text) {
-      if (normKey(kk.text) === normKey(ru.text)) row.issues.push({ level: 'warn', text: 'Текст совпадает с русским — возможно, не переведён' });
-      else if (kk.text.length >= 20 && !KK_SPECIAL.test(kk.text)) row.issues.push({ level: 'warn', text: 'В тексте нет казахских букв (ә, і, ң, ғ, ү, ұ, қ, ө, һ) — похоже на русский' });
-    }
-    if (ru.explain && !kk.explain) row.issues.push({ level: 'warn', text: 'Есть русское пояснение, а казахского нет' });
-    row.status = row.issues.some(x => x.level === 'error') ? 'error' : (row.issues.length ? 'warn' : 'ok');
-    rowsOut.push(row);
-  });
-
-  const extra = parsed.fileRows.filter((_, idx) => !used.has(idx)).map(fr => ({ line: fr.line, id: fr.id, text: (fr.ruText || fr.text || '').slice(0, 120) }));
-  const summary = { total: qs.length, ok: 0, warn: 0, error: 0, missing: 0 };
-  rowsOut.forEach(r => { if (r.status === 'missing') { summary.missing++; summary.error++; } else summary[r.status]++; });
-  const applicable = rowsOut.filter(r => r.status === 'ok' || r.status === 'warn').length;
-  return { mode: parsed.mode, matchedBy, fatal, extra, summary, applicable, canApply: fatal.length === 0 && applicable > 0, rows: rowsOut };
-}
-
 app.post('/api/tests/:id/import-kk', checkAuth, upload.single('file'), async (req, res) => {
   const data = db.load();
   const test = safeGet(data.tests, req.params.id);
   if (!test || test.companyId !== req.companyId) return res.status(404).json({ error: 'Тест не найден' });
   if (!req.file) return res.status(400).json({ error: 'Нужен Excel-файл' });
 
-  let parsed;
-  try { parsed = parseKkFile(req.file.buffer, test); }
-  catch (e) { return res.status(400).json({ error: e.message === 'Пустой файл' ? 'Пустой файл' : 'Не удалось прочитать Excel' }); }
-  if (!parsed.fileRows.length) return res.status(400).json({ error: 'В файле нет вопросов' });
+  let workbook;
+  try {
+    workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+  } catch (e) {
+    return res.status(400).json({ error: 'Не удалось прочитать Excel' });
+  }
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  if (!rows.length) return res.status(400).json({ error: 'Пустой файл' });
 
-  const preview = buildKkPreview(test, parsed);
+  let start = 0;
+  const h0 = String(rows[0][0] || '').toLowerCase();
+  if (h0.includes('сұрақ') || h0.includes('вопрос') || h0.includes('question')) start = 1;
 
-  // Предпросмотр: ничего не сохраняем
-  if (req.query.dry === '1') return res.json({ ok: true, dryRun: true, ...preview });
-
-  if (preview.fatal.length) return res.status(400).json({ error: preview.fatal[0] });
-  if (!preview.canApply) return res.status(400).json({ error: 'Нет ни одной строки, которую можно применить. Откройте предпросмотр и исправьте ошибки.' });
-  const hasErrors = preview.summary.error > 0;
-  if (hasErrors && req.query.partial !== '1') {
-    return res.status(409).json({ error: 'В файле есть строки с ошибками (' + preview.summary.error + '). Подтвердите частичную загрузку или исправьте файл.', needsConfirm: true, summary: preview.summary });
+  const kkRows = [];
+  for (let i = start; i < rows.length; i++) {
+    const row = rows[i];
+    const text = String(row[0] || '').trim();
+    if (!text) continue;
+    const options = [];
+    for (let c = 1; c <= 5; c++) {
+      const v = String(row[c] || '').trim();
+      if (v) options.push(v);
+    }
+    const explain = String(row[8] || '').trim();
+    kkRows.push({ text, options, explain });
   }
 
-  const byQ = new Map(); preview.rows.forEach(r => byQ.set(String(r.id), r));
+  if (kkRows.length === 0) return res.status(400).json({ error: 'В файле нет вопросов' });
+  if (kkRows.length !== test.questions.length) {
+    return res.status(400).json({
+      error: 'Число вопросов не совпадает: в тесте ' + test.questions.length + ', в файле ' + kkRows.length + '. Нужен тот же порядок, что в русском тесте.'
+    });
+  }
+
+  for (let i = 0; i < test.questions.length; i++) {
+    const need = (test.questions[i].options || []).length;
+    const got = kkRows[i].options.length;
+    if (got < need) {
+      return res.status(400).json({
+        error: 'Вопрос ' + (i + 1) + ': в русском ' + need + ' вариантов, в KZ-файле ' + got + '.'
+      });
+    }
+  }
+
   await db.update((d) => {
     const t = safeGet(d.tests, req.params.id);
     if (!t) return;
-    const prev = new Map((t.questions_kk || []).map(x => [String(x.id), x]));
     t.title_kk = t.title_kk || t.title;
-    let missing = 0;
-    t.questions_kk = t.questions.map((q) => {
-      const r = byQ.get(String(q.id));
-      if (r && (r.status === 'ok' || r.status === 'warn')) {
-        return { id: q.id, text: r.kk.text, options: (q.options || []).map((_, j) => r.kk.options[j] || q.options[j]), explain: r.kk.explain || '' };
-      }
-      missing++;
-      const old = prev.get(String(q.id));
-      return old || { id: q.id, text: q.text, options: (q.options || []).slice(), explain: q.explain || '' };
-    });
+    t.questions_kk = t.questions.map((q, i) => ({
+      id: q.id,
+      text: kkRows[i].text,
+      options: (q.options || []).map((_, j) => kkRows[i].options[j] || q.options[j]),
+      explain: kkRows[i].explain || ''
+    }));
     if (!t.translation) t.translation = emptyTranslationMeta();
     t.translation.status = 'ready';
     t.translation.updatedAt = Date.now();
-    t.translation.provider = missing ? 'manual-excel-partial' : 'manual-excel';
-    t.translation.missing = missing;
-    t.translation.progress = { done: t.questions.length - missing, total: t.questions.length };
+    t.translation.provider = 'manual-excel';
+    t.translation.progress = { done: t.questions.length, total: t.questions.length };
     t.translation.error = null;
   });
-  res.json({ ok: true, status: 'ready', count: preview.applicable, missing: preview.summary.total - preview.applicable, mode: preview.mode });
+
+  res.json({ ok: true, status: 'ready', count: kkRows.length });
 });
-
-// Двуязычный шаблон: RU и KZ рядом, строки привязаны к ID вопроса (порядок не важен).
-app.get('/api/tests/:id/export-bilingual', checkAuth, (req, res) => {
-  const data = db.load();
-  const test = safeGet(data.tests, req.params.id);
-  if (!test || test.companyId !== req.companyId) return res.status(404).json({ error: 'Тест не найден' });
-  const maxOpts = Math.min(8, Math.max(5, ...test.questions.map(q => (q.options || []).length)));
-  const header = ['ID', '№', 'Вопрос (RU)', 'Сұрақ (KZ)'];
-  for (let j = 1; j <= maxOpts; j++) { header.push('Вариант ' + j + ' (RU)', 'Нұсқа ' + j + ' (KZ)'); }
-  header.push('Правильные (номера)', 'Теги', 'Пояснение (RU)', 'Түсініктеме (KZ)');
-  const kkById = new Map((test.questions_kk || []).map(x => [String(x.id), x]));
-  const hasKk = !!(test.translation && test.translation.status === 'ready');
-  const aoa = [header];
-  test.questions.forEach((q, i) => {
-    const kk = hasKk ? kkById.get(String(q.id)) : null;
-    const correctIdxs = q.multi ? q.correct : [q.correct];
-    const row = [xl(String(q.id)), i + 1, xl(q.text), kk ? xl(kk.text) : ''];
-    for (let j = 0; j < maxOpts; j++) {
-      row.push(q.options[j] !== undefined ? xl(q.options[j]) : '', kk && kk.options && kk.options[j] !== undefined && q.options[j] !== undefined ? xl(kk.options[j]) : '');
-    }
-    row.push(correctIdxs.map(k => k + 1).join(','), (q.tags || []).join(', '), xl(q.explain || ''), kk ? xl(kk.explain || '') : '');
-    aoa.push(row);
-  });
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = header.map((h, c) => ({ wch: c === 0 ? 12 : c === 1 ? 5 : /Вопрос|Сұрақ|Пояснение|Түсініктеме/.test(h) ? 48 : 28 }));
-  const info = XLSX.utils.aoa_to_sheet([
-    ['Как заполнять'],
-    ['1. Заполните только колонки с (KZ): «Сұрақ», «Нұсқа 1…», «Түсініктеме». Колонки (RU) и ID не меняйте — по ID вопрос находится в тесте.'],
-    ['2. Порядок строк не важен, строки можно сортировать и фильтровать. Не удаляйте колонку ID.'],
-    ['3. Загрузите файл кнопкой «📥 KZ Excel» — перед сохранением вы увидите предпросмотр с ошибками и предупреждениями.'],
-    ['4. Строки без перевода в тесте останутся по-русски (или со старым переводом) — это можно подтвердить в предпросмотре.']
-  ]);
-  info['!cols'] = [{ wch: 120 }];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'RU-KZ');
-  XLSX.utils.book_append_sheet(wb, info, 'Инструкция');
-  sendXlsx(res, wb, 'test-ru-kz.xlsx');
-});
-
-// ===================== АНАЛИЗ ВОПРОСОВ (item analysis) =====================
-function buildItemAnalysis(test, sessions) {
-  const parts = [];
-  sessions.forEach(s => Object.values(s.participants || {}).forEach(p => {
-    if (p.finished && p.answers) parts.push({ p, ratio: p.total ? p.score / p.total : 0 });
-  }));
-  const N = parts.length;
-  const sorted = [...parts].sort((a, b) => b.ratio - a.ratio);
-  const g = N >= 12 ? Math.max(3, Math.round(N * 0.27)) : 0;
-  const upper = g ? sorted.slice(0, g) : []; const lower = g ? sorted.slice(-g) : [];
-  const rate = (grp, qid) => { let n = 0, c = 0; grp.forEach(({ p }) => { const a = p.answers[qid]; if (a) { n++; if (a.isCorrect) c++; } }); return n ? c / n : null; };
-
-  const questions = test.questions.map((q, i) => {
-    const opts = q.options || [];
-    const counts = opts.map(() => 0); let noAnswer = 0, n = 0, correct = 0;
-    parts.forEach(({ p }) => {
-      const a = p.answers[q.id]; if (!a) return;
-      n++; if (a.isCorrect) correct++;
-      if (q.multi) {
-        const gv = Array.isArray(a.given) ? a.given : [];
-        if (!gv.length) noAnswer++;
-        gv.forEach(k => { if (counts[k] !== undefined) counts[k]++; });
-      } else if (a.given === undefined || a.given === null || a.given === '') noAnswer++;
-      else if (counts[a.given] !== undefined) counts[a.given]++;
-    });
-    const correctSet = q.multi ? (Array.isArray(q.correct) ? q.correct : []) : [q.correct];
-    const options = opts.map((text, k) => ({ text, isCorrect: correctSet.includes(k), count: counts[k], pct: n ? Math.round(counts[k] / n * 1000) / 10 : null }));
-    const pc = n ? Math.round(correct / n * 1000) / 10 : null;
-    let D = null;
-    if (g) { const u = rate(upper, q.id), l = rate(lower, q.id); if (u !== null && l !== null) D = Math.round((u - l) * 100) / 100; }
-
-    const flags = [];
-    if (n >= 8) {
-      if (pc <= 25) flags.push({ code: 'hard', level: 'warn', text: 'Очень трудный: верно отвечают ≤ 25%' });
-      if (pc >= 95) flags.push({ code: 'easy', level: 'info', text: 'Очень лёгкий: верно отвечают ≥ 95% (не различает студентов)' });
-      if (!q.multi) {
-        const wrong = options.filter(o => !o.isCorrect).sort((a, b) => b.count - a.count)[0];
-        const right = options.find(o => o.isCorrect);
-        if (wrong && right && wrong.count > right.count && wrong.pct >= 35) {
-          flags.push({ code: 'key', level: 'bad', text: 'Неверный вариант выбирают чаще верного (' + wrong.pct + '% против ' + right.pct + '%) — проверьте ключ ответа и формулировку' });
-        }
-      }
-      if (noAnswer / n >= 0.25) flags.push({ code: 'skip', level: 'warn', text: 'Часто пропускают: ' + Math.round(noAnswer / n * 100) + '%' });
-    }
-    if (D !== null) {
-      if (D < 0) flags.push({ code: 'negd', level: 'bad', text: 'Сильные студенты ошибаются чаще слабых (D = ' + D + ') — вопрос сбивает с толку или ключ неверен' });
-      else if (D < 0.15 && pc > 25 && pc < 95) flags.push({ code: 'weakd', level: 'warn', text: 'Слабо отделяет сильных от слабых (D = ' + D + ')' });
-    }
-    if (!q.multi && n >= 15 && pc !== null && pc < 95) {
-      const dead = options.map((o, k) => ({ o, k })).filter(x => !x.o.isCorrect && x.o.count === 0).map(x => x.k + 1);
-      if (dead.length) flags.push({ code: 'dead', level: 'info', text: 'Никто не выбрал вариант(ы): ' + dead.join(', ') + ' — неработающие «отвлекатели»' });
-    }
-    return { n: i + 1, id: q.id, text: q.text, tags: q.tags || [], multi: !!q.multi, total: n, correct, pct: pc, discrimination: D, noAnswer, options, flags };
-  });
-  const answered = questions.filter(q => q.total > 0);
-  const avgPct = answered.length ? Math.round(answered.reduce((s, q) => s + (q.pct || 0), 0) / answered.length * 10) / 10 : null;
-  return {
-    participants: N, sessions: sessions.length, groupSize: g, avgPct,
-    reliable: N >= 12, minForD: 12,
-    attention: questions.filter(q => q.flags.some(f => f.level === 'bad' || f.level === 'warn')).length,
-    questions
-  };
-}
-
-app.get('/api/tests/:id/item-analysis', checkAuth, (req, res) => {
-  const data = db.load();
-  const test = safeGet(data.tests, req.params.id);
-  if (!test || test.companyId !== req.companyId) return res.status(404).json({ error: 'Тест не найден' });
-  const sessions = Object.values(data.sessions).filter(s => s.testId === req.params.id && s.companyId === req.companyId && !s.type)
-    .filter(s => !req.query.code || s.code === req.query.code);
-  const a = buildItemAnalysis(test, sessions);
-  if (req.query.format === 'xlsx') {
-    const head = ['№', 'Вопрос', 'Ответов', '% верных', 'Индекс различения D', 'Пропусков', 'Замечания', 'Распределение выбора (вариант: %)'];
-    const rows = a.questions.map(q => [q.n, xl(shortText(q.text, 200)), q.total, q.pct, q.discrimination === null ? '' : q.discrimination, q.noAnswer, xl(q.flags.map(f => f.text).join(' | ')),
-      xl(q.options.map((o, k) => (k + 1) + (o.isCorrect ? '✓' : '') + ': ' + (o.pct === null ? '—' : o.pct + '%')).join('; '))]);
-    const ws = XLSX.utils.aoa_to_sheet([head, ...rows]);
-    ws['!cols'] = [{ wch: 5 }, { wch: 60 }, { wch: 9 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 70 }, { wch: 50 }];
-    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Анализ вопросов');
-    return sendXlsx(res, wb, 'item-analysis.xlsx');
-  }
-  res.json({ test: { id: test.id, title: test.title }, ...a });
-});
-
-app.get('/item-analysis', (req, res) => { res.sendFile(publicFile('item-analysis.html')); });
 
 
 app.get('/api/tests/:id/stats', checkAuth, (req, res) => {
@@ -2807,7 +2847,8 @@ function rgXlsExcel(res, wb, fileName) {
 
 // Плоская таблица «одна строка = одно обучение» (у обучаемого без обучений — одна строка без данных об обучении).
 // Эта же форма читается обратно при загрузке из Excel.
-app.get('/api/registry/export', checkAuth, (req, res) => {
+app.get('/api/registry/export', checkAuth, async (req, res) => {
+  await audit(req, 'registry_export', null);
   const reg = rgRead(req.company);
   const selected = rgSelect(reg, rgFilters(req.query));
   const rows = [];
@@ -3240,7 +3281,6 @@ app.post('/api/sessions/:code/join', joinLimiter, async (req, res) => {
   res.json({
     participantId: pid,
     testTitle: test.title,
-    title_kk: (test.translation && test.translation.status === 'ready' && test.title_kk) ? test.title_kk : null,
     timeLimit: session.timeLimit || null,
     deadline: session.timeLimit ? participant.joinedAt + session.timeLimit * 60 * 1000 : null,
     serverNow: Date.now(),
@@ -3427,7 +3467,11 @@ app.get('/api/tests/:id/export-excel', checkAuth, (req, res) => {
   res.send(buf);
 });
 
-app.post('/api/import-questions', checkAuth, upload.single('file'), (req, res) => {
+app.post('/api/import-questions', checkAuth, upload.single('file'), async (req, res) => {
+  if (req.file && req.file.size > GLOBAL_MAX_EXCEL_BYTES) {
+    return res.status(400).json({ error: 'Файл слишком большой (макс. ' + Math.round(GLOBAL_MAX_EXCEL_BYTES / 1024 / 1024) + ' МБ)' });
+  }
+
   if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
   let rows;
   try {
@@ -3471,6 +3515,13 @@ app.post('/api/import-questions', checkAuth, upload.single('file'), (req, res) =
   if (questions.length === 0) {
     return res.status(400).json({ error: 'Не удалось распознать ни одного вопроса. Проверьте формат файла (скачайте шаблон).', skipped });
   }
+  if (questions.length > GLOBAL_MAX_QUESTIONS) {
+    return res.status(400).json({
+      error: 'В файле ' + questions.length + ' вопросов, лимит ' + GLOBAL_MAX_QUESTIONS + '. Разбейте на несколько тестов.',
+      skipped
+    });
+  }
+  await audit(req, 'import_questions', { count: questions.length, skipped });
   res.json({ questions, skipped });
 });
 
@@ -4473,8 +4524,7 @@ app.post('/api/resume/:code', joinLimiter, (req, res) => {
         explain_kk: kk ? (kk.explain || '') : null
       };
     });
-    return res.json({ ...base, testTitle: test.title,
-      title_kk: (test.translation && test.translation.status === 'ready' && test.title_kk) ? test.title_kk : null, timeLimit: session.timeLimit || null,
+    return res.json({ ...base, testTitle: test.title, timeLimit: session.timeLimit || null,
       deadline: session.timeLimit ? p.joinedAt + session.timeLimit * 60 * 1000 : null, questions });
   }
   if (type === 'lab') {
@@ -4952,6 +5002,13 @@ app.delete('/api/admin/companies/:id', checkAdmin, async (req, res) => {
 // translateOne) в кэш попали «отравленные» записи — оригинальный русский текст,
 // сохранённый как перевод из-за временной ошибки/лимита сервиса MyMemory. После очистки
 // все тексты переведутся заново при следующем переключении на казахский язык.
+app.get('/api/admin/audit', checkAdmin, (req, res) => {
+  const data = db.load();
+  const limit = Math.min(500, parseInt(req.query.limit, 10) || 100);
+  const log = Array.isArray(data.auditLog) ? data.auditLog.slice(-limit).reverse() : [];
+  res.json({ log, total: (data.auditLog || []).length });
+});
+
 app.post('/api/admin/clear-translations', checkAdmin, async (req, res) => {
   let count = 0;
   await db.update((d) => {
@@ -4963,7 +5020,8 @@ app.post('/api/admin/clear-translations', checkAdmin, async (req, res) => {
 
 // Резервная копия всей базы данных целиком (компании, тесты, сессии, тренажёры) в виде
 // скачиваемого JSON-файла. Доступно только администратору.
-app.get('/api/admin/backup', checkAdmin, (req, res) => {
+app.get('/api/admin/backup', checkAdmin, async (req, res) => {
+  await audit(req, 'admin_backup', null);
   const data = db.load();
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   res.setHeader('Content-Disposition', `attachment; filename="quiz-b2b-backup-${stamp}.json"`);
