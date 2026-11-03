@@ -201,6 +201,10 @@
       <button class="tab-btn" id="tab-btn-drawing" onclick="switchTab('drawing')">📐 Чертежи</button>
       <button class="tab-btn" id="tab-btn-tolerance" onclick="switchTab('tolerance')">📏 Квалитеты</button>
       <button class="tab-btn" id="tab-btn-stats" onclick="switchTab('stats')">📊 Статистика</button>
+      <button class="tab-btn" onclick="window.open('/groups','_blank')" title="Списки групп студентов">👥 Группы</button>
+      <button class="tab-btn" onclick="window.open('/analytics','_blank')" title="Аналитика по темам и журнал группы">📈 Аналитика</button>
+      <button class="tab-btn" onclick="window.open('/registry','_blank')" title="База обучаемых: номер, профессия, место работы, обучение и результаты; выгрузка в Excel">🗂️ Реестр</button>
+      <button class="tab-btn hidden" id="net-btn" onclick="window.open('/network','_blank')" title="Адрес, по которому студенты заходят в тест">📶 Сеть</button>
     </div>
 
     <div id="screen-list">
@@ -250,7 +254,7 @@
 
           <div class="muted" style="font-weight:600; margin-bottom:6px;">Сессии</div>
           <table id="stats-sessions-table" style="margin-bottom:20px;">
-            <thead><tr><th>Код</th><th>Дата</th><th>Участников</th><th>Завершили</th><th>Средний балл</th><th>Статус</th></tr></thead>
+            <thead><tr><th>Код</th><th>Дата</th><th>Участников</th><th>Завершили</th><th>Средний балл</th><th>Статус</th><th></th></tr></thead>
             <tbody id="stats-sessions-body"></tbody>
           </table>
           <div class="muted" id="stats-sessions-empty" style="padding:16px 0; text-align:center;"></div>
@@ -271,6 +275,9 @@
         <h2 id="editor-title" style="margin:0;">Новый тест</h2>
         <div class="row">
           <button class="btn outline small hidden" id="translate-kk-btn" onclick="translateTestToKK()">🌐 Перевести на казахский</button>
+          <button class="btn outline small hidden" id="import-kk-btn" onclick="document.getElementById('import-kk-file').click()">📥 Загрузить KZ из Excel</button>
+          <input type="file" id="import-kk-file" accept=".xlsx,.xls" style="display:none;" onchange="importKkFromExcel(event)">
+          <input type="file" id="import-kk-file-list" accept=".xlsx,.xls" style="display:none;" onchange="importKkFromExcelList(event)">
           <button class="btn outline small" onclick="showList()">Отмена</button>
         </div>
       </div>
@@ -333,11 +340,38 @@
   </div>
   <!-- Модальное окно запуска сессии -->
   <div id="session-start-modal" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,0.4); display:flex; align-items:center; justify-content:center; z-index:50;">
-    <div style="width:320px; background:#fff; border-radius:14px; padding:20px;">
+    <div style="width:320px; max-width:94vw; max-height:92vh; overflow-y:auto; background:#fff; border-radius:14px; padding:20px;">
       <h3 style="margin-bottom:10px; color:#2C3E50;">Начать сессию</h3>
       <div id="session-timelimit-wrap">
         <label class="muted" style="display:block; margin-bottom:6px;">Лимит времени, минут (оставьте пустым — без ограничения)</label>
         <input type="text" id="session-time-limit" placeholder="например, 20" inputmode="numeric">
+      </div>
+
+      <div id="session-showanswers-wrap" class="hidden" style="margin-top:10px;">
+        <label class="muted" style="display:block; margin-bottom:6px;">Разбор ответов для студентов после сдачи</label>
+        <select id="session-show-answers" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:8px;">
+          <option value="immediately">Сразу после сдачи</option>
+          <option value="after_end">Только после завершения сессии</option>
+          <option value="score_only">Не показывать — только баллы</option>
+        </select>
+      </div>
+
+      <div id="session-remote-wrap" class="hidden" style="margin-top:10px;">
+        <label style="display:flex; gap:8px; align-items:flex-start; font-size:13.5px; cursor:pointer;">
+          <input type="checkbox" id="session-remote" style="margin-top:3px;">
+          <span>Для студентов вне локальной Wi-Fi сети (удалённый доступ)
+            <div class="muted" style="font-size:12px;">QR-код поведёт на адрес удалённого доступа (Tailscale). Обычным студентам в аудитории не нужно.</div>
+          </span>
+        </label>
+      </div>
+
+      <div id="session-group-wrap" class="hidden" style="margin-top:10px;">
+        <label class="muted" style="display:block; margin-bottom:6px;">Кто может войти</label>
+        <select id="session-group" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:8px;">
+          <option value="">Как в настройках групп (по умолчанию)</option>
+          <option value="none">Любой, кто знает ссылку</option>
+        </select>
+        <div class="muted" style="font-size:12px; margin-top:4px;">Списки групп — кнопка «👥 Группы» сверху.</div>
       </div>
 
       <div class="row" style="margin:10px 0 6px; gap:16px;">
@@ -437,6 +471,7 @@
     document.getElementById('blocked-screen').classList.add('hidden');
     document.getElementById('auth-screen').classList.add('hidden');
     document.getElementById('screen-main').classList.remove('hidden');
+    initNetworkUi();
     document.getElementById('company-display').textContent = localStorage.getItem('b2bEmail') || 'Компания';
     refreshMe();
     loadTestsList();
@@ -597,20 +632,25 @@
     if (tests.length === 0) {
       container.innerHTML = '<div class="muted" style="padding:30px 0; text-align:center;">Тестов пока нет.</div>';
     } else {
-      container.innerHTML = tests.map(t => `
+      container.innerHTML = tests.map(t => {
+        const tr = t.translation || {};
+        const st = tr.status || 'none';
+        const stLabel = st === 'ready' ? '🟢 KZ готов' : st === 'stale' ? '🟡 KZ устарел' : st === 'pending' ? '⏳ KZ…' : st === 'error' ? '🔴 KZ ошибка' : '⚪ KZ нет';
+        return `
         <div class="card row between">
           <div>
             <strong>${escapeHtml(t.title)}</strong>
-            <div class="muted">${t.questions.length} вопрос(ов)</div>
+            <div class="muted">${t.questions.length} вопрос(ов) · ${stLabel}</div>
           </div>
-          <div class="row">
+          <div class="row" style="flex-wrap:wrap; gap:6px;">
             <button class="btn small" onclick="startSession('${t.id}')">Начать сессию</button>
             <button class="btn outline small" onclick="editTest('${t.id}')">Изменить</button>
+            <button class="btn outline small" onclick="importKkForTest('${t.id}')" title="Загрузить казахский Excel (тот же порядок вопросов)">📥 KZ Excel</button>
             <button class="btn outline small" onclick="exportTestExcel('${t.id}')">Экспорт Excel</button>
             <button class="btn danger small" onclick="deleteTest('${t.id}')">Удалить</button>
           </div>
-        </div>
-      `).join('');
+        </div>`;
+      }).join('');
     }
   }
 
@@ -638,6 +678,7 @@
     document.getElementById('save-error').textContent = '';
     document.getElementById('translate-kk-status').textContent = '';
     document.getElementById('translate-kk-btn').classList.add('hidden'); // у нового теста ещё нет id — сначала сохрани
+    const ik2 = document.getElementById('import-kk-btn'); if (ik2) ik2.classList.add('hidden');
     addQuestion();
     document.getElementById('screen-list').classList.add('hidden');
     document.getElementById('screen-editor').classList.remove('hidden');
@@ -650,11 +691,99 @@
     document.getElementById('editor-title').textContent = 'Редактирование';
     document.getElementById('test-title').value = test.title;
     document.getElementById('questions-container').innerHTML = '';
-    document.getElementById('translate-kk-status').textContent = '';
+    const tr = test.translation || {};
+    const st = tr.status || 'none';
+    let stText = '';
+    if (st === 'ready') stText = '🟢 Казахская версия готова' + (tr.updatedAt ? ' · ' + new Date(tr.updatedAt).toLocaleString('ru-RU') : '');
+    else if (st === 'stale') stText = '🟡 Казахская версия устарела — загрузите Excel или переведите заново';
+    else if (st === 'error') stText = '🔴 Ошибка перевода: ' + (tr.error || '');
+    else if (st === 'pending') stText = '⏳ Идёт перевод…';
+    else stText = 'Казахская версия ещё не загружена. Нажмите «Загрузить KZ из Excel» или «Перевести».';
+    document.getElementById('translate-kk-status').textContent = stText;
     document.getElementById('translate-kk-btn').classList.remove('hidden');
+    const ik = document.getElementById('import-kk-btn'); if (ik) ik.classList.remove('hidden');
     test.questions.forEach(q => addQuestion(q));
     document.getElementById('screen-list').classList.add('hidden');
     document.getElementById('screen-editor').classList.remove('hidden');
+  }
+
+
+  async function importKkFromExcel(ev) {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = '';
+    if (!file) return;
+    if (!editingTestId) {
+      alert('Сначала сохраните тест, затем загрузите казахский Excel.');
+      return;
+    }
+    const statusEl = document.getElementById('translate-kk-status');
+    const btn = document.getElementById('import-kk-btn');
+    if (statusEl) statusEl.textContent = 'Загружаю казахскую версию из Excel…';
+    if (btn) btn.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      // Не указываем Content-Type — браузер сам поставит multipart/form-data с boundary
+      const res = await authFetch('/api/tests/' + editingTestId + '/import-kk', {
+        method: 'POST',
+        body: fd
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (statusEl) statusEl.textContent = 'Ошибка: ' + (data.error || res.status);
+        alert(data.error || 'Не удалось загрузить казахский Excel');
+      } else {
+        if (statusEl) statusEl.textContent = '✅ Казахская версия загружена (' + data.count + ' вопросов). Статус: ready. Студенты увидят KZ без перевода на лету.';
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = 'Сеть недоступна';
+      alert('Сеть недоступна, попробуйте позже');
+    }
+    if (btn) btn.disabled = false;
+  }
+
+  // Быстрая загрузка KZ из списка тестов (без входа в редактор)
+  function importKkForTest(testId) {
+    if (!testId) {
+      alert('Не указан тест');
+      return;
+    }
+    let input = document.getElementById('import-kk-file-list');
+    if (!input) {
+      input = document.createElement('input');
+      input.type = 'file';
+      input.id = 'import-kk-file-list';
+      input.accept = '.xlsx,.xls';
+      input.style.display = 'none';
+      input.addEventListener('change', importKkFromExcelList);
+      document.body.appendChild(input);
+    }
+    input.dataset.testId = testId;
+    input.value = '';
+    input.click();
+  }
+
+  async function importKkFromExcelList(ev) {
+    const file = ev.target.files && ev.target.files[0];
+    const testId = ev.target.dataset.testId;
+    ev.target.value = '';
+    if (!file || !testId) return;
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await authFetch('/api/tests/' + testId + '/import-kk', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = data.error || ('Ошибка ' + res.status + (res.status === 404 ? ' — на сервере нет маршрута import-kk, задеплойте обновлённый server.js' : ''));
+        alert(msg);
+      } else {
+        alert('Казахская версия загружена: ' + data.count + ' вопросов. Статус: ready.');
+        loadTestsList();
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Сеть недоступна или ошибка: ' + (e.message || e));
+    }
   }
 
   async function translateTestToKK() {
@@ -669,7 +798,10 @@
       if (!res.ok) {
         statusEl.textContent = 'Ошибка: ' + (data.error || 'не удалось перевести');
       } else {
-        statusEl.textContent = `Готово! Переведено текстов: ${data.translated}. Теперь студенты увидят казахский без задержек — перевод уже в кэше.`;
+        const st = data.status === 'ready' ? 'готов' : (data.status || 'частично');
+        statusEl.textContent = `Перевод ${st}: ${data.translated || 0} из ${data.total || data.translated || 0} строк` +
+          (data.missing ? ` (не переведено: ${data.missing})` : '') +
+          `. Провайдер: ${data.provider || '—'}. Студенты увидят KZ без перевода на лету.`;
       }
     } catch (e) {
       statusEl.textContent = 'Ошибка соединения с сервером';
@@ -876,11 +1008,49 @@
   function startDrawingSession(taskId) { openSessionModal('drawing', taskId); }
   function startToleranceSession(taskId) { openSessionModal('tolerance', taskId); }
 
+  // Локальная версия: показываем кнопку «Сеть» и (если настроен удалённый доступ) переключатель в окне запуска.
+  let networkInfo = null;
+  async function initNetworkUi() {
+    try {
+      const res = await authFetch('/api/network');
+      if (!res.ok) return;
+      networkInfo = await res.json();
+      if (networkInfo.localMode) document.getElementById('net-btn').classList.remove('hidden');
+    } catch (e) { /* облачная версия или нет связи — кнопка не нужна */ }
+  }
+
+  // Список групп для выбора при запуске сессии. Если групп нет — блок скрыт, всё как раньше.
+  async function loadGroupsForSessionModal() {
+    const wrap = document.getElementById('session-group-wrap');
+    const sel = document.getElementById('session-group');
+    wrap.classList.add('hidden');
+    sel.innerHTML = '<option value="">Как в настройках групп (по умолчанию)</option><option value="none">Любой, кто знает ссылку</option>';
+    try {
+      const res = await authFetch('/api/groups');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.groups || !data.groups.length) return;
+      const activeName = (data.groups.find(g => g.id === data.activeGroupId) || {}).name;
+      sel.options[0].textContent = activeName ? `По умолчанию: группа «${activeName}»` : 'По умолчанию: без привязки к группе';
+      data.groups.forEach(g => {
+        const o = document.createElement('option');
+        o.value = g.id; o.textContent = `Только группа «${g.name}» (${g.count} чел.)`;
+        sel.appendChild(o);
+      });
+      wrap.classList.remove('hidden');
+    } catch (e) { /* без групп работаем как раньше */ }
+  }
+
   function openSessionModal(type, id) {
     pendingSessionType = type;
     pendingSessionId = id;
     document.getElementById('session-time-limit').value = '';
     document.getElementById('session-timelimit-wrap').classList.toggle('hidden', type !== 'test' && type !== 'drawing');
+    document.getElementById('session-showanswers-wrap').classList.toggle('hidden', type !== 'test');
+    document.getElementById('session-show-answers').value = 'immediately';
+    document.getElementById('session-remote').checked = false;
+    document.getElementById('session-remote-wrap').classList.toggle('hidden', !(networkInfo && networkInfo.localMode && networkInfo.remote && networkInfo.remote.available));
+    loadGroupsForSessionModal();
     document.querySelector('input[name="session-when"][value="now"]').checked = true;
     document.getElementById('session-schedule-at').classList.add('hidden');
     document.getElementById('session-schedule-at').value = '';
@@ -994,10 +1164,17 @@
 
     const type = pendingSessionType;
     const id = pendingSessionId;
+    const showAnswers = document.getElementById('session-show-answers').value;
+    const remoteChecked = document.getElementById('session-remote').checked;
+    const groupChoice = document.getElementById('session-group').value; // '' — по умолчанию, 'none' — без группы, иначе id группы
     closeSessionModal();
 
     const endpoint = type === 'lab' ? '/api/lab-sessions' : type === 'drawing' ? '/api/drawing-sessions' : type === 'tolerance' ? '/api/tolerance-sessions' : '/api/sessions';
     const body = type === 'lab' ? { labId: id, scheduledAt } : type === 'drawing' ? { drawingTaskId: id, timeLimit, scheduledAt } : type === 'tolerance' ? { toleranceTaskId: id, scheduledAt } : { testId: id, timeLimit, scheduledAt };
+    if (remoteChecked) body.remote = true;
+    if (type === 'test') body.showAnswers = showAnswers;
+    if (groupChoice === 'none') body.groupId = null;
+    else if (groupChoice) body.groupId = groupChoice;
     const res = await authFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1293,6 +1470,7 @@
         <div class="row">
           <button class="btn outline small" onclick="openExistingSession('${s.code}')">Открыть</button>
           <button class="btn outline small" onclick="openSessionInNewWindow('${s.code}')">↗ Новое окно</button>
+          ${type === 'test' ? `<button class="btn outline small" onclick="window.open('/analytics?code=${s.code}','_blank')">📈 Аналитика</button>` : ''}
           <button class="btn danger small" onclick="deleteSessions(['${s.code}'], '${type}', '${containerId}', 'Удалить эту сессию вместе с ответами участников?')">Удалить</button>
         </div>
       </div>`).join('');
@@ -1995,6 +2173,7 @@
           <td>${s.finishedParticipants}</td>
           <td>${s.avgScore !== null ? s.avgScore + '%' : '—'}</td>
           <td>${s.ended ? 'Завершена' : 'Активна'}</td>
+          <td><a href="/analytics?code=${encodeURIComponent(s.code)}" target="_blank" style="color:#F07C00;">Аналитика</a></td>
         </tr>
       `).join('');
     }
@@ -2086,6 +2265,28 @@
       navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('SW не зарегистрирован:', e));
     });
   }
+</script>
+
+<!-- Индикатор состояния сервера (облако: Render + Supabase / локальный сервер) -->
+<div id="server-status" title="Состояние сервера. Обновляется каждые 20 секунд." style="position:fixed; right:10px; bottom:10px; z-index:50; font-size:12px; padding:4px 10px; border-radius:14px; background:#fff; border:1px solid #ddd; color:#555; box-shadow:0 1px 4px rgba(0,0,0,.12); pointer-events:none;">…</div>
+<script>
+(function () {
+  const el = document.getElementById('server-status');
+  function set(text, color) { el.textContent = text; el.style.color = color; el.style.borderColor = color; }
+  async function tick() {
+    try {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 8000);
+      const r = await fetch('/health', { signal: ctrl.signal, cache: 'no-store' });
+      clearTimeout(to);
+      const d = await r.json();
+      if (d.db && d.db.ready === false) set('⚠ База данных подключается…', '#d9822b');
+      else if (d.db && d.db.unsavedChanges) set('⚠ Сохранение задерживается', '#d9822b');
+      else set('● Сервер на связи', '#12a150');
+    } catch (e) { set('✖ Нет связи с сервером', '#d64545'); }
+  }
+  tick(); setInterval(tick, 20000);
+})();
 </script>
 </body>
 </html>
