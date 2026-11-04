@@ -157,7 +157,6 @@
       <span class="muted" id="usage-badge" style="font-size:12px;"></span>
     </div>
     <button class="theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Переключить тему">🌙</button>
-    <button class="btn outline small" onclick="setup2fa()" title="Двухфакторная аутентификация">🔐 2FA</button>
     <button class="btn outline small" onclick="logout()">Выход</button>
   </div>
 
@@ -184,18 +183,10 @@
     <div style="max-width: 400px; margin: 40px auto; text-align: center;">
       <h2 id="auth-title" style="margin-bottom: 16px;">Вход в систему</h2>
       <div id="auth-error" class="error" style="display:none;"></div>
-      <div id="auth-step-password">
-        <input type="email" id="auth-email" placeholder="Email">
-        <input type="password" id="auth-password" placeholder="Пароль">
-        <input type="text" id="auth-name" placeholder="Название компании" style="display:none;">
-        <button class="btn" onclick="submitAuth()" id="auth-btn" style="width:100%;">Войти</button>
-      </div>
-      <div id="auth-step-2fa" class="hidden">
-        <p class="muted" style="margin-bottom:12px;">Введите код из приложения-аутентификатора (Google Authenticator, Authy и т.п.)</p>
-        <input type="text" id="auth-2fa-code" placeholder="6-значный код" inputmode="numeric" autocomplete="one-time-code" maxlength="8">
-        <button class="btn" onclick="submit2fa()" id="auth-2fa-btn" style="width:100%;">Подтвердить</button>
-        <button class="btn outline" onclick="cancel2fa()" style="width:100%; margin-top:8px;">Назад</button>
-      </div>
+      <input type="email" id="auth-email" placeholder="Email">
+      <input type="password" id="auth-password" placeholder="Пароль">
+      <input type="text" id="auth-name" placeholder="Название компании" style="display:none;">
+      <button class="btn" onclick="submitAuth()" id="auth-btn" style="width:100%;">Войти</button>
       <div style="margin-top:12px; font-size:14px;">
         <span id="auth-switch">Нет аккаунта? <a onclick="toggleAuthMode()" style="color:#F07C00; cursor:pointer;">Зарегистрироваться</a></span>
       </div>
@@ -238,22 +229,8 @@
         <div id="history-lab"></div>
       </div>
       <div id="tab-drawing" class="hidden">
-        <div class="row" style="margin-bottom:16px; gap:8px; flex-wrap:wrap;">
+        <div class="row" style="margin-bottom:16px;">
           <button class="btn" onclick="showDrawingEditor()">+ Новое задание</button>
-          <button class="btn outline" onclick="document.getElementById('drawing-file-input').click()">📁 Загрузить чертёж</button>
-          <input type="file" id="drawing-file-input" accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,image/*,application/pdf" style="display:none;" onchange="uploadDrawingFile(this)">
-        </div>
-        <div class="card" style="margin-bottom:16px; padding:14px;">
-          <div class="row between" style="margin-bottom:8px;">
-            <strong>Электронные чертежи</strong>
-            <button class="btn outline small" onclick="loadDrawingsLibrary()">Обновить</button>
-          </div>
-          <div class="muted" style="font-size:13px; margin-bottom:10px; line-height:1.45;">
-            Загрузите PNG/JPG/PDF чертежей. Привяжите файл к детали (ключу ответов) — студент увидит чертёж на экране после ввода номера детали.
-            Автопроверка: числовые размеры принимаются с допуском (по умолчанию ±0.03 для размеров &lt; 1 и ±2% для остальных; можно задать явно).
-          </div>
-          <div id="drawings-library" class="muted">Нажмите «Обновить» или загрузите файл.</div>
-          <div id="answer-keys-bind" style="margin-top:14px;"></div>
         </div>
         <h2 style="font-size:18px; margin-bottom:12px;">Задания по чертежам</h2>
         <div id="drawing-list"></div>
@@ -298,9 +275,8 @@
         <h2 id="editor-title" style="margin:0;">Новый тест</h2>
         <div class="row">
           <button class="btn outline small hidden" id="translate-kk-btn" onclick="translateTestToKK()">🌐 Перевести на казахский</button>
-          <button type="button" class="btn outline small hidden" id="import-kk-btn" onclick="if(editingTestId)importKkForTest(editingTestId);else alert('Сначала сохраните тест');">📥 Загрузить KZ из Excel</button>
+          <button class="btn outline small hidden" id="import-kk-btn" onclick="document.getElementById('import-kk-file').click()">📥 Загрузить KZ из Excel</button>
           <input type="file" id="import-kk-file" accept=".xlsx,.xls" style="display:none;" onchange="importKkFromExcel(event)">
-          <input type="file" id="import-kk-file-list" accept=".xlsx,.xls" style="display:none;" onchange="importKkFromExcelList(event)">
           <button class="btn outline small" onclick="showList()">Отмена</button>
         </div>
       </div>
@@ -361,25 +337,6 @@
       </table>
     </div>
   </div>
-  <!-- Редактор допусков ключа ответов -->
-  <div id="answer-key-editor-modal" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,0.45); display:flex; align-items:center; justify-content:center; z-index:60; padding:12px;">
-    <div style="width:720px; max-width:96vw; max-height:92vh; overflow:auto; background:#fff; border-radius:14px; padding:18px 20px;">
-      <div class="row between" style="margin-bottom:10px; align-items:flex-start;">
-        <div>
-          <h3 style="margin:0 0 4px; color:#2C3E50;" id="akey-editor-title">Ключ ответов</h3>
-          <div class="muted" style="font-size:13px;">Отметьте пункты как «число» и задайте эталон + допуск. Остальные сверяются как текст.</div>
-        </div>
-        <button class="btn outline small" onclick="closeAnswerKeyEditor()">✕</button>
-      </div>
-      <div id="akey-editor-body"></div>
-      <div class="error" id="akey-editor-error" style="margin-top:8px;"></div>
-      <div class="row" style="margin-top:12px; gap:8px;">
-        <button class="btn outline" style="flex:1;" onclick="closeAnswerKeyEditor()">Отмена</button>
-        <button class="btn" style="flex:1;" onclick="saveAnswerKeyEditor()">Сохранить допуски</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Модальное окно запуска сессии -->
   <div id="session-start-modal" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,0.4); display:flex; align-items:center; justify-content:center; z-index:50;">
     <div style="width:320px; max-width:94vw; max-height:92vh; overflow-y:auto; background:#fff; border-radius:14px; padding:20px;">
@@ -396,18 +353,6 @@
           <option value="after_end">Только после завершения сессии</option>
           <option value="score_only">Не показывать — только баллы</option>
         </select>
-      </div>
-
-      <div id="session-shuffle-wrap" class="hidden" style="margin-top:10px;">
-        <label class="muted" style="display:block; margin-bottom:6px;">Случайный порядок (антисписывание)</label>
-        <label style="display:flex; gap:8px; align-items:center; font-size:13.5px; cursor:pointer; margin-bottom:4px;">
-          <input type="checkbox" id="session-shuffle-questions" checked>
-          <span>Перемешивать вопросы</span>
-        </label>
-        <label style="display:flex; gap:8px; align-items:center; font-size:13.5px; cursor:pointer;">
-          <input type="checkbox" id="session-shuffle-options" checked>
-          <span>Перемешивать варианты ответов</span>
-        </label>
       </div>
 
       <div id="session-remote-wrap" class="hidden" style="margin-top:10px;">
@@ -508,102 +453,16 @@
       errorEl.style.display = 'block';
       return;
     }
+    localStorage.setItem('b2bCompanyId', data.companyId);
+    localStorage.setItem('b2bToken', data.token);
+    localStorage.setItem('b2bEmail', data.email);
+    localStorage.setItem('b2bPlan', data.plan);
     if (isRegisterMode) {
       alert('Зарегистрировано! Теперь войдите.');
       toggleAuthMode();
       return;
     }
-    if (data.needs2fa && data.tempToken) {
-      window._pending2faToken = data.tempToken;
-      document.getElementById('auth-step-password').classList.add('hidden');
-      document.getElementById('auth-step-2fa').classList.remove('hidden');
-      const c = document.getElementById('auth-2fa-code');
-      if (c) { c.value = ''; c.focus(); }
-      return;
-    }
-    localStorage.setItem('b2bCompanyId', data.companyId);
-    localStorage.setItem('b2bToken', data.token);
-    localStorage.setItem('b2bEmail', data.email);
-    localStorage.setItem('b2bPlan', data.plan);
     enterApp();
-  }
-
-  async function submit2fa() {
-    const errorEl = document.getElementById('auth-error');
-    errorEl.style.display = 'none';
-    const code = (document.getElementById('auth-2fa-code').value || '').trim();
-    if (!code || !window._pending2faToken) {
-      errorEl.textContent = 'Введите код из приложения';
-      errorEl.style.display = 'block';
-      return;
-    }
-    try {
-      const res = await fetch('/api/login/2fa', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tempToken: window._pending2faToken, code: code })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        errorEl.textContent = data.error || 'Неверный код';
-        errorEl.style.display = 'block';
-        return;
-      }
-      window._pending2faToken = null;
-      localStorage.setItem('b2bCompanyId', data.companyId);
-      localStorage.setItem('b2bToken', data.token);
-      localStorage.setItem('b2bEmail', data.email);
-      localStorage.setItem('b2bPlan', data.plan);
-      enterApp();
-    } catch (e) {
-      errorEl.textContent = 'Нет связи с сервером';
-      errorEl.style.display = 'block';
-    }
-  }
-
-  function cancel2fa() {
-    window._pending2faToken = null;
-    document.getElementById('auth-step-2fa').classList.add('hidden');
-    document.getElementById('auth-step-password').classList.remove('hidden');
-  }
-
-  async function setup2fa() {
-    try {
-      const res = await authFetch('/api/2fa/setup', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) { alert(data.error || 'Ошибка'); return; }
-      const code = prompt('Ключ для Google Authenticator / Authy:\n\n' + data.secret + '\n\nВведите 6-значный код для подтверждения:');
-      if (!code) return;
-      const res2 = await authFetch('/api/2fa/enable', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: code })
-      });
-      const data2 = await res2.json();
-      if (!res2.ok) alert(data2.error || 'Неверный код');
-      else alert('2FA включена. При следующем входе потребуется код.');
-    } catch (e) {
-      alert('Нет связи с сервером');
-    }
-  }
-
-  async function disable2fa() {
-    const password = prompt('Введите пароль аккаунта:');
-    if (!password) return;
-    const code = prompt('Введите текущий код 2FA:');
-    if (!code) return;
-    try {
-      const res = await authFetch('/api/2fa/disable', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: password, code: code })
-      });
-      const data = await res.json();
-      if (!res.ok) alert(data.error || 'Ошибка');
-      else alert('2FA отключена');
-    } catch (e) {
-      alert('Нет связи с сервером');
-    }
   }
 
   function enterApp() {
@@ -635,14 +494,8 @@
   // блокировку/окончание пробного периода (ошибки BLOCKED / TRIAL_ENDED).
   async function authFetch(url, options) {
     const token = localStorage.getItem('b2bToken');
-    const opts = Object.assign({}, options || {});
-    const headers = Object.assign({}, opts.headers || {}, { 'x-company-id': token });
-    // Для FormData нельзя ставить Content-Type вручную — boundary проставит браузер
-    if (typeof FormData !== 'undefined' && opts.body instanceof FormData) {
-      delete headers['Content-Type'];
-      delete headers['content-type'];
-    }
-    opts.headers = headers;
+    const opts = options || {};
+    opts.headers = Object.assign({}, opts.headers, { 'x-company-id': token });
     const res = await fetch(url, opts);
     if (res.status === 403) {
       let data = {};
@@ -781,7 +634,7 @@
       container.innerHTML = tests.map(t => {
         const tr = t.translation || {};
         const st = tr.status || 'none';
-        const stLabel = st === 'ready' ? '🟢 KZ готов' : st === 'stale' ? '🟡 KZ устарел' : st === 'pending' ? '⏳ KZ…' : st === 'error' ? '🔴 KZ ошибка' : '⚪ KZ нет';
+        const stLabel = (st === 'ready' && tr.missing > 0) ? ('🟡 KZ частично (без перевода: ' + tr.missing + ')') : st === 'ready' ? '🟢 KZ готов' : st === 'stale' ? '🟡 KZ устарел' : st === 'pending' ? '⏳ KZ…' : st === 'error' ? '🔴 KZ ошибка' : '⚪ KZ нет';
         return `
         <div class="card row between">
           <div>
@@ -791,7 +644,9 @@
           <div class="row" style="flex-wrap:wrap; gap:6px;">
             <button class="btn small" onclick="startSession('${t.id}')">Начать сессию</button>
             <button class="btn outline small" onclick="editTest('${t.id}')">Изменить</button>
-            <button class="btn outline small" type="button" onclick="window.importKkForTest && window.importKkForTest('${t.id}')" title="Загрузить казахский Excel (тот же порядок вопросов)">📥 KZ Excel</button>
+            <button class="btn outline small" onclick="downloadBilingual('${t.id}')" title="Скачать шаблон: русский и казахский рядом, строки привязаны к ID вопроса">⬇ Шаблон RU+KZ</button>
+            <button class="btn outline small" onclick="importKkForTest('${t.id}')" title="Загрузить казахский Excel — перед сохранением будет предпросмотр">📥 KZ Excel</button>
+            <button class="btn outline small" onclick="openItemAnalysis('${t.id}')" title="Какие вопросы трудные, спорные или не различают студентов">📊 Анализ</button>
             <button class="btn outline small" onclick="exportTestExcel('${t.id}')">Экспорт Excel</button>
             <button class="btn danger small" onclick="deleteTest('${t.id}')">Удалить</button>
           </div>
@@ -854,84 +709,152 @@
   }
 
 
+  // ---------- ЗАГРУЗКА KZ ИЗ EXCEL: предпросмотр → подтверждение ----------
+  function kkEl(tag, css, text) { const e = document.createElement(tag); if (css) e.style.cssText = css; if (text !== undefined) e.textContent = text; return e; }
+
+  async function kkImportFlow(testId, file, onDone) {
+    let data;
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const res = await authFetch('/api/tests/' + testId + '/import-kk?dry=1', { method: 'POST', body: fd });
+      data = await res.json().catch(() => ({}));
+      if (!res.ok) { alert(data.error || 'Не удалось прочитать казахский Excel'); return; }
+    } catch (e) { alert('Сеть недоступна'); return; }
+    kkShowPreview(testId, file, data, onDone);
+  }
+
+  function kkShowPreview(testId, file, d, onDone) {
+    const old = document.getElementById('kk-preview-overlay'); if (old) old.remove();
+    const ov = kkEl('div', 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow:auto;');
+    ov.id = 'kk-preview-overlay';
+    const box = kkEl('div', 'background:var(--card,#fff);color:var(--text,#222);border-radius:14px;max-width:980px;width:100%;padding:16px;box-shadow:0 10px 40px rgba(0,0,0,.35);');
+    ov.appendChild(box);
+    box.appendChild(kkEl('h3', 'margin:0 0 6px;', 'Предпросмотр загрузки казахской версии'));
+    const modeTxt = d.mode === 'bilingual'
+      ? 'Формат RU+KZ: вопросы сопоставлены по русскому тексту и ID (' + (d.matchedBy.id + d.matchedBy.text) + ' из ' + d.summary.total + ') — порядок строк не важен.'
+      : 'Старый формат: строки сопоставляются по порядку. Надёжнее скачать «Шаблон RU+KZ» кнопкой в списке тестов.';
+    box.appendChild(kkEl('div', 'font-size:13px;opacity:.75;margin-bottom:10px;', modeTxt));
+
+    const s = d.summary;
+    const chips = kkEl('div', 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;');
+    [['✅ Готово: ' + s.ok, '#12a150'], ['⚠ С замечаниями: ' + s.warn, '#d9822b'], ['❌ Нельзя применить: ' + s.error, '#d64545']].forEach(([t, c]) => {
+      chips.appendChild(kkEl('span', 'border:1px solid ' + c + ';color:' + c + ';border-radius:12px;padding:2px 10px;font-size:13px;', t));
+    });
+    box.appendChild(chips);
+    (d.fatal || []).forEach(t => box.appendChild(kkEl('div', 'background:#fde8e8;color:#9b1c1c;border-radius:8px;padding:8px 10px;margin-bottom:8px;', '❌ ' + t)));
+    if (d.extra && d.extra.length) {
+      box.appendChild(kkEl('div', 'background:#fff4e0;color:#8a5200;border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:13px;',
+        '⚠ В файле ' + d.extra.length + ' строк(и) не относятся к этому тесту и будут пропущены (например, строка ' + d.extra[0].line + ').'));
+    }
+
+    const hasProblems = s.warn + s.error > 0;
+    const onlyBox = document.createElement('input'); onlyBox.type = 'checkbox'; onlyBox.checked = hasProblems;
+    const onlyLbl = kkEl('label', 'display:flex;gap:6px;align-items:center;font-size:13px;margin-bottom:8px;');
+    onlyLbl.appendChild(onlyBox); onlyLbl.appendChild(document.createTextNode('Показывать только строки с замечаниями'));
+    box.appendChild(onlyLbl);
+
+    const wrap = kkEl('div', 'max-height:52vh;overflow:auto;border:1px solid rgba(128,128,128,.3);border-radius:8px;');
+    box.appendChild(wrap);
+    const COL = { ok: '#12a150', warn: '#d9822b', error: '#d64545', missing: '#d64545' };
+    const LBL = { ok: '✅', warn: '⚠', error: '❌', missing: '❌' };
+    function draw() {
+      wrap.textContent = '';
+      const tbl = kkEl('table', 'width:100%;border-collapse:collapse;font-size:13px;');
+      const hr = kkEl('tr'); ['№', '', 'Русский', 'Қазақша', 'Замечания'].forEach(h => hr.appendChild(kkEl('th', 'position:sticky;top:0;background:var(--card,#fff);text-align:left;padding:6px 8px;border-bottom:1px solid rgba(128,128,128,.3);', h)));
+      tbl.appendChild(hr);
+      let shown = 0;
+      d.rows.forEach(r => {
+        if (onlyBox.checked && r.status === 'ok') return;
+        shown++;
+        const tr = kkEl('tr', 'vertical-align:top;border-bottom:1px solid rgba(128,128,128,.2);');
+        tr.appendChild(kkEl('td', 'padding:6px 8px;', String(r.n)));
+        tr.appendChild(kkEl('td', 'padding:6px 4px;color:' + COL[r.status] + ';', LBL[r.status]));
+        const ru = kkEl('td', 'padding:6px 8px;min-width:220px;'); ru.appendChild(kkEl('div', 'font-weight:600;', r.ru.text));
+        r.ru.options.forEach((o, i) => ru.appendChild(kkEl('div', 'opacity:.8;', (i + 1) + '. ' + o)));
+        tr.appendChild(ru);
+        const kk = kkEl('td', 'padding:6px 8px;min-width:220px;');
+        if (r.kk) {
+          kk.appendChild(kkEl('div', 'font-weight:600;', r.kk.text || '—'));
+          r.kk.options.forEach((o, i) => kk.appendChild(kkEl('div', o ? 'opacity:.8;' : 'color:#d64545;', (i + 1) + '. ' + (o || '— нет —'))));
+        } else kk.appendChild(kkEl('div', 'color:#d64545;', '— нет строки в файле —'));
+        tr.appendChild(kk);
+        const is = kkEl('td', 'padding:6px 8px;min-width:160px;');
+        r.issues.forEach(x => is.appendChild(kkEl('div', 'color:' + (x.level === 'error' ? '#d64545' : '#d9822b') + ';', x.text)));
+        tr.appendChild(is);
+        tbl.appendChild(tr);
+      });
+      if (!shown) { const tr = kkEl('tr'); const td = kkEl('td', 'padding:14px;text-align:center;opacity:.7;', 'Замечаний нет — всё готово к загрузке ✅'); td.colSpan = 5; tr.appendChild(td); tbl.appendChild(tr); }
+      wrap.appendChild(tbl);
+    }
+    onlyBox.addEventListener('change', draw); draw();
+
+    const actions = kkEl('div', 'display:flex;gap:8px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap;align-items:center;');
+    if (s.error > 0 && d.canApply) actions.appendChild(kkEl('div', 'flex:1 1 260px;font-size:12.5px;opacity:.75;', 'Строки с ❌ не будут применены: в тесте для них останется прежний перевод или русский текст.'));
+    const cancel = kkEl('button', 'padding:8px 14px;border:1px solid rgba(128,128,128,.4);border-radius:8px;background:transparent;color:inherit;cursor:pointer;', 'Отмена');
+    cancel.onclick = () => ov.remove();
+    const apply = kkEl('button', 'padding:8px 16px;border:0;border-radius:8px;background:#F07C00;color:#fff;cursor:pointer;font-weight:600;',
+      s.error > 0 ? 'Применить частично (' + d.applicable + ' из ' + s.total + ')' : 'Применить (' + d.applicable + ' вопросов)');
+    apply.disabled = !d.canApply; if (!d.canApply) apply.style.opacity = '.45';
+    apply.onclick = async () => {
+      apply.disabled = true; apply.textContent = 'Сохраняю…';
+      try {
+        const fd = new FormData(); fd.append('file', file);
+        const res = await authFetch('/api/tests/' + testId + '/import-kk' + (s.error > 0 ? '?partial=1' : ''), { method: 'POST', body: fd });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok) { alert(out.error || 'Не удалось сохранить'); apply.disabled = false; apply.textContent = 'Применить'; return; }
+        ov.remove();
+        alert('Казахская версия загружена: ' + out.count + ' вопросов' + (out.missing ? ' (без перевода осталось: ' + out.missing + ')' : '') + '.');
+        if (onDone) onDone(out);
+      } catch (e) { alert('Сеть недоступна'); apply.disabled = false; apply.textContent = 'Применить'; }
+    };
+    actions.appendChild(cancel); actions.appendChild(apply);
+    box.appendChild(actions);
+    ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+    document.body.appendChild(ov);
+  }
+
   async function importKkFromExcel(ev) {
     const file = ev.target.files && ev.target.files[0];
     ev.target.value = '';
     if (!file) return;
-    if (!editingTestId) {
-      alert('Сначала сохраните тест, затем загрузите казахский Excel.');
-      return;
-    }
-    await uploadKkExcel(editingTestId, file);
-  }
-  window.importKkFromExcel = importKkFromExcel;
-
-
-  // ===== Загрузка казахского Excel =====
-  function importKkForTest(testId) {
-    try {
-      if (!testId) { alert('Не указан тест'); return; }
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
-      input.style.display = 'none';
-      input.addEventListener('change', async function () {
-        const file = input.files && input.files[0];
-        try { document.body.removeChild(input); } catch (e) {}
-        if (!file) return;
-        await uploadKkExcel(testId, file);
-      });
-      document.body.appendChild(input);
-      input.click();
-    } catch (e) {
-      console.error(e);
-      alert('Не удалось открыть выбор файла: ' + (e.message || e));
-    }
-  }
-
-  async function uploadKkExcel(testId, file) {
-    if (!testId || !file) return;
+    if (!editingTestId) { alert('Сначала сохраните тест, затем загрузите казахский Excel.'); return; }
     const statusEl = document.getElementById('translate-kk-status');
-    if (statusEl) statusEl.textContent = 'Загружаю казахскую версию из Excel…';
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await authFetch('/api/tests/' + encodeURIComponent(testId) + '/import-kk', {
-        method: 'POST',
-        body: fd
-      });
-      const data = await res.json().catch(function () { return {}; });
-      if (!res.ok) {
-        var msg = data.error || ('Ошибка ' + res.status);
-        if (res.status === 404) {
-          msg += '\n\nНа сервере нет маршрута import-kk. Задеплойте обновлённый server.js.';
-        }
-        alert(msg);
-        if (statusEl) statusEl.textContent = 'Ошибка: ' + (data.error || res.status);
-        return;
-      }
-      alert('Казахская версия загружена: ' + (data.count || 0) + ' вопросов.\nСтатус: ready.');
-      if (statusEl) statusEl.textContent = '✅ Казахская версия загружена (' + (data.count || 0) + ' вопросов). Статус: ready.';
-      if (typeof loadTestsList === 'function') loadTestsList();
-    } catch (e) {
-      console.error(e);
-      alert('Сеть недоступна или ошибка: ' + (e.message || e));
-      if (statusEl) statusEl.textContent = 'Сеть недоступна';
+    await kkImportFlow(editingTestId, file, (out) => {
+      if (statusEl) statusEl.textContent = '✅ Казахская версия загружена (' + out.count + ' вопросов). Студенты увидят KZ без перевода на лету.';
+    });
+  }
+
+  function downloadBilingual(testId) {
+    const token = localStorage.getItem('b2bToken');
+    window.location.href = '/api/tests/' + testId + '/export-bilingual?companyId=' + encodeURIComponent(token);
+  }
+  function openItemAnalysis(testId) { window.open('/item-analysis?test=' + encodeURIComponent(testId), '_blank'); }
+
+  // Быстрая загрузка KZ из списка тестов (без входа в редактор)
+  function importKkForTest(testId) {
+    if (!testId) { alert('Не указан тест'); return; }
+    let input = document.getElementById('import-kk-file-list');
+    if (!input) {
+      input = document.createElement('input');
+      input.type = 'file';
+      input.id = 'import-kk-file-list';
+      input.accept = '.xlsx,.xls';
+      input.style.display = 'none';
+      input.addEventListener('change', importKkFromExcelList);
+      document.body.appendChild(input);
     }
+    input.dataset.testId = testId;
+    input.value = '';
+    input.click();
   }
 
   async function importKkFromExcelList(ev) {
-    // совместимость со старым input, если остался в разметке
-    var file = ev.target.files && ev.target.files[0];
-    var testId = ev.target.dataset.testId;
+    const file = ev.target.files && ev.target.files[0];
+    const testId = ev.target.dataset.testId;
     ev.target.value = '';
     if (!file || !testId) return;
-    await uploadKkExcel(testId, file);
+    await kkImportFlow(testId, file, () => loadTestsList());
   }
-
-  // Явно в window — чтобы inline onclick всегда находил функцию
-  window.importKkForTest = importKkForTest;
-  window.uploadKkExcel = uploadKkExcel;
 
   async function translateTestToKK() {
     if (!editingTestId) return;
@@ -961,152 +884,40 @@
     const wrap = document.createElement('div');
     wrap.className = 'question-block';
     wrap._imageData = existing && existing.image ? existing.image : null;
-    const qType = (existing && existing.type) ? existing.type : 'choice';
-    const optionsHtml = (existing && existing.options && existing.options.length ? existing.options : ['', '']).map((opt, i) => `
+    const optionsHtml = (existing ? existing.options : ['', '']).map((opt, i) => `
       <div class="option-row">
         <input type="checkbox" class="opt-correct">
         <input type="text" class="opt-text" value="${escapeHtml(opt || '')}" placeholder="Вариант ${i+1}">
         <button class="btn outline small" onclick="this.parentElement.remove()">✕</button>
       </div>
     `).join('');
-    const leftHtml = (existing && existing.leftItems ? existing.leftItems : [{text:''},{text:''}]).map((it, i) => `
-      <div class="match-row" data-side="left">
-        <input type="text" class="match-text" value="${escapeHtml(it.text || '')}" placeholder="Левый элемент ${i+1}">
-        <input type="hidden" class="match-id" value="${escapeHtml(it.id || ('l'+i))}">
-        <button class="btn outline small" onclick="this.parentElement.remove()">✕</button>
-      </div>
-    `).join('');
-    const rightHtml = (existing && existing.rightItems ? existing.rightItems : [{text:''},{text:''}]).map((it, i) => `
-      <div class="match-row" data-side="right">
-        <input type="text" class="match-text" value="${escapeHtml(it.text || '')}" placeholder="Правый элемент ${i+1}">
-        <input type="hidden" class="match-id" value="${escapeHtml(it.id || ('r'+i))}">
-        <button class="btn outline small" onclick="this.parentElement.remove()">✕</button>
-      </div>
-    `).join('');
-    const pairs = (existing && existing.correctPairs) ? existing.correctPairs : {};
-    const pairsHint = Object.keys(pairs).length ? Object.entries(pairs).map(([l,r]) => l + '→' + r).join(', ') : '';
-
+    
     wrap.innerHTML = `
       <div class="row between">
         <label style="font-weight:600;">Вопрос</label>
         <button class="btn outline small" onclick="this.closest('.question-block').remove()">✕</button>
       </div>
-      <div class="row" style="gap:10px; margin-bottom:8px; align-items:center;">
-        <label class="muted" style="font-size:13px;">Тип:</label>
-        <select class="q-type" onchange="onQuestionTypeChange(this)" style="padding:6px 10px; border-radius:8px; border:1px solid var(--border);">
-          <option value="choice" ${qType==='choice'?'selected':''}>Выбор варианта</option>
-          <option value="numeric" ${qType==='numeric'?'selected':''}>Вписать число / допуск</option>
-          <option value="matching" ${qType==='matching'?'selected':''}>Сопоставить</option>
-        </select>
-      </div>
       <input type="text" class="q-text" value="${existing ? escapeHtml(existing.text) : ''}" placeholder="Текст вопроса">
       <input type="text" class="q-tags" value="${existing && existing.tags ? escapeHtml(existing.tags.join(', ')) : ''}" placeholder="Теги через запятую (например: подшипники, вибрация) — необязательно" style="font-size:13px; color:#666;">
       <textarea class="q-explain" placeholder="Пояснение — покажется студенту после сдачи теста, необязательно" style="font-size:13px; color:#666; min-height:44px;">${existing && existing.explain ? escapeHtml(existing.explain) : ''}</textarea>
-      <div class="q-image-block" style="margin:8px 0; padding:10px; border:1px dashed var(--border); border-radius:10px; background:var(--bg-card-alt);"
-           ondragover="event.preventDefault(); this.style.borderColor='#3b82f6';"
-           ondragleave="this.style.borderColor='';"
-           ondrop="event.preventDefault(); this.style.borderColor=''; handleQuestionImageDrop(event, this);">
+      <div class="q-image-block" style="margin:8px 0;">
         <input type="file" accept="image/*" style="display:none;" class="q-image-input" onchange="handleQuestionImage(this)">
-        <button type="button" class="btn outline small" onclick="this.parentElement.querySelector('.q-image-input').click()">🖼️ ${existing && existing.image ? 'Заменить изображение' : 'Добавить изображение'}</button>
-        <span class="muted" style="font-size:12px;"> или перетащите файл сюда · JPEG/PNG/WebP, сжимается автоматически</span>
+        <button type="button" class="btn outline small" onclick="this.previousElementSibling.click()">🖼️ ${existing && existing.image ? 'Заменить изображение' : 'Добавить изображение'}</button>
+        <span class="muted" style="font-size:12px;">необязательно, сжимается автоматически</span>
         <div class="q-image-preview-wrap ${existing && existing.image ? '' : 'hidden'}" style="margin-top:8px;">
-          <img class="q-image-preview" src="${existing && existing.image ? existing.image : ''}" style="max-width:280px; max-height:180px; border-radius:8px; display:block; border:1px solid var(--border); cursor:pointer;" onclick="window.open(this.src,'_blank')">
+          <img class="q-image-preview" src="${existing && existing.image ? existing.image : ''}" style="max-width:220px; max-height:140px; border-radius:8px; display:block; border:1px solid var(--border);">
           <button type="button" class="btn outline small" style="margin-top:4px;" onclick="removeQuestionImage(this)">Удалить изображение</button>
         </div>
       </div>
-
-      <div class="q-body-choice" style="${qType!=='choice'?'display:none':''}">
-        <div class="options-container">${optionsHtml}</div>
-        <button class="btn outline small" style="margin-top:6px;" onclick="addOption(this.closest('.question-block'))">+ Вариант</button>
-      </div>
-
-      <div class="q-body-numeric" style="${qType!=='numeric'?'display:none':''}">
-        <div class="row" style="gap:10px; flex-wrap:wrap; margin-top:6px;">
-          <div style="flex:1; min-width:120px;">
-            <label class="muted" style="font-size:12px;">Эталонное значение</label>
-            <input type="text" class="q-correct-value" inputmode="decimal" value="${existing && existing.correctValue != null ? escapeHtml(String(existing.correctValue)) : ''}" placeholder="например 12.5">
-          </div>
-          <div style="flex:1; min-width:100px;">
-            <label class="muted" style="font-size:12px;">Допуск ±</label>
-            <input type="text" class="q-tolerance" inputmode="decimal" value="${existing && existing.tolerance != null ? escapeHtml(String(existing.tolerance)) : '0'}" placeholder="0.3">
-          </div>
-          <div style="flex:1; min-width:120px;">
-            <label class="muted" style="font-size:12px;">Тип допуска</label>
-            <select class="q-tolerance-type" style="width:100%; padding:8px; border-radius:8px; border:1px solid var(--border);">
-              <option value="absolute" ${!(existing && existing.toleranceType==='percent')?'selected':''}>Абсолютный</option>
-              <option value="percent" ${existing && existing.toleranceType==='percent'?'selected':''}>Процентный (%)</option>
-            </select>
-          </div>
-          <div style="flex:1; min-width:80px;">
-            <label class="muted" style="font-size:12px;">Ед. изм.</label>
-            <input type="text" class="q-unit" value="${existing && existing.unit ? escapeHtml(existing.unit) : ''}" placeholder="мм">
-          </div>
-        </div>
-      </div>
-
-      <div class="q-body-matching" style="${qType!=='matching'?'display:none':''}">
-        <div class="row" style="gap:16px; margin-top:6px; align-items:flex-start;">
-          <div style="flex:1;">
-            <label class="muted" style="font-size:12px; font-weight:600;">Левая колонка</label>
-            <div class="match-left-container">${leftHtml}</div>
-            <button class="btn outline small" style="margin-top:4px;" onclick="addMatchItem(this.closest('.question-block'),'left')">+ Элемент</button>
-          </div>
-          <div style="flex:1;">
-            <label class="muted" style="font-size:12px; font-weight:600;">Правая колонка</label>
-            <div class="match-right-container">${rightHtml}</div>
-            <button class="btn outline small" style="margin-top:4px;" onclick="addMatchItem(this.closest('.question-block'),'right')">+ Элемент</button>
-          </div>
-        </div>
-        <div style="margin-top:8px;">
-          <label class="muted" style="font-size:12px;">Правильные пары (id левого → id правого через запятую, напр. l0:r1, l1:r0). Оставьте пустым — пары по порядку.</label>
-          <input type="text" class="q-pairs" value="${escapeHtml(pairsHint)}" placeholder="l0:r0, l1:r1">
-        </div>
-        <label style="display:flex; gap:8px; align-items:center; margin-top:6px; font-size:13px; cursor:pointer;">
-          <input type="checkbox" class="q-partial" ${existing && existing.partialScore ? 'checked' : ''}>
-          <span>Частичный балл (за каждое верное соответствие)</span>
-        </label>
-      </div>
+      <div class="options-container">${optionsHtml}</div>
+      <button class="btn outline small" style="margin-top:6px;" onclick="addOption(this.closest('.question-block'))">+ Вариант</button>
     `;
     document.getElementById('questions-container').appendChild(wrap);
-    if (existing && qType === 'choice' && existing.correct !== undefined) {
+    if (existing && existing.correct !== undefined) {
       const correctIdxs = Array.isArray(existing.correct) ? existing.correct : [existing.correct];
       const checkboxes = wrap.querySelectorAll('.opt-correct');
       correctIdxs.forEach(idx => { if (checkboxes[idx]) checkboxes[idx].checked = true; });
     }
-  }
-
-  function onQuestionTypeChange(sel) {
-    const block = sel.closest('.question-block');
-    const t = sel.value;
-    block.querySelector('.q-body-choice').style.display = t === 'choice' ? '' : 'none';
-    block.querySelector('.q-body-numeric').style.display = t === 'numeric' ? '' : 'none';
-    block.querySelector('.q-body-matching').style.display = t === 'matching' ? '' : 'none';
-  }
-
-  function addMatchItem(block, side) {
-    const container = block.querySelector(side === 'left' ? '.match-left-container' : '.match-right-container');
-    const n = container.querySelectorAll('.match-row').length;
-    const prefix = side === 'left' ? 'l' : 'r';
-    const div = document.createElement('div');
-    div.className = 'match-row';
-    div.dataset.side = side;
-    div.innerHTML = `
-      <input type="text" class="match-text" placeholder="${side==='left'?'Левый':'Правый'} элемент ${n+1}">
-      <input type="hidden" class="match-id" value="${prefix}${n}">
-      <button class="btn outline small" onclick="this.parentElement.remove()">✕</button>
-    `;
-    container.appendChild(div);
-  }
-
-  function handleQuestionImageDrop(ev, blockEl) {
-    const files = ev.dataTransfer && ev.dataTransfer.files;
-    if (!files || !files.length) return;
-    const input = blockEl.querySelector('.q-image-input');
-    // emulate file select
-    const dt = new DataTransfer();
-    dt.items.add(files[0]);
-    input.files = dt.files;
-    handleQuestionImage(input);
   }
 
   function addOption(block) {
@@ -1169,75 +980,25 @@
     const questions = [];
     for (const block of blocks) {
       const text = block.querySelector('.q-text').value.trim();
+      const options = [];
+      const correctIdxs = [];
+      block.querySelectorAll('.option-row').forEach((row, i) => {
+        const val = row.querySelector('.opt-text').value.trim();
+        if (val) {
+          options.push(val);
+          if (row.querySelector('.opt-correct').checked) correctIdxs.push(i);
+        }
+      });
+      if (!text || options.length < 2 || correctIdxs.length === 0) {
+        errorEl.textContent = 'В каждом вопросе должен быть текст, минимум 2 варианта и отмечен правильный.';
+        return;
+      }
+      const multi = correctIdxs.length > 1;
       const tagsRaw = block.querySelector('.q-tags').value.trim();
       const tags = tagsRaw ? [...new Set(tagsRaw.split(',').map(t => t.trim()).filter(Boolean))] : [];
       const explain = block.querySelector('.q-explain').value.trim();
       const image = block._imageData || null;
-      const qType = (block.querySelector('.q-type') || {}).value || 'choice';
-
-      if (!text) {
-        errorEl.textContent = 'У каждого вопроса должен быть текст.';
-        return;
-      }
-
-      if (qType === 'numeric') {
-        const correctValue = block.querySelector('.q-correct-value').value.trim().replace(',', '.');
-        const tolerance = block.querySelector('.q-tolerance').value.trim().replace(',', '.') || '0';
-        const toleranceType = block.querySelector('.q-tolerance-type').value;
-        const unit = block.querySelector('.q-unit').value.trim();
-        if (correctValue === '' || isNaN(parseFloat(correctValue))) {
-          errorEl.textContent = 'В числовом вопросе укажите эталонное значение.';
-          return;
-        }
-        questions.push({ type: 'numeric', text, correctValue: parseFloat(correctValue), tolerance: parseFloat(tolerance) || 0, toleranceType, unit, tags, explain, image });
-      } else if (qType === 'matching') {
-        const leftItems = [];
-        block.querySelectorAll('.match-left-container .match-row').forEach((row, i) => {
-          const t = row.querySelector('.match-text').value.trim();
-          if (t) leftItems.push({ id: row.querySelector('.match-id').value || ('l'+i), text: t });
-        });
-        const rightItems = [];
-        block.querySelectorAll('.match-right-container .match-row').forEach((row, i) => {
-          const t = row.querySelector('.match-text').value.trim();
-          if (t) rightItems.push({ id: row.querySelector('.match-id').value || ('r'+i), text: t });
-        });
-        if (leftItems.length < 2 || rightItems.length < 2) {
-          errorEl.textContent = 'В вопросе «Сопоставить» нужно минимум 2 элемента в каждой колонке.';
-          return;
-        }
-        const pairsRaw = (block.querySelector('.q-pairs').value || '').trim();
-        const correctPairs = {};
-        if (pairsRaw) {
-          pairsRaw.split(',').forEach(pair => {
-            const [l, r] = pair.split(/[→:>\-]+/).map(s => s.trim());
-            if (l && r) correctPairs[l] = r;
-          });
-        }
-        if (Object.keys(correctPairs).length === 0) {
-          // по порядку: l0→r0, l1→r1...
-          leftItems.forEach((li, i) => {
-            if (rightItems[i]) correctPairs[li.id] = rightItems[i].id;
-          });
-        }
-        const partialScore = !!(block.querySelector('.q-partial') || {}).checked;
-        questions.push({ type: 'matching', text, leftItems, rightItems, correctPairs, partialScore, tags, explain, image });
-      } else {
-        const options = [];
-        const correctIdxs = [];
-        block.querySelectorAll('.option-row').forEach((row, i) => {
-          const val = row.querySelector('.opt-text').value.trim();
-          if (val) {
-            options.push(val);
-            if (row.querySelector('.opt-correct').checked) correctIdxs.push(options.length - 1);
-          }
-        });
-        if (options.length < 2 || correctIdxs.length === 0) {
-          errorEl.textContent = 'В вопросе с выбором нужны минимум 2 варианта и отмечен правильный.';
-          return;
-        }
-        const multi = correctIdxs.length > 1;
-        questions.push({ type: 'choice', text, options, correct: multi ? correctIdxs : correctIdxs[0], multi, tags, explain, image });
-      }
+      questions.push({ text, options, correct: multi ? correctIdxs : correctIdxs[0], multi, tags, explain, image });
     }
 
     const payload = { title, questions };
@@ -1356,10 +1117,7 @@
     document.getElementById('session-time-limit').value = '';
     document.getElementById('session-timelimit-wrap').classList.toggle('hidden', type !== 'test' && type !== 'drawing');
     document.getElementById('session-showanswers-wrap').classList.toggle('hidden', type !== 'test');
-    document.getElementById('session-shuffle-wrap').classList.toggle('hidden', type !== 'test');
     document.getElementById('session-show-answers').value = 'immediately';
-    document.getElementById('session-shuffle-questions').checked = true;
-    document.getElementById('session-shuffle-options').checked = true;
     document.getElementById('session-remote').checked = false;
     document.getElementById('session-remote-wrap').classList.toggle('hidden', !(networkInfo && networkInfo.localMode && networkInfo.remote && networkInfo.remote.available));
     loadGroupsForSessionModal();
@@ -1484,11 +1242,7 @@
     const endpoint = type === 'lab' ? '/api/lab-sessions' : type === 'drawing' ? '/api/drawing-sessions' : type === 'tolerance' ? '/api/tolerance-sessions' : '/api/sessions';
     const body = type === 'lab' ? { labId: id, scheduledAt } : type === 'drawing' ? { drawingTaskId: id, timeLimit, scheduledAt } : type === 'tolerance' ? { toleranceTaskId: id, scheduledAt } : { testId: id, timeLimit, scheduledAt };
     if (remoteChecked) body.remote = true;
-    if (type === 'test') {
-      body.showAnswers = showAnswers;
-      body.shuffleQuestions = document.getElementById('session-shuffle-questions').checked;
-      body.shuffleOptions = document.getElementById('session-shuffle-options').checked;
-    }
+    if (type === 'test') body.showAnswers = showAnswers;
     if (groupChoice === 'none') body.groupId = null;
     else if (groupChoice) body.groupId = groupChoice;
     const res = await authFetch(endpoint, {
@@ -2048,234 +1802,7 @@
 
   let editingDrawingTaskId = null;
 
-  async function uploadDrawingFile(input) {
-    const file = input.files && input.files[0];
-    input.value = '';
-    if (!file) return;
-    const fd = new FormData();
-    fd.append('file', file);
-    try {
-      const res = await authFetch('/api/drawings/upload', { method: 'POST', body: fd });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) { alert(data.error || 'Ошибка загрузки'); return; }
-      alert('Чертёж загружен: ' + data.name);
-      loadDrawingsLibrary();
-    } catch (e) {
-      alert('Не удалось загрузить файл');
-    }
-  }
-
-  async function loadDrawingsLibrary() {
-    const lib = document.getElementById('drawings-library');
-    const bind = document.getElementById('answer-keys-bind');
-    if (!lib) return;
-    try {
-      const [filesRes, keysRes] = await Promise.all([
-        authFetch('/api/drawings'),
-        authFetch('/api/answer-keys')
-      ]);
-      const filesData = filesRes.ok ? await filesRes.json() : { files: [] };
-      const keys = keysRes.ok ? await keysRes.json() : [];
-      const files = filesData.files || [];
-      if (files.length === 0) {
-        lib.innerHTML = '<span class="muted">Файлов пока нет — нажмите «Загрузить чертёж».</span>';
-      } else {
-        lib.innerHTML = files.map(f => `
-          <div class="row between" style="padding:6px 0; border-bottom:1px solid var(--border); gap:8px;">
-            <div style="flex:1; min-width:0;">
-              <a href="${f.url}" target="_blank" rel="noopener">${escapeHtml(f.name)}</a>
-              <span class="muted" style="font-size:12px;"> · ${(f.size/1024).toFixed(0)} КБ</span>
-            </div>
-            <button class="btn outline small" onclick="deleteDrawingFile('${escapeHtml(f.name)}')">Удалить</button>
-          </div>
-        `).join('');
-      }
-      // привязка к ключам
-      if (!keys.length) {
-        bind.innerHTML = '';
-        return;
-      }
-      const fileOpts = files.map(f => `<option value="${f.url}">${escapeHtml(f.name)}</option>`).join('');
-      bind.innerHTML = `
-        <strong style="display:block; margin-bottom:8px;">Привязка чертежа к детали (ключу ответов)</strong>
-        <div class="muted" style="font-size:12px; margin-bottom:8px;">Студент вводит номер/название детали при входе — система подставляет чертёж и автопроверяет ответы.</div>
-        ${keys.slice(0, 40).map(k => `
-          <div class="row" style="gap:8px; margin-bottom:8px; align-items:center; flex-wrap:wrap; padding-bottom:8px; border-bottom:1px solid var(--border);">
-            <span style="min-width:150px; font-size:13px; font-weight:600;">${k.number != null ? (k.number + '. ') : ''}${escapeHtml(k.name || k.title || k.id)}</span>
-            <select id="bind-sel-${k.id}" style="flex:1; min-width:120px; padding:6px; border-radius:8px; border:1px solid var(--border);">
-              <option value="">— без чертежа —</option>
-              ${fileOpts}
-            </select>
-            <button class="btn outline small" onclick="bindDrawingToKey('${k.id}')">Чертёж</button>
-            <button class="btn small" onclick="openAnswerKeyEditor('${k.id}')">Допуски</button>
-          </div>
-        `).join('')}
-      `;
-      // preselect current
-      keys.forEach(k => {
-        const sel = document.getElementById('bind-sel-' + k.id);
-        if (sel && k.drawingImage) sel.value = k.drawingImage;
-      });
-    } catch (e) {
-      lib.innerHTML = '<span class="muted">Не удалось загрузить список файлов</span>';
-    }
-  }
-
-  async function deleteDrawingFile(name) {
-    if (!confirm('Удалить файл «' + name + '»?')) return;
-    await authFetch('/api/drawings/' + encodeURIComponent(name), { method: 'DELETE' });
-    loadDrawingsLibrary();
-  }
-
-  let editingAnswerKeyId = null;
-
-  function closeAnswerKeyEditor() {
-    document.getElementById('answer-key-editor-modal').classList.add('hidden');
-    editingAnswerKeyId = null;
-  }
-
-  async function openAnswerKeyEditor(keyId) {
-    const errEl = document.getElementById('akey-editor-error');
-    errEl.textContent = '';
-    const res = await authFetch('/api/answer-keys/' + keyId);
-    if (!res.ok) {
-      alert('Не удалось загрузить ключ');
-      return;
-    }
-    const key = await res.json();
-    editingAnswerKeyId = key.id;
-    document.getElementById('akey-editor-title').textContent =
-      (key.number != null ? key.number + '. ' : '') + (key.name || key.title || key.id);
-    const body = document.getElementById('akey-editor-body');
-    body.innerHTML = (key.questions || []).map((q, i) => {
-      const isNum = q.type === 'numeric' || (q.value != null && q.value !== '');
-      const val = isNum && q.value != null ? q.value : '';
-      const tol = isNum && q.tolerance != null ? q.tolerance : (isNum ? 0.03 : '');
-      const unit = q.unit || '';
-      return `
-        <div class="akey-q" data-idx="${i}" style="border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:10px; background:var(--bg-card-alt);">
-          <div style="font-size:13px; font-weight:600; margin-bottom:6px;">${i + 1}. ${escapeHtml(q.text || '')}</div>
-          <input type="hidden" class="akey-text" value="${escapeHtml(q.text || '')}">
-          <label class="muted" style="font-size:12px;">Эталонный ответ (текст)</label>
-          <textarea class="akey-answer" rows="2" style="width:100%; font-size:13px; margin-bottom:6px;">${escapeHtml(q.answer || '')}</textarea>
-          <label style="display:flex; gap:8px; align-items:center; font-size:13px; cursor:pointer; margin-bottom:6px;">
-            <input type="checkbox" class="akey-is-num" ${isNum ? 'checked' : ''} onchange="toggleAkeyNumeric(this)">
-            <span>Числовой размер (проверка с допуском)</span>
-          </label>
-          <div class="akey-num-fields" style="display:${isNum ? 'flex' : 'none'}; gap:8px; flex-wrap:wrap;">
-            <div style="flex:1; min-width:90px;">
-              <label class="muted" style="font-size:11px;">Эталон</label>
-              <input type="text" class="akey-value" inputmode="decimal" value="${escapeHtml(String(val))}" placeholder="0.15">
-            </div>
-            <div style="flex:1; min-width:90px;">
-              <label class="muted" style="font-size:11px;">Допуск ±</label>
-              <input type="text" class="akey-tol" inputmode="decimal" value="${escapeHtml(String(tol))}" placeholder="0.03">
-            </div>
-            <div style="flex:1; min-width:70px;">
-              <label class="muted" style="font-size:11px;">Ед.</label>
-              <input type="text" class="akey-unit" value="${escapeHtml(unit)}" placeholder="мм">
-            </div>
-            <div class="muted" style="flex:2; min-width:140px; font-size:12px; align-self:end; padding-bottom:6px;">
-              <span class="akey-range-hint"></span>
-            </div>
-          </div>
-        </div>
-      `;
-    }).join('') || '<div class="muted">В ключе нет пунктов</div>';
-    body.querySelectorAll('.akey-q').forEach(block => updateAkeyRangeHint(block));
-    body.querySelectorAll('.akey-value, .akey-tol').forEach(inp => {
-      inp.addEventListener('input', () => updateAkeyRangeHint(inp.closest('.akey-q')));
-    });
-    document.getElementById('answer-key-editor-modal').classList.remove('hidden');
-  }
-
-  function toggleAkeyNumeric(cb) {
-    const block = cb.closest('.akey-q');
-    const fields = block.querySelector('.akey-num-fields');
-    fields.style.display = cb.checked ? 'flex' : 'none';
-    if (cb.checked) {
-      const ans = block.querySelector('.akey-answer').value;
-      const valInp = block.querySelector('.akey-value');
-      if (!valInp.value.trim() && ans) {
-        const m = ans.replace(',', '.').match(/-?\d+(?:\.\d+)?/);
-        if (m) valInp.value = m[0];
-      }
-      if (!block.querySelector('.akey-tol').value.trim()) block.querySelector('.akey-tol').value = '0.03';
-      updateAkeyRangeHint(block);
-    }
-  }
-
-  function updateAkeyRangeHint(block) {
-    const hint = block.querySelector('.akey-range-hint');
-    if (!hint) return;
-    const v = parseFloat(String(block.querySelector('.akey-value').value).replace(',', '.'));
-    const t = parseFloat(String(block.querySelector('.akey-tol').value).replace(',', '.'));
-    if (!Number.isFinite(v) || !Number.isFinite(t)) {
-      hint.textContent = '';
-      return;
-    }
-    const lo = (v - Math.abs(t));
-    const hi = (v + Math.abs(t));
-    const unit = block.querySelector('.akey-unit').value.trim();
-    hint.textContent = 'Принимается: ' + lo + ' … ' + hi + (unit ? ' ' + unit : '');
-  }
-
-  async function saveAnswerKeyEditor() {
-    if (!editingAnswerKeyId) return;
-    const errEl = document.getElementById('akey-editor-error');
-    errEl.textContent = '';
-    const questions = [];
-    document.querySelectorAll('#akey-editor-body .akey-q').forEach(block => {
-      const text = block.querySelector('.akey-text').value;
-      const answer = block.querySelector('.akey-answer').value.trim();
-      const isNum = block.querySelector('.akey-is-num').checked;
-      const item = { text, answer, type: isNum ? 'numeric' : 'text' };
-      if (isNum) {
-        item.value = block.querySelector('.akey-value').value.trim().replace(',', '.');
-        item.tolerance = block.querySelector('.akey-tol').value.trim().replace(',', '.') || '0.03';
-        item.unit = block.querySelector('.akey-unit').value.trim();
-        if (item.value && !item.answer) item.answer = item.value;
-      }
-      questions.push(item);
-    });
-    const res = await authFetch('/api/answer-keys/' + editingAnswerKeyId + '/questions', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ questions })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      errEl.textContent = data.error || 'Ошибка сохранения';
-      return;
-    }
-    // если shared-ключ скопировался — запоминаем новый id
-    if (data.id && data.id !== editingAnswerKeyId) {
-      editingAnswerKeyId = data.id;
-    }
-    closeAnswerKeyEditor();
-    alert('Допуски сохранены' + (data.shared === false ? ' (создана копия ключа для вашей компании)' : ''));
-    loadDrawingsLibrary();
-  }
-
-  async function bindDrawingToKey(keyId) {
-    const sel = document.getElementById('bind-sel-' + keyId);
-    const drawingImage = sel ? sel.value : '';
-    const res = await authFetch('/api/answer-keys/' + keyId + '/drawing', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ drawingImage })
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      alert(d.error || 'Ошибка привязки');
-      return;
-    }
-    alert('Сохранено');
-    loadDrawingsLibrary();
-  }
-
   async function loadDrawingList() {
-    loadDrawingsLibrary();
     const res = await authFetch('/api/drawing-tasks');
     if (!res.ok) return;
     const tasks = await res.json();
@@ -2292,6 +1819,7 @@
         </div>
         <div class="row">
           <button class="btn small" onclick="startDrawingSession('${t.id}')">Начать сессию</button>
+          <button class="btn outline small" onclick="downloadDrawingTask('${t.id}')" title="Скачать задание в Excel, поправить и загрузить обратно">⬇ Excel</button>
           ${t.shared ? `<button class="btn outline small" onclick="copyAndEditDrawingTask('${t.id}')">Копия и правка</button>` : `<button class="btn outline small" onclick="editDrawingTask('${t.id}')">Изменить</button>
           <button class="btn danger small" onclick="deleteDrawingTask('${t.id}')">Удалить</button>`}
         </div>
@@ -2343,6 +1871,7 @@
         <button class="btn outline small" onclick="addDrawingQuestion()">+ Пункт бланка</button>
         ${(!task.questions || task.questions.length === 0) ? '<button class="btn outline small" onclick="fillDrawingTemplate()">Загрузить стандартный бланк (18 пунктов)</button>' : ''}
         <button class="btn outline small" onclick="downloadDrawingTemplate()">📥 Скачать шаблон Excel</button>
+        ${editingDrawingTaskId ? '<button class="btn outline small" onclick="downloadDrawingTask(editingDrawingTaskId)" title="Выгрузить это задание в Excel для правки">⬇ Это задание в Excel</button>' : ''}
         <button class="btn outline small" onclick="document.getElementById('drawing-import-file').click()">📤 Импорт из Excel</button>
         <input type="file" id="drawing-import-file" accept=".xlsx,.xls" class="hidden" onchange="importDrawingFromExcel()">
       </div>
@@ -2393,6 +1922,11 @@
     DRAWING_TEMPLATE_QUESTIONS.forEach(t => addDrawingQuestion(t));
   }
 
+  function downloadDrawingTask(id) {
+    const token = localStorage.getItem('b2bToken');
+    window.location.href = '/api/drawing-tasks/' + encodeURIComponent(id) + '/export-excel?companyId=' + encodeURIComponent(token);
+  }
+
   function downloadDrawingTemplate() {
     const token = localStorage.getItem('b2bToken');
     window.location.href = '/api/drawing-import-template?companyId=' + encodeURIComponent(token);
@@ -2415,13 +1949,13 @@
     }
     fileInput.value = '';
     if (!res.ok) { alert(data.error || 'Ошибка импорта файла'); return; }
-    if (!document.getElementById('drawing-title').value.trim()) {
-      document.getElementById('drawing-title').value = data.title || file.name.replace(/\.(xlsx|xls)$/i, '');
-    }
+    // Название, вступление и завершение из листа «Описание» заменяют текущие, если в файле они заполнены.
+    if (data.title) document.getElementById('drawing-title').value = data.title;
+    else if (!document.getElementById('drawing-title').value.trim()) document.getElementById('drawing-title').value = file.name.replace(/\.(xlsx|xls)$/i, '');
     document.getElementById('drawing-questions-container').innerHTML = '';
     data.questions.forEach(q => addDrawingQuestion(q.text, q.correctAnswer, q));
-    if (data.intro && !document.getElementById('drawing-intro').value.trim()) document.getElementById('drawing-intro').value = data.intro;
-    if (data.outro && !document.getElementById('drawing-outro').value.trim()) document.getElementById('drawing-outro').value = data.outro;
+    if (data.intro) document.getElementById('drawing-intro').value = data.intro;
+    if (data.outro) document.getElementById('drawing-outro').value = data.outro;
     if (data.skipped && data.skipped.length) {
       alert(`Импортировано: ${data.questions.length}. Пропущено строк: ${data.skipped.length} (пустой текст вопроса).`);
     }
