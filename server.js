@@ -3999,6 +3999,47 @@ app.get('/api/drawing-import-template', checkAuth, (req, res) => {
   res.send(buf);
 });
 
+// Выгрузка уже существующего задания в тот же формат, что и шаблон: можно поправить в Excel и
+// загрузить обратно кнопкой «Импорт из Excel» в редакторе. Блок указывается в первой строке блока;
+// «—» в колонке блока означает «этот пункт вне блока».
+app.get('/api/drawing-tasks/:id/export-excel', checkAuth, (req, res) => {
+  const data = db.load();
+  const task = safeGet(data.drawingTasks, req.params.id);
+  if (!task || (!task.shared && task.companyId !== req.companyId)) return res.status(404).json({ error: 'Задание не найдено' });
+  let prevSection = '', prevSectionText = '';
+  const rows = (task.questions || []).map(q => {
+    const section = q.section || '', sectionText = q.sectionText || '';
+    let c = '', d = '';
+    if (section) {
+      if (section !== prevSection || sectionText !== prevSectionText) { c = section; d = sectionText; }
+    } else if (prevSection) { c = '—'; }
+    prevSection = section; prevSectionText = sectionText;
+    return [q.text || '', q.correctAnswer || '', c, d, q.hint || '', q.imageUrl || ''];
+  });
+  const ws = XLSX.utils.aoa_to_sheet([DRAWING_IMPORT_HEADERS, ...rows]);
+  ws['!cols'] = [{ wch: 55 }, { wch: 40 }, { wch: 35 }, { wch: 45 }, { wch: 60 }, { wch: 30 }];
+  const info = XLSX.utils.aoa_to_sheet([
+    ['Название', task.title || ''],
+    ['Вступление (общее указание ученику)', task.intro || ''],
+    ['Завершение (что сделать в конце работ)', task.outro || '']
+  ]);
+  info['!cols'] = [{ wch: 40 }, { wch: 100 }];
+  const help = XLSX.utils.aoa_to_sheet([
+    ['Как править это задание в Excel'],
+    ['1. Меняйте тексты пунктов, ключи ответов, блоки, методику и схемы на листе «Бланк»; название, вступление и завершение — на листе «Описание».'],
+    ['2. Строки можно добавлять, удалять и менять местами. Не удаляйте строку заголовков и не меняйте порядок колонок.'],
+    ['3. Блок (колонки C и D) указывают в первой строке блока: пустые ячейки ниже означают «тот же блок». Чтобы пункт был вне блока, впишите в колонку C символ «—».'],
+    ['4. Откройте задание в программе (кнопка «Изменить»), нажмите «📤 Импорт из Excel», проверьте результат и нажмите «Сохранить задание».'],
+    ['5. Листы «Бланк» и «Описание» должны оставаться первым и вторым; этот лист можно оставить или удалить.']
+  ]);
+  help['!cols'] = [{ wch: 130 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Бланк');
+  XLSX.utils.book_append_sheet(wb, info, 'Описание');
+  XLSX.utils.book_append_sheet(wb, help, 'Как править');
+  sendXlsx(res, wb, 'drawing-task.xlsx');
+});
+
 // Импорт из Excel. Лист 1 «Бланк»: A — пункт, B — ключ, C — заголовок блока, D — указание к блоку,
 // E — порядок выполнения пункта, F — схема. Блок указывают в первой строке блока: пустые ячейки C/D
 // ниже означают «тот же блок». Лист «Описание» (необязательно): название, вступление, завершение.
@@ -4016,7 +4057,7 @@ app.post('/api/drawing-tasks/import', checkAuth, upload.single('file'), (req, re
   if (rows.length < 2) {
     return res.status(400).json({ error: 'В файле нет строк с вопросами под заголовком.' });
   }
-  const cell = (row, i) => String((row && row[i]) || '').trim();
+  const cell = (row, i) => String((row && row[i]) || '').trim().replace(/^'(?=[=+\-@])/, '');
   const questions = [];
   const skipped = [];
   let curSection = '', curSectionText = '';
@@ -4025,7 +4066,10 @@ app.post('/api/drawing-tasks/import', checkAuth, upload.single('file'), (req, re
     if (!row || row.every(c => String(c).trim() === '')) continue;
     const text = cell(row, 0);
     if (!text) { skipped.push({ row: i + 1, reason: 'пустой текст вопроса' }); continue; }
-    if (cell(row, 2)) { curSection = cell(row, 2); curSectionText = cell(row, 3); }
+    if (cell(row, 2)) {
+      if (/^[—–-]$/.test(cell(row, 2))) { curSection = ''; curSectionText = ''; }
+      else { curSection = cell(row, 2); curSectionText = cell(row, 3); }
+    }
     questions.push({
       text,
       correctAnswer: cell(row, 1),
