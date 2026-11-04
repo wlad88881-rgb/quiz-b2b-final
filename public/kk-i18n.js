@@ -94,6 +94,9 @@
     'Основные технические требования (кратко)': 'Негізгі техникалық талаптар (қысқаша)'
   };
 
+  // Дополнительный словарь страницы (например, kk-dict-trainers.js), подключается ДО этого файла.
+  if (window.KK_DICT_EXTRA) Object.keys(window.KK_DICT_EXTRA).forEach(function (k) { DICT[k] = window.KK_DICT_EXTRA[k]; });
+
   // Падежные окончания для границ интервалов (3, 6, 10, 18, 30, 50, 80, 120)
   var ABL = { 3: 'тен', 6: 'дан', 10: 'нан', 18: 'ден', 30: 'дан', 50: 'ден', 80: 'нен', 120: 'дан' };
   var DAT = { 3: 'ке', 6: 'ға', 10: 'ға', 18: 'ге', 30: 'ға', 50: 'ге', 80: 'ге', 120: 'ға' };
@@ -120,6 +123,8 @@
     [/^⏰ Задание начнётся (.+)\. Страница обновится автоматически\.$/, function (m) { return '⏰ Тапсырма ' + m[1] + ' басталады. Бет автоматты түрде жаңарады.'; }]
   ];
 
+  if (window.KK_PATTERNS_EXTRA) PATTERNS = PATTERNS.concat(window.KK_PATTERNS_EXTRA);
+
   var AUTO = {};
   try { AUTO = JSON.parse(localStorage.getItem(LS_AUTO) || '{}') || {}; } catch (e) { AUTO = {}; }
   function saveAuto() {
@@ -135,12 +140,14 @@
     return /[А-Яа-яЁё]{2,}/.test(s);
   }
 
+  function T(x) { var r = lookup(String(x).trim()); return (r === null || r === '') ? x : r; }
+
   // вернёт перевод, '' (ничего переводить не надо) или null (нужен автоперевод)
   function lookup(core) {
     if (Object.prototype.hasOwnProperty.call(DICT, core)) return DICT[core];
     for (var i = 0; i < PATTERNS.length; i++) {
       var m = core.match(PATTERNS[i][0]);
-      if (m) return PATTERNS[i][1](m);
+      if (m) return PATTERNS[i][1](m, T);
     }
     if (Object.prototype.hasOwnProperty.call(AUTO, core)) return AUTO[core];
     if (!needsTranslation(core)) return '';

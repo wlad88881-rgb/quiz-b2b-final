@@ -182,6 +182,18 @@ process.on('exit', flushFileSync);
 //     состояние дописывается.
 let supabaseReady = !USE_SUPABASE;
 let supabaseDirty = false;
+
+// Запись в Supabase «в фоне» (по умолчанию в облаке): запрос пользователя завершается сразу после
+// изменения данных в памяти, а в Supabase уходит самое свежее состояние — не чаще раза в секунду и
+// всегда одним запросом. Раньше каждый запрос ждал полной выгрузки базы в Supabase по очереди с
+// остальными, из-за чего при нескольких студентах сайт «залипал». Старое поведение (ответ только
+// после сохранения в Supabase): переменная окружения PERSIST_MODE=sync.
+const WRITE_BEHIND = USE_SUPABASE && process.env.PERSIST_MODE !== 'sync';
+const PERSIST_DEBOUNCE_MS = Number(process.env.PERSIST_DEBOUNCE_MS) || 1000;
+let persistTimer = null;
+let persistRunning = false;
+let persistVersion = 0;     // растёт при каждом изменении данных
+let persistedVersion = 0;   // последняя версия, подтверждённая Supabase
 let lastSupabaseError = null;
 let reconnectTimer = null;
 const readyCallbacks = [];
@@ -217,16 +229,63 @@ async function persistToSupabase(data) {
   ensureFlusher();
 }
 
+async function persistSnapshot() {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await upsertOnce(cache);
+      lastSupabaseError = null;
+      return true;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 3) await sleep(400 * attempt);
+    }
+  }
+  lastSupabaseError = (lastErr && lastErr.message) || String(lastErr);
+  console.error('[db] Не удалось сохранить в Supabase (будет повтор в фоне):', lastSupabaseError);
+  ensureFlusher();
+  return false;
+}
+
+function schedulePersist() {
+  persistVersion++;
+  supabaseDirty = true;
+  if (persistTimer || persistRunning) return;
+  persistTimer = setTimeout(runPersist, PERSIST_DEBOUNCE_MS);
+}
+
+async function runPersist() {
+  persistTimer = null;
+  if (persistRunning || !supabaseReady || !cache) return;
+  persistRunning = true;
+  try {
+    while (persistedVersion < persistVersion) {
+      const v = persistVersion;
+      const ok = await persistSnapshot();
+      if (!ok) break;               // дальше повторит ensureFlusher()
+      persistedVersion = v;
+    }
+  } finally {
+    persistRunning = false;
+    supabaseDirty = persistedVersion < persistVersion;
+    // изменения могли прийти в момент завершения — не теряем их
+    if (supabaseDirty && !persistTimer && !flushTimer) persistTimer = setTimeout(runPersist, PERSIST_DEBOUNCE_MS);
+  }
+}
+
 // Фоновая досылка последнего состояния, пока Supabase не вернётся.
 function ensureFlusher() {
   if (flushTimer || !USE_SUPABASE) return;
   flushTimer = setInterval(async () => {
     if (!supabaseDirty || !supabaseReady || !cache) { if (!supabaseDirty) { clearInterval(flushTimer); flushTimer = null; } return; }
     try {
+      const v = persistVersion;
       await upsertOnce(cache);
-      supabaseDirty = false; lastSupabaseError = null;
+      persistedVersion = Math.max(persistedVersion, v);
+      supabaseDirty = persistedVersion < persistVersion; lastSupabaseError = null;
       console.log('[db] Отложенное сохранение в Supabase выполнено');
       clearInterval(flushTimer); flushTimer = null;
+      if (supabaseDirty && WRITE_BEHIND && !persistTimer) persistTimer = setTimeout(runPersist, PERSIST_DEBOUNCE_MS);
     } catch (e) {
       lastSupabaseError = (e && e.message) || String(e);
     }
@@ -334,6 +393,7 @@ class DbUnavailableError extends Error {
 async function save(data) {
   if (USE_SUPABASE && !supabaseReady) throw new DbUnavailableError();
   cache = data;
+  if (WRITE_BEHIND) { schedulePersist(); return; }   // локальный файл в облаке не нужен: диск Render временный
   saveToFile(data);
   await persistToSupabase(data);
 }
@@ -377,7 +437,8 @@ async function restore(newData) {
 // При остановке (деплой/перезапуск на Render присылает SIGTERM) дописываем отложенное в Supabase.
 async function finalFlush() {
   flushFileSync();
-  if (USE_SUPABASE && supabaseReady && supabaseDirty && cache) {
+  if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+  if (USE_SUPABASE && supabaseReady && (supabaseDirty || persistedVersion < persistVersion) && cache) {
     try { await Promise.race([upsertOnce(cache), sleep(8000)]); } catch (e) { /* уже ничего не сделать */ }
   }
 }

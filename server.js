@@ -9,6 +9,7 @@ const { customAlphabet } = require('nanoid');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
 const helmet = require('helmet');
+const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const db = require('./db');
 const { SEED_LABS } = require('./labs-content');
@@ -120,6 +121,8 @@ app.use((req, res, next) => {
   };
   next();
 });
+// Сжатие ответов (HTML/JS/JSON): страницы весят в 4–5 раз меньше, на телефоне и слабом Wi‑Fi открываются заметно быстрее.
+app.use(compression({ threshold: 1024 }));
 app.use(express.json({ limit: '3mb' }));
 
 // ---- Облачный режим (Render + Supabase): секреты в самой базе, состояние и «защита от пустой базы» ----
@@ -174,7 +177,16 @@ function publicFile(name) {
   return path.join(BUNDLED_PUBLIC, name);
 }
 if (LOCAL_MODE && EXTERNAL_PUBLIC !== BUNDLED_PUBLIC) app.use(express.static(EXTERNAL_PUBLIC)); // папка может появиться и позже
-app.use(express.static(BUNDLED_PUBLIC));
+// Страницы и скрипты каждый раз сверяются с сервером по ETag (ответ 304 — почти без трафика), поэтому после
+// обновления приложения никто не застревает на старой версии; картинки кэшируются на сутки.
+const STATIC_OPTS = {
+  etag: true, lastModified: true,
+  setHeaders(res, filePath) {
+    if (/\.(html?|js|css|json)$/i.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
+    else if (/\.(png|jpe?g|gif|svg|webp|ico|woff2?)$/i.test(filePath)) res.setHeader('Cache-Control', 'public, max-age=86400');
+  }
+};
+app.use(express.static(BUNDLED_PUBLIC, STATIC_OPTS));
 
 // Ограничение частоты запросов на чувствительные маршруты (защита от подбора паролей и злоупотреблений)
 const authLimiter = rateLimit({
@@ -1597,6 +1609,7 @@ app.get('/api/sessions/:code/roster-status', checkAuth, (req, res) => {
 const GROUPS_PAGE_HTML = String.raw`<!DOCTYPE html>
 <html lang="ru">
 <head>
+<script src="/wake.js"></script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Группы и списки студентов</title>
@@ -2047,6 +2060,7 @@ app.get('/api/groups/:id/analytics', checkAuth, (req, res) => {
 const ANALYTICS_PAGE_HTML = String.raw`<!DOCTYPE html>
 <html lang="ru">
 <head>
+<script src="/wake.js"></script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Аналитика</title>
@@ -2354,6 +2368,7 @@ app.post('/api/network', checkAuth, async (req, res) => {
 const NETWORK_PAGE_HTML = String.raw`<!DOCTYPE html>
 <html lang="ru">
 <head>
+<script src="/wake.js"></script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Сеть — адрес для студентов</title>
