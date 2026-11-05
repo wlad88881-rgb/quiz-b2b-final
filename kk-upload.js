@@ -106,12 +106,28 @@ module.exports = function registerKkUpload(ctx) {
     next();
   });
 
-  // 2) сводка: у каких заданий уже загружен перевод
+  // 2) сводка для значков: насколько каждое задание покрыто казахским переводом
+  //    uploaded — загружено преподавателем, builtin — есть во встроенном словаре, остальное переводится автоматически
   app.get('/api/kk/summary', checkAuth, (req, res) => {
-    const data = db.load(); const out = {};
-    Object.keys(data.kkMaps || {}).forEach((k) => {
-      const [cid, kind, id] = k.split('|');
-      if (cid === req.companyId) out[kind + ':' + id] = { count: Object.keys(data.kkMaps[k].map || {}).length, updatedAt: data.kkMaps[k].updatedAt };
+    const data = db.load(); const KK = loadBuiltin(publicDir); const out = {};
+    Object.keys(KINDS).forEach((kind) => {
+      Object.values(data[KINDS[kind].store] || {}).forEach((t) => {
+        if (!t || !(t.shared || !t.companyId || t.companyId === req.companyId)) return;
+        const saved = savedMap(data, req.companyId, kind, t.id);
+        const items = collect(kind, t);
+        let uploaded = 0, builtinOnly = 0;
+        items.forEach((it) => {
+          if (saved[it.text]) { uploaded++; return; }
+          const b = KK.lookup ? KK.lookup(it.text) : null;
+          if (typeof b === 'string' && b && b !== it.text) builtinOnly++;
+        });
+        const total = items.length, covered = uploaded + builtinOnly;
+        const e = data.kkMaps && data.kkMaps[mapKey(req.companyId, kind, t.id)];
+        out[kind + ':' + t.id] = {
+          total, uploaded, builtin: builtinOnly, covered, updatedAt: e ? e.updatedAt : null,
+          status: total === 0 || covered === total ? 'ready' : covered > 0 ? 'partial' : 'none'
+        };
+      });
     });
     res.json(out);
   });

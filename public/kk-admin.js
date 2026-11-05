@@ -15,14 +15,36 @@
   function el(tag, css, text) { var e = document.createElement(tag); if (css) e.style.cssText = css; if (text !== undefined) e.textContent = text; return e; }
   function parse(v) { var i = v.indexOf(':'); return { kind: v.slice(0, i), id: v.slice(i + 1) }; }
 
-  // ----- значки «перевод загружен» на кнопках -----
+  // ----- значок «KZ готов / частично / нет» у каждого задания (как у тестов) -----
+  var lastAsk = 0;
+  function badgeFor(info) {
+    if (!info) return null;
+    var txt, bg, fg;
+    if (info.status === 'ready') {
+      txt = '🟢 KZ готов' + (info.uploaded > 0 ? ' (загружен)' : ' (встроенный)'); bg = '#e6f6ec'; fg = '#12683a';
+    } else if (info.status === 'partial') {
+      txt = '🟡 KZ частично: ' + info.covered + ' из ' + info.total; bg = '#fff4e0'; fg = '#8a5200';
+    } else { txt = '⚪ KZ нет — автоперевод'; bg = '#eef1f5'; fg = '#566074'; }
+    var tip = 'Всего текстов в задании: ' + info.total + '. Загружено вами: ' + info.uploaded + ', из встроенного словаря: ' + info.builtin +
+      '. Остальное студенты видят в автоматическом переводе.' + (info.updatedAt ? ' Загрузка: ' + new Date(info.updatedAt).toLocaleString('ru-RU') + '.' : '');
+    return { txt: txt, bg: bg, fg: fg, tip: tip };
+  }
   function decorate() {
+    var missing = false;
     document.querySelectorAll('[data-kk-up]').forEach(function (b) {
-      if (!b.dataset.kkBase) b.dataset.kkBase = b.textContent.replace(/\s*·.*$/, '');
-      var info = summary[b.getAttribute('data-kk-up')];
-      var want = info ? b.dataset.kkBase + ' · ✓ ' + info.count : b.dataset.kkBase;
-      if (b.textContent !== want) b.textContent = want;
+      var key = b.getAttribute('data-kk-up'), info = summary[key], row = b.parentNode;
+      if (!row) return;
+      var holder = row.previousElementSibling || row.parentNode;
+      var sp = holder.querySelector ? holder.querySelector('[data-kk-badge="' + key.replace(/"/g, '') + '"]') : null;
+      var bd = badgeFor(info);
+      if (!bd) { if (!info) missing = true; if (sp) sp.remove(); return; }
+      if (!sp) { sp = document.createElement('span'); sp.setAttribute('data-kk-badge', key); holder.appendChild(sp); }
+      sp.style.cssText = 'display:inline-block;margin:4px 0 0 0;padding:1px 9px;border-radius:10px;font-size:12px;white-space:nowrap;background:' + bd.bg + ';color:' + bd.fg + ';';
+      if (sp.textContent !== bd.txt) sp.textContent = bd.txt;
+      sp.title = bd.tip;
+      if (holder.firstElementChild && sp.previousSibling && sp.previousSibling.nodeType === 1) sp.style.marginLeft = '0';
     });
+    if (missing && Date.now() - lastAsk > 3000) { lastAsk = Date.now(); refresh(); }   // новые задания в списке — обновим сводку
   }
   function refresh() { return api('/api/kk/summary').then(function (r) { if (r.ok) summary = r.d || {}; decorate(); }); }
   var t = null;
