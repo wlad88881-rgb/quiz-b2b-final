@@ -140,10 +140,17 @@
     return /[А-Яа-яЁё]{2,}/.test(s);
   }
 
+  window.KK_I18N = { lookup: lookup, dict: DICT };
+
   function T(x) { var r = lookup(String(x).trim()); return (r === null || r === '') ? x : r; }
 
   // вернёт перевод, '' (ничего переводить не надо) или null (нужен автоперевод)
   function lookup(core) {
+    var S = window.__kkSession;
+    if (S) {
+      var nk = core.replace(/\s+/g, ' ');
+      if (Object.prototype.hasOwnProperty.call(S, nk)) return S[nk];
+    }
     if (Object.prototype.hasOwnProperty.call(DICT, core)) return DICT[core];
     for (var i = 0; i < PATTERNS.length; i++) {
       var m = core.match(PATTERNS[i][0]);
@@ -340,6 +347,9 @@
     paintToggle();
     applyAll();
   }
+
+  // Перевод, загруженный преподавателем, пришёл с сервера (wake.js) — перерисовываем страницу.
+  if (window.addEventListener) window.addEventListener('kkdict', function () { if (document.body) { try { applyAll(); } catch (e) {} } });
 
   function init() {
     buildToggle();

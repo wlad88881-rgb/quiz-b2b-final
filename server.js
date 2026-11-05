@@ -1017,6 +1017,9 @@ app.post('/api/tests/:id/translate', checkAuth, async (req, res) => {
 });
 
 // Загрузка готового казахского перевода из Excel (порядок вопросов = как в русском тесте).
+// Казахская версия заданий «Чертежи / Квалитеты / Тренажёры»: шаблон RU|KZ, предпросмотр, загрузка (kk-upload.js)
+require('./kk-upload')({ app, db, checkAuth, upload, XLSX, safeGet, sendXlsx, publicDir: BUNDLED_PUBLIC });
+
 // ===================== ДВУЯЗЫЧНЫЙ ШАБЛОН + ПРЕДПРОСМОТР ЗАГРУЗКИ KZ =====================
 const KK_SPECIAL = /[әіңғүұқөһӘІҢҒҮҰҚӨҺ]/;
 function normKey(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase(); }

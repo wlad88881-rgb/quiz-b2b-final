@@ -96,7 +96,7 @@ async function start() {
   $('expall').onclick = () => download('/api/defect-sets/export-all', 'vse_trenazhery.xlsx');
   if ($('cloneall')) $('cloneall').onclick = async () => { if (confirm('Скопировать все общие тренажёры в «мои»? Копии можно менять через Excel и загружать свои фото.')) { await jpost('/api/defect-sets/clone-all-shared'); start(); } };
   $('sets').innerHTML = sets.map(s => `<div class="set"><div><b>${esc(s.title)}</b> <span class="badge ${s.shared ? '' : 'm'}">${s.shared ? 'общий' : 'мой'}</span><div class="muted">${esc(s.node || '')}${s.taskCount > 1 ? ' · тренажёров в наборе: ' + s.taskCount : ''}</div></div>
-    <div class="row"><button class="sec" data-a="open" data-id="${s.id}">Открыть</button><button class="sec" data-a="exp" data-id="${s.id}">Выгрузить Excel</button>
+    <div class="row"><button class="sec" data-a="open" data-id="${s.id}">Открыть</button><button class="sec" data-a="exp" data-id="${s.id}">Выгрузить Excel</button><button class="sec" data-kk-tpl="defect:${s.id}" title="Скачать Excel «русский | казахский»">⬇ Шаблон KZ</button><button class="sec" data-kk-up="defect:${s.id}" title="Загрузить казахский перевод">📥 KZ Excel</button>
     ${s.shared ? `<button class="sec" data-a="clone" data-id="${s.id}">Копировать в мои</button>` : `<button class="red" data-a="del" data-id="${s.id}">Удалить</button>`}
     <button class="green" data-a="sess" data-id="${s.id}">Создать сессию</button></div></div>`).join('') || '<p class="muted">Тренажёров нет — загрузите из Excel</p>';
   $('sets').onclick = async e => {
@@ -231,5 +231,6 @@ async function openSessionKeepOpen(code) {
 start();
 </script>
 <script src="/socket.io/socket.io.js"></script>
+<script src="/kk-admin.js"></script>
 </body>
 </html>

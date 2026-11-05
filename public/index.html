@@ -1601,6 +1601,8 @@
         </div>
         <div class="row">
           <button class="btn small" onclick="startLabSession('${l.id}')">Начать сессию</button>
+          <button class="btn outline small" data-kk-tpl="lab:${l.id}" title="Скачать Excel «русский | казахский» для заполнения">⬇ Шаблон KZ</button>
+          <button class="btn outline small" data-kk-up="lab:${l.id}" title="Загрузить казахский перевод — перед сохранением будет предпросмотр">📥 KZ Excel</button>
           ${l.shared ? '' : `<button class="btn outline small" onclick="editLab('${l.id}')">Изменить</button>
           <button class="btn danger small" onclick="deleteLab('${l.id}')">Удалить</button>`}
         </div>
@@ -1821,6 +1823,8 @@
         <div class="row">
           <button class="btn small" onclick="startDrawingSession('${t.id}')">Начать сессию</button>
           <button class="btn outline small" onclick="downloadDrawingTask('${t.id}')" title="Скачать задание в Excel, поправить и загрузить обратно">⬇ Excel</button>
+          <button class="btn outline small" data-kk-tpl="drawing:${t.id}" title="Скачать Excel «русский | казахский» для заполнения">⬇ Шаблон KZ</button>
+          <button class="btn outline small" data-kk-up="drawing:${t.id}" title="Загрузить казахский перевод — перед сохранением будет предпросмотр">📥 KZ Excel</button>
           ${t.shared ? `<button class="btn outline small" onclick="copyAndEditDrawingTask('${t.id}')">Копия и правка</button>` : `<button class="btn outline small" onclick="editDrawingTask('${t.id}')">Изменить</button>
           <button class="btn danger small" onclick="deleteDrawingTask('${t.id}')">Удалить</button>`}
         </div>
@@ -2195,6 +2199,8 @@
         </div>
         <div class="row">
           <button class="btn small" onclick="startToleranceSession('${t.id}')">Начать сессию</button>
+          <button class="btn outline small" data-kk-tpl="tolerance:${t.id}" title="Скачать Excel «русский | казахский» для заполнения">⬇ Шаблон KZ</button>
+          <button class="btn outline small" data-kk-up="tolerance:${t.id}" title="Загрузить казахский перевод — перед сохранением будет предпросмотр">📥 KZ Excel</button>
         </div>
       </div>
     `).join('');
@@ -2366,5 +2372,6 @@
   tick(); setInterval(tick, 20000);
 })();
 </script>
+<script src="/kk-admin.js"></script>
 </body>
 </html>

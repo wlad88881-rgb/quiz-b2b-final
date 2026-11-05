@@ -57,6 +57,17 @@
         var retriable = st === 502 || st === 503 || (st === 504 && idempotent);
         if (retriable && attempt < MAX) return retry('status ' + st);
         done();
+        try {
+          // Перевод заданий, загруженный преподавателем (kk-upload): сервер помечает такие ответы заголовком.
+          if (res.headers && res.headers.get('X-KK-Dict') === '1') {
+            res.clone().json().then(function (d) {
+              if (d && d.kkDict) {
+                window.__kkSession = Object.assign(window.__kkSession || {}, d.kkDict);
+                window.dispatchEvent(new Event('kkdict'));
+              }
+            }).catch(function () {});
+          }
+        } catch (e) {}
         return res;
       }, function (err) {
         if (idempotent && attempt < MAX && !(init && init.signal && init.signal.aborted)) return retry('network');
