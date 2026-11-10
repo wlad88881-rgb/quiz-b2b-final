@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<script src="/wake.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Материал</title>
+<meta name="theme-color" content="#2C3E50">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<style>
+  :root { --navy:#2C3E50; --orange:#F07C00; --bg:#F4F4F4; --card:#fff; --text:#1c2333; --muted:#667085; --err:#d64545; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151c; --card:#1b2030; --text:#e8ebf3; --muted:#9aa3b8; } }
+  * { box-sizing:border-box; margin:0; padding:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  body { background:var(--bg); color:var(--text); min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+  .card { background:var(--card); border-radius:16px; padding:28px 22px; width:100%; max-width:440px; text-align:center; box-shadow:0 6px 24px rgba(0,0,0,.12); }
+  .icon { font-size:54px; line-height:1; margin-bottom:12px; }
+  h1 { font-size:20px; line-height:1.3; margin-bottom:6px; word-break:break-word; }
+  .meta { color:var(--muted); font-size:14px; margin-bottom:22px; }
+  .btn { display:block; width:100%; padding:15px 12px; border-radius:12px; border:2px solid var(--orange); background:var(--orange); color:#fff; font-size:17px; font-weight:700; text-decoration:none; margin-bottom:10px; }
+  .btn.outline { background:transparent; color:var(--orange); }
+  .hint { color:var(--muted); font-size:13px; margin-top:8px; line-height:1.4; }
+  .err { color:var(--err); font-size:16px; line-height:1.4; }
+  .spinner { width:38px; height:38px; border:3px solid rgba(128,128,128,.25); border-top-color:var(--orange); border-radius:50%; animation:spin .8s linear infinite; margin:0 auto 14px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<div class="card" data-no-i18n="1">
+  <div id="loading"><div class="spinner"></div><div class="meta">Загрузка… / Жүктелуде…</div></div>
+  <div id="error" class="hidden"><div class="icon">⚠️</div><div class="err" id="error-text"></div></div>
+  <div id="ready" class="hidden">
+    <div class="icon">📄</div>
+    <h1 id="m-title"></h1>
+    <div class="meta" id="m-meta"></div>
+    <a class="btn" id="m-download" href="#">⬇ Скачать · Жүктеу</a>
+    <a class="btn outline" id="m-open" href="#" target="_blank" rel="noopener">👁 Открыть · Ашу</a>
+    <div class="hint">Файл откроется в программе для PDF на телефоне. / Файл телефондағы PDF қолданбасында ашылады.</div>
+  </div>
+</div>
+<script>
+(function () {
+  var m = location.pathname.match(/^\/m\/([a-z0-9]+)/i);
+  var id = m && m[1];
+  function show(which) {
+    ['loading', 'error', 'ready'].forEach(function (x) { document.getElementById(x).classList.toggle('hidden', x !== which); });
+  }
+  function fail(text) { document.getElementById('error-text').textContent = text; show('error'); }
+  function fmtSize(b) { return b >= 1048576 ? (b / 1048576).toFixed(1) + ' МБ' : Math.max(1, Math.round(b / 1024)) + ' КБ'; }
+  if (!id) { fail('Неверная ссылка.'); return; }
+  fetch('/api/materials/' + encodeURIComponent(id) + '/info').then(function (r) {
+    return r.json().catch(function () { return {}; }).then(function (d) {
+      if (!r.ok) { fail(d.message || d.error || 'Материал не найден.'); return; }
+      document.title = d.title;
+      document.getElementById('m-title').textContent = d.title;
+      document.getElementById('m-meta').textContent = 'PDF · ' + fmtSize(d.size);
+      var base = '/api/materials/' + encodeURIComponent(id) + '/file';
+      document.getElementById('m-download').href = base + '?dl=1';
+      document.getElementById('m-open').href = base;
+      show('ready');
+    });
+  }).catch(function () { fail('Нет связи с сервером. Проверьте интернет и обновите страницу.'); });
+})();
+</script>
+</body>
+</html>

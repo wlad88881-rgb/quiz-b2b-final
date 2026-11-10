@@ -201,6 +201,7 @@
       <button class="tab-btn" id="tab-btn-labs" onclick="switchTab('labs')">🧪 Тренажёры</button>
       <button class="tab-btn" id="tab-btn-drawing" onclick="switchTab('drawing')">📐 Чертежи</button>
       <button class="tab-btn" id="tab-btn-tolerance" onclick="switchTab('tolerance')">📏 Квалитеты</button>
+      <button class="tab-btn" id="tab-btn-materials" onclick="switchTab('materials')">📎 Материалы</button>
       <button class="tab-btn" id="tab-btn-stats" onclick="switchTab('stats')">📊 Статистика</button>
       <button class="tab-btn" onclick="window.open('/groups','_blank')" title="Списки групп студентов">👥 Группы</button>
       <button class="tab-btn" onclick="window.open('/analytics','_blank')" title="Аналитика по темам и журнал группы">📈 Аналитика</button>
@@ -242,6 +243,19 @@
         <div class="muted" style="margin-bottom:14px; font-size:13.5px; line-height:1.5;">Каждый ученик, подключившись по одному QR, получает свой вариант по очереди — правильный ответ считается автоматически по таблице допусков ГОСТ 25347-82, проверка не нужна.</div>
         <div id="tolerance-list"></div>
         <div id="history-tolerance"></div>
+      </div>
+      <div id="tab-materials" class="hidden">
+        <h2 style="font-size:18px; margin-bottom:8px;">Материалы для студентов (PDF)</h2>
+        <div class="muted" style="margin-bottom:14px; font-size:13.5px; line-height:1.5;">Загрузите раздатку (PDF до 8 МБ) и раздайте её двумя способами: <b>QR-кодом материала</b> (студент сканирует и сразу скачивает файл) или <b>привязкой к тесту</b> — тогда файл виден студентам на экране входа в тест и после сдачи (во время самого теста раздатка не показывается).</div>
+        <div class="card">
+          <div class="row" style="gap:10px; flex-wrap:wrap; align-items:center;">
+            <input type="file" id="mat-file" accept=".pdf,application/pdf" style="flex:1 1 220px;">
+            <input type="text" id="mat-title" maxlength="120" placeholder="Название (необязательно)" style="flex:1 1 220px;">
+            <button class="btn" id="mat-upload-btn" onclick="uploadMaterial()">Загрузить</button>
+          </div>
+          <div id="mat-status" class="muted" style="margin-top:8px; font-size:13.5px;"></div>
+        </div>
+        <div id="materials-list"></div>
       </div>
       <div id="tab-stats" class="hidden">
         <h2 style="font-size:18px; margin-bottom:12px;">Статистика по тестам</h2>
@@ -663,10 +677,155 @@
     document.getElementById('tab-drawing').classList.toggle('hidden', tab !== 'drawing');
     document.getElementById('tab-tolerance').classList.toggle('hidden', tab !== 'tolerance');
     document.getElementById('tab-stats').classList.toggle('hidden', tab !== 'stats');
+    document.getElementById('tab-materials').classList.toggle('hidden', tab !== 'materials');
+    if (tab === 'materials') loadMaterials();
     if (tab === 'labs') { loadLabsList(); loadSessionHistory('lab', 'history-lab'); }
     if (tab === 'drawing') { loadDrawingList(); loadSessionHistory('drawing', 'history-drawing'); }
     if (tab === 'tolerance') { loadToleranceList(); loadSessionHistory('tolerance', 'history-tolerance'); }
     if (tab === 'stats') showStatsList();
+  }
+
+  // ===== МАТЕРИАЛЫ (PDF-раздатка для студентов) =====
+  const MAT_MAX_MB = 8;
+  let matTests = [];
+
+  function matEl(tag, props, kids) {
+    const e = document.createElement(tag);
+    if (props) Object.keys(props).forEach(k => {
+      if (k === 'text') e.textContent = props[k];
+      else if (k === 'class') e.className = props[k];
+      else if (k === 'style') e.style.cssText = props[k];
+      else if (k.indexOf('on') === 0) e.addEventListener(k.slice(2), props[k]);
+      else e.setAttribute(k, props[k]);
+    });
+    (kids || []).forEach(c => { if (c) e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+    return e;
+  }
+  function matFmtSize(b) { return b >= 1048576 ? (b / 1048576).toFixed(1) + ' МБ' : Math.max(1, Math.round(b / 1024)) + ' КБ'; }
+
+  async function loadMaterials() {
+    const box = document.getElementById('materials-list');
+    box.textContent = 'Загрузка…';
+    try {
+      const [mr, tr] = await Promise.all([authFetch('/api/materials'), authFetch('/api/tests')]);
+      if (!mr.ok) throw new Error('load');
+      const mats = await mr.json();
+      matTests = tr.ok ? await tr.json() : [];
+      renderMaterials(mats);
+    } catch (e) {
+      box.textContent = 'Не удалось загрузить материалы. Обновите страницу.';
+    }
+  }
+
+  function renderMaterials(mats) {
+    const box = document.getElementById('materials-list');
+    box.textContent = '';
+    if (!mats.length) { box.appendChild(matEl('div', { class: 'muted', style: 'margin-top:14px;', text: 'Пока нет ни одного материала.' })); return; }
+    mats.forEach(m => {
+      const attached = (m.testIds || []).filter(id => matTests.some(t => t.id === id)).length;
+      const panel = matEl('div', { class: 'hidden', style: 'margin-top:10px; padding-top:10px; border-top:1px dashed var(--border);' });
+      const card = matEl('div', { class: 'card', style: 'margin-top:12px;' }, [
+        matEl('div', { style: 'font-weight:700; word-break:break-word;', text: '📄 ' + m.title }),
+        matEl('div', { class: 'muted', style: 'font-size:13px; margin:2px 0 10px;', text: m.fileName + ' · ' + matFmtSize(m.size) + ' · ' + (attached ? 'привязан к тестам: ' + attached : 'не привязан к тестам') }),
+        matEl('div', { class: 'row', style: 'gap:8px; flex-wrap:wrap;' }, [
+          matEl('button', { class: 'btn small', text: '📱 QR-код и ссылка', onclick: () => showMaterialQr(m.id, m.title) }),
+          matEl('button', { class: 'btn outline small', text: 'Привязать к тестам', onclick: () => panel.classList.toggle('hidden') }),
+          matEl('button', { class: 'btn outline small', text: 'Переименовать', onclick: () => renameMaterial(m) }),
+          matEl('button', { class: 'btn danger small', text: 'Удалить', onclick: () => deleteMaterial(m) })
+        ]),
+        panel
+      ]);
+      // панель привязки к тестам
+      panel.appendChild(matEl('div', { class: 'muted', style: 'font-size:13px; margin-bottom:6px;', text: 'Студенты этих тестов увидят файл на экране входа и после сдачи:' }));
+      if (!matTests.length) panel.appendChild(matEl('div', { class: 'muted', text: 'Сначала создайте тест.' }));
+      const checks = [];
+      matTests.forEach(t => {
+        const cb = matEl('input', { type: 'checkbox', value: t.id });
+        cb.checked = (m.testIds || []).indexOf(t.id) >= 0;
+        checks.push(cb);
+        panel.appendChild(matEl('label', { style: 'display:flex; gap:8px; align-items:center; margin:4px 0; cursor:pointer;' }, [cb, matEl('span', { text: t.title })]));
+      });
+      if (matTests.length) {
+        panel.appendChild(matEl('button', { class: 'btn small', style: 'margin-top:8px;', text: 'Сохранить привязку', onclick: async () => {
+          const ids = checks.filter(c => c.checked).map(c => c.value);
+          const res = await authFetch('/api/materials/' + m.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ testIds: ids }) });
+          if (!res.ok) { alert('Не удалось сохранить привязку'); return; }
+          loadMaterials();
+        } }));
+      }
+      box.appendChild(card);
+    });
+  }
+
+  async function uploadMaterial() {
+    const input = document.getElementById('mat-file');
+    const status = document.getElementById('mat-status');
+    const btn = document.getElementById('mat-upload-btn');
+    const f = input.files && input.files[0];
+    if (!f) { status.textContent = 'Выберите PDF-файл.'; return; }
+    if (f.size > MAT_MAX_MB * 1024 * 1024) { status.textContent = 'Файл ' + matFmtSize(f.size) + ' — больше ' + MAT_MAX_MB + ' МБ. Сожмите PDF (например, на ilovepdf.com → «Сжать PDF») и загрузите снова.'; return; }
+    const fd = new FormData();
+    fd.append('title', document.getElementById('mat-title').value.trim());
+    fd.append('fileName', f.name);
+    fd.append('file', f);
+    btn.disabled = true; status.textContent = 'Загружаю…';
+    try {
+      const res = await authFetch('/api/materials', { method: 'POST', body: fd });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { status.textContent = d.error || 'Не удалось загрузить файл.'; return; }
+      input.value = ''; document.getElementById('mat-title').value = '';
+      status.textContent = '✅ Загружено. Теперь покажите QR-код материала или привяжите его к тесту.';
+      loadMaterials();
+    } catch (e) {
+      status.textContent = 'Нет связи с сервером. Повторите.';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function renameMaterial(m) {
+    const name = prompt('Новое название материала:', m.title);
+    if (!name || !name.trim() || name.trim() === m.title) return;
+    const res = await authFetch('/api/materials/' + m.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: name.trim() }) });
+    if (!res.ok) { alert('Не удалось переименовать'); return; }
+    loadMaterials();
+  }
+
+  async function deleteMaterial(m) {
+    if (!confirm('Удалить материал «' + m.title + '»? QR-код и ссылки на него перестанут работать.')) return;
+    const res = await authFetch('/api/materials/' + m.id, { method: 'DELETE' });
+    if (!res.ok) { alert('Не удалось удалить'); return; }
+    loadMaterials();
+  }
+
+  function matCopy(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(() => alert('Ссылка скопирована'), () => prompt('Скопируйте ссылку:', text));
+    } else {
+      prompt('Скопируйте ссылку:', text);
+    }
+  }
+
+  async function showMaterialQr(id, title) {
+    const res = await authFetch('/api/materials/' + id + '/qr');
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) { alert(d.error || 'Не удалось получить QR-код'); return; }
+    const old = document.getElementById('mat-qr-overlay'); if (old) old.remove();
+    const ov = matEl('div', { id: 'mat-qr-overlay', style: 'position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:99999; display:flex; align-items:center; justify-content:center; padding:16px; overflow:auto;' });
+    const img = matEl('img', { src: d.qrDataUrl, alt: 'QR-код', style: 'width:min(80vw,420px); height:min(80vw,420px); display:block; margin:12px auto;' });
+    const box = matEl('div', { style: 'background:#fff; color:#1c2333; border-radius:16px; padding:20px; max-width:480px; width:100%; text-align:center;' }, [
+      matEl('div', { style: 'font-weight:700; font-size:18px; word-break:break-word;', text: title }),
+      matEl('div', { style: 'font-size:13px; color:#667085; margin-top:2px;', text: 'Студенты наводят камеру телефона — файл открывается для скачивания' }),
+      img,
+      matEl('div', { style: 'font-size:13px; word-break:break-all; margin-bottom:12px;', text: d.url }),
+      matEl('div', { class: 'row', style: 'gap:8px; justify-content:center; flex-wrap:wrap;' }, [
+        matEl('button', { class: 'btn small', text: 'Копировать ссылку', onclick: () => matCopy(d.url) }),
+        matEl('button', { class: 'btn outline small', text: 'Закрыть', onclick: () => ov.remove() })
+      ])
+    ]);
+    ov.appendChild(box);
+    ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+    document.body.appendChild(ov);
   }
 
   // РЕДАКТОР

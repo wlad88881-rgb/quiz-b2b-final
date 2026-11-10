@@ -207,6 +207,7 @@
     <input type="text" id="student-name" data-i18n-ph="namePh" maxlength="60">
     <div class="error-box hidden" id="join-error"></div>
     <button class="btn" id="join-btn" onclick="joinTest()" data-i18n="startBtn"></button>
+    <div id="materials-join" class="hidden" data-no-i18n="1"></div>
   </div>
 
   <div id="screen-quiz" class="hidden">
@@ -248,6 +249,7 @@
       <div id="leaderboard-rows"></div>
       <div class="lb-your-rank hidden" id="leaderboard-your-rank"></div>
     </div>
+    <div id="materials-result" class="hidden" data-no-i18n="1"></div>
     <h2 style="font-size:15px; color: var(--navy); margin: 18px 0 10px;" data-i18n="reviewTitle"></h2>
     <div id="review-container"></div>
     <button class="btn" id="retry-wrong-btn" onclick="startRetry()" style="margin-top:16px; background:var(--orange);"></button>
@@ -434,7 +436,8 @@
     translated: null,       // { title, questions: [{text, options[]}] } на kk
     translatedExplains: {}, // { "исходный текст пояснения": "перевод на kk" }
     translating: false,
-    titleKk: null
+    titleKk: null,
+    materials: []          // PDF-раздатка, привязанная к этому тесту (из /info)
   };
 
   function t(key) { return UI[state.lang][key] || UI.ru[key] || key; }
@@ -535,6 +538,8 @@
       state.testTitle = data.testTitle;
       state.titleKk = data.title_kk || null;
       state.timeLimit = data.timeLimit;
+      state.materials = Array.isArray(data.materials) ? data.materials : [];
+      renderMaterials();
       document.getElementById('join-title').textContent = data.testTitle;
       document.getElementById('join-qcount').textContent = `${data.questionCount} ${t('questionsWord')}`;
       if (data.timeLimit) {
@@ -554,9 +559,43 @@
     }
   }
 
+  // PDF-раздатка преподавателя: показываем на экране входа (до теста) и после сдачи, но не во время теста.
+  function renderMaterials() {
+    const list = state.materials || [];
+    const kk = state.lang === 'kk';
+    ['materials-join', 'materials-result'].forEach(id => {
+      const box = document.getElementById(id);
+      if (!box) return;
+      box.textContent = '';
+      box.classList.toggle('hidden', !list.length);
+      if (!list.length) return;
+      box.style.cssText = 'margin-top:16px; padding:12px; border:1px solid rgba(128,128,128,.35); border-radius:12px; text-align:left;';
+      const h = document.createElement('div');
+      h.style.cssText = 'font-weight:700; margin-bottom:6px;';
+      h.textContent = kk ? '📎 Материалдар' : '📎 Материалы';
+      box.appendChild(h);
+      list.forEach(m => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; gap:10px; align-items:center; justify-content:space-between; margin:6px 0;';
+        const open = document.createElement('a');
+        open.href = '/api/materials/' + encodeURIComponent(m.id) + '/file';
+        open.target = '_blank'; open.rel = 'noopener';
+        open.style.cssText = 'flex:1 1 auto; color:var(--orange); font-weight:600; word-break:break-word; text-decoration:none;';
+        open.textContent = '📄 ' + m.title;
+        const dl = document.createElement('a');
+        dl.href = '/api/materials/' + encodeURIComponent(m.id) + '/file?dl=1';
+        dl.style.cssText = 'flex:0 0 auto; color:var(--orange); font-size:14px; text-decoration:none; border:1px solid var(--orange); border-radius:8px; padding:4px 10px;';
+        dl.textContent = kk ? '⬇ Жүктеу' : '⬇ Скачать';
+        row.appendChild(open); row.appendChild(dl);
+        box.appendChild(row);
+      });
+    });
+  }
+
   function setLang(lang) {
     state.lang = lang;
     applyStaticUi();
+    renderMaterials();
     // обновляем метки на экране входа (число вопросов / лимит времени) в новом языке
     if (!document.getElementById('screen-join').classList.contains('hidden')) {
       document.getElementById('join-qcount').textContent = `${state.questions.length || document.getElementById('join-qcount').textContent.split(' ')[0]} ${t('questionsWord')}`;

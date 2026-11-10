@@ -3148,7 +3148,8 @@ app.get('/api/sessions/:code/info', (req, res) => {
     timeLimit: session.timeLimit || null,
     ended: !!session.ended,
     scheduledAt: session.scheduledAt || null,
-    questionCount: test ? test.questions.length : 0
+    questionCount: test ? test.questions.length : 0,
+    materials: materialsForSession(data, session)
   });
 });
 
@@ -5011,14 +5012,17 @@ app.post('/api/admin/companies/:id/reset-usage', checkAdmin, async (req, res) =>
 
 app.delete('/api/admin/companies/:id', checkAdmin, async (req, res) => {
   const cid = req.params.id;
+  const matIds = [];
   await db.update((d) => {
     if (!Object.prototype.hasOwnProperty.call(d.companies, cid)) return;
     delete d.companies[cid];
+    Object.keys(d.materials || {}).forEach(id => { if (d.materials[id].companyId === cid) { matIds.push(id); delete d.materials[id]; } });
     Object.keys(d.tests).forEach(id => { if (d.tests[id].companyId === cid) delete d.tests[id]; });
     Object.keys(d.sessions).forEach(code => { if (d.sessions[code].companyId === cid) delete d.sessions[code]; });
     Object.keys(d.labs).forEach(id => { if (d.labs[id].companyId === cid) delete d.labs[id]; });
     Object.keys(d.drawingTasks).forEach(id => { if (d.drawingTasks[id].companyId === cid) delete d.drawingTasks[id]; });
   });
+  for (const mid of matIds) await db.deleteFile(mid);
   res.json({ ok: true });
 });
 
@@ -5102,6 +5106,182 @@ async function seedToleranceTasks() {
   });
   console.log(`[tolerance-tasks] Синхронизировано заданий по квалитетам: 1 (${SEED_TOLERANCE_TASK.variants.length} вариантов)`);
 }
+
+// ==================== МАТЕРИАЛЫ (PDF-раздатка для студентов) ====================
+// Преподаватель загружает PDF во вкладке «Материалы». Файл можно (а) раздать по отдельному QR-коду
+// (страница /m/<id>) и/или (б) привязать к тестам — тогда студенты видят его на экране входа в тест
+// и после сдачи (во время самого теста раздатка не показывается). Сами файлы хранятся отдельно от
+// основной базы (см. db.putFile), в основной базе — только описание.
+const MATERIAL_MAX_BYTES = 8 * 1024 * 1024;
+const MATERIAL_MAX_PER_COMPANY = 30;
+const materialUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MATERIAL_MAX_BYTES, files: 1 } });
+const materialIdGen = customAlphabet('abcdefghjkmnpqrstuvwxyz23456789', 10);
+const materialReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300, // целая группа за одним Wi-Fi / корпоративным NAT приходит с одного IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Слишком много запросов. Подождите минуту и повторите.' }
+});
+
+function materialMeta(m) {
+  return { id: m.id, title: m.title, fileName: m.fileName, size: m.size, testIds: m.testIds || [], createdAt: m.createdAt };
+}
+
+// Материалы, видимые студентам сессии теста (для /api/sessions/:code/info)
+function materialsForSession(data, session) {
+  const all = (data && data.materials) || {};
+  return Object.keys(all).map(k => all[k])
+    .filter(m => m.companyId === session.companyId && Array.isArray(m.testIds) && m.testIds.indexOf(session.testId) >= 0)
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map(m => ({ id: m.id, title: m.title, size: m.size }));
+}
+
+function parseMaterialTestIds(raw, data, companyId) {
+  let arr = raw;
+  if (typeof raw === 'string') { try { arr = JSON.parse(raw); } catch (e) { arr = raw.split(','); } }
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  arr.forEach((id) => {
+    if (typeof id !== 'string') return;
+    const tid = id.trim();
+    const t = safeGet(data.tests, tid);
+    if (t && t.companyId === companyId && out.indexOf(tid) < 0) out.push(tid);
+  });
+  return out;
+}
+
+function getOwnMaterial(req) {
+  const m = safeGet(db.load().materials, req.params.id);
+  return m && m.companyId === req.companyId ? m : null;
+}
+
+app.get('/api/materials', checkAuth, (req, res) => {
+  const all = db.load().materials;
+  res.json(Object.keys(all).map(k => all[k]).filter(m => m.companyId === req.companyId)
+    .sort((a, b) => b.createdAt - a.createdAt).map(materialMeta));
+});
+
+app.post('/api/materials', checkAuth, (req, res, next) => {
+  materialUpload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'Файл больше 8 МБ. Сожмите PDF (например, на ilovepdf.com → «Сжать PDF») и загрузите снова.' });
+      }
+      return res.status(400).json({ error: 'Не удалось принять файл. Попробуйте ещё раз.' });
+    }
+    next();
+  });
+}, async (req, res) => {
+  const f = req.file;
+  if (!f || !f.buffer || !f.buffer.length) return res.status(400).json({ error: 'Выберите PDF-файл.' });
+  if (f.buffer.slice(0, 1024).toString('latin1').indexOf('%PDF-') < 0) {
+    return res.status(400).json({ error: 'Это не PDF-файл. Сохраните раздатку как PDF и загрузите снова.' });
+  }
+  const data = db.load();
+  const own = Object.keys(data.materials).filter(k => data.materials[k].companyId === req.companyId).length;
+  if (own >= MATERIAL_MAX_PER_COMPANY) {
+    return res.status(400).json({ error: 'Достигнут лимит материалов (' + MATERIAL_MAX_PER_COMPANY + '). Удалите ненужные и повторите.' });
+  }
+  // Имя файла приходит отдельным полем: в multipart кириллица в имени файла может искажаться.
+  let fileName = String(req.body.fileName || f.originalname || 'material.pdf').replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 120);
+  if (!/\.pdf$/i.test(fileName)) fileName += '.pdf';
+  const title = String(req.body.title || '').trim().slice(0, 120) || fileName.replace(/\.pdf$/i, '');
+  let id;
+  do { id = materialIdGen(); } while (safeGet(data.materials, id));
+  const material = {
+    id, companyId: req.companyId, title, fileName, size: f.buffer.length,
+    testIds: parseMaterialTestIds(req.body.testIds, data, req.companyId),
+    createdAt: Date.now()
+  };
+  try {
+    await db.putFile(id, f.buffer);
+  } catch (e) {
+    console.error('[materials] не удалось сохранить файл:', (e && e.message) || e);
+    return res.status(503).json({ error: 'Не удалось сохранить файл (хранилище недоступно). Подождите минуту и повторите.' });
+  }
+  try {
+    await db.update((d) => { d.materials[id] = material; });
+  } catch (e) {
+    await db.deleteFile(id);
+    return res.status(503).json({ error: 'База данных недоступна. Повторите через минуту.' });
+  }
+  res.json(materialMeta(material));
+});
+
+app.put('/api/materials/:id', checkAuth, async (req, res) => {
+  if (!getOwnMaterial(req)) return res.status(404).json({ error: 'Материал не найден' });
+  const result = await db.update((d) => {
+    const m = safeGet(d.materials, req.params.id);
+    if (!m || m.companyId !== req.companyId) return null;
+    if (typeof req.body.title === 'string' && req.body.title.trim()) m.title = req.body.title.trim().slice(0, 120);
+    if (req.body.testIds !== undefined) m.testIds = parseMaterialTestIds(req.body.testIds, d, req.companyId);
+    return materialMeta(m);
+  });
+  if (!result) return res.status(404).json({ error: 'Материал не найден' });
+  res.json(result);
+});
+
+app.delete('/api/materials/:id', checkAuth, async (req, res) => {
+  if (!getOwnMaterial(req)) return res.status(404).json({ error: 'Материал не найден' });
+  await db.update((d) => { delete d.materials[req.params.id]; });
+  await db.deleteFile(req.params.id);
+  res.json({ ok: true });
+});
+
+// QR на отдельную страницу материала (для проектора / печати)
+app.get('/api/materials/:id/qr', checkAuth, async (req, res) => {
+  const m = getOwnMaterial(req);
+  if (!m) return res.status(404).json({ error: 'Материал не найден' });
+  const url = `${getBaseUrl(null)}/m/${m.id}`;
+  try {
+    const qrDataUrl = await QRCode.toDataURL(url, { width: 600, margin: 1 });
+    res.json({ url, qrDataUrl });
+  } catch (e) {
+    res.status(500).json({ error: 'Не удалось сформировать QR-код' });
+  }
+});
+
+// Публичная часть: доступ по ссылке (id неугадываемый), как «все, у кого есть ссылка»
+function publicMaterial(req, res) {
+  const data = db.load();
+  const m = safeGet(data.materials, req.params.id);
+  if (!m) { res.status(404).json({ error: 'Материал не найден или удалён преподавателем.' }); return null; }
+  const trialMsg = trialBlockedForCompany(data, m.companyId);
+  if (trialMsg) { res.status(403).json({ error: 'TRIAL_ENDED', message: trialMsg }); return null; }
+  return m;
+}
+
+app.get('/api/materials/:id/info', materialReadLimiter, (req, res) => {
+  const m = publicMaterial(req, res);
+  if (!m) return;
+  res.json({ title: m.title, fileName: m.fileName, size: m.size });
+});
+
+app.get('/api/materials/:id/file', materialReadLimiter, async (req, res) => {
+  const m = publicMaterial(req, res);
+  if (!m) return;
+  let buf;
+  try {
+    buf = await db.getFile(m.id);
+  } catch (e) {
+    console.error('[materials] не удалось прочитать файл:', (e && e.message) || e);
+    return res.status(503).json({ error: 'Файл временно недоступен. Повторите через минуту.' });
+  }
+  if (!buf) return res.status(404).json({ error: 'Файл не найден.' });
+  const asciiName = m.fileName.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '');
+  const disposition = req.query.dl === '1' ? 'attachment' : 'inline';
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `${disposition}; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(m.fileName)}`);
+  res.setHeader('Content-Length', buf.length);
+  res.setHeader('Cache-Control', 'private, max-age=600');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.end(buf);
+});
+
+app.get('/m/:id', (req, res) => {
+  res.sendFile(publicFile('material.html'));
+});
 
 // ==================== ГЛОБАЛЬНАЯ ОБРАБОТКА ОШИБОК ====================
 // Ловит любую ошибку, брошенную (или переданную через next(err)) внутри

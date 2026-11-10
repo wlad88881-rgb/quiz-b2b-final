@@ -43,7 +43,7 @@ if (!fs.existsSync(DATA_DIR)) {
 let cache = null;
 
 function defaultData() {
-  return { companies: {}, tests: {}, sessions: {}, labs: {}, drawingTasks: {}, answerKeys: {}, toleranceTasks: {}, translations: {} };
+  return { companies: {}, tests: {}, sessions: {}, labs: {}, drawingTasks: {}, answerKeys: {}, toleranceTasks: {}, translations: {}, materials: {} };
 }
 
 // Гарантирует, что во всех ожидаемых ключах лежат объекты, а не undefined —
@@ -58,6 +58,7 @@ function normalize(data) {
   if (!d.answerKeys || typeof d.answerKeys !== 'object') d.answerKeys = {};
   if (!d.toleranceTasks || typeof d.toleranceTasks !== 'object') d.toleranceTasks = {};
   if (!d.translations || typeof d.translations !== 'object') d.translations = {};
+  if (!d.materials || typeof d.materials !== 'object') d.materials = {};
   return d;
 }
 
@@ -443,4 +444,80 @@ async function finalFlush() {
   }
 }
 
-module.exports = { load, save, update, restore, initCache, isReady, onReady, status, touch, finalFlush, flush: flushFileSync, DATA_DIR, APP_DIR, LOCAL_MODE, USE_SUPABASE, DbUnavailableError };
+
+// ==================== ФАЙЛЫ (PDF-материалы для студентов) ====================
+// Сами файлы НЕ лежат в основной базе (она целиком отправляется в Supabase при каждой сдаче теста —
+// тяжёлые PDF замедлили бы всё). Они хранятся отдельно:
+//   облако   — отдельные строки таблицы app_data (key = 'file:<id>'), структура базы не меняется;
+//   локально — файлы в папке data/files.
+// В основной базе (d.materials) остаётся только описание файла: название, размер, привязка к тестам.
+const FILES_DIR = path.join(DATA_DIR, 'files');
+const FILE_CACHE_MAX_BYTES = 40 * 1024 * 1024;
+const fileCache = new Map();       // id -> Buffer (порядок вставки = порядок вытеснения)
+let fileCacheBytes = 0;
+const fileInflight = new Map();    // id -> Promise: 30 студентов подряд не вызывают 30 запросов к Supabase
+
+function fileCachePut(id, buf) {
+  if (buf.length > FILE_CACHE_MAX_BYTES) return;
+  if (fileCache.has(id)) { fileCacheBytes -= fileCache.get(id).length; fileCache.delete(id); }
+  fileCache.set(id, buf); fileCacheBytes += buf.length;
+  for (const [k, v] of fileCache) {
+    if (fileCacheBytes <= FILE_CACHE_MAX_BYTES) break;
+    fileCache.delete(k); fileCacheBytes -= v.length;
+  }
+}
+function safeFileId(id) { return typeof id === 'string' && /^[a-z0-9]{6,32}$/.test(id); }
+
+async function putFile(id, buffer) {
+  if (!safeFileId(id)) throw new Error('bad file id');
+  if (USE_SUPABASE) {
+    if (!supabaseReady) throw new DbUnavailableError();
+    const { error } = await supabase.from('app_data')
+      .upsert({ key: 'file:' + id, value: { b64: buffer.toString('base64') }, updated_at: new Date().toISOString() });
+    if (error) throw error;
+  } else {
+    fs.mkdirSync(FILES_DIR, { recursive: true });
+    const tmp = path.join(FILES_DIR, id + '.tmp');
+    fs.writeFileSync(tmp, buffer);
+    fs.renameSync(tmp, path.join(FILES_DIR, id + '.bin'));
+  }
+  fileCachePut(id, buffer);
+}
+
+async function getFile(id) {
+  if (!safeFileId(id)) return null;
+  if (fileCache.has(id)) return fileCache.get(id);
+  if (fileInflight.has(id)) return fileInflight.get(id);
+  const p = (async () => {
+    let buf = null;
+    if (USE_SUPABASE) {
+      if (!supabaseReady) throw new DbUnavailableError();
+      const { data, error } = await supabase.from('app_data').select('value').eq('key', 'file:' + id).maybeSingle();
+      if (error) throw error;
+      if (data && data.value && data.value.b64) buf = Buffer.from(data.value.b64, 'base64');
+    } else {
+      const f = path.join(FILES_DIR, id + '.bin');
+      if (fs.existsSync(f)) buf = fs.readFileSync(f);
+    }
+    if (buf) fileCachePut(id, buf);
+    return buf;
+  })().finally(() => fileInflight.delete(id));
+  fileInflight.set(id, p);
+  return p;
+}
+
+async function deleteFile(id) {
+  if (!safeFileId(id)) return;
+  if (fileCache.has(id)) { fileCacheBytes -= fileCache.get(id).length; fileCache.delete(id); }
+  try {
+    if (USE_SUPABASE) {
+      if (!supabaseReady) return;
+      await supabase.from('app_data').delete().eq('key', 'file:' + id);
+    } else {
+      const f = path.join(FILES_DIR, id + '.bin');
+      if (fs.existsSync(f)) fs.unlinkSync(f);
+    }
+  } catch (e) { console.error('[db] Не удалось удалить файл ' + id + ':', (e && e.message) || e); }
+}
+
+module.exports = { putFile, getFile, deleteFile, load, save, update, restore, initCache, isReady, onReady, status, touch, finalFlush, flush: flushFileSync, DATA_DIR, APP_DIR, LOCAL_MODE, USE_SUPABASE, DbUnavailableError };
